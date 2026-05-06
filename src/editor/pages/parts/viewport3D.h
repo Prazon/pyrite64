@@ -69,9 +69,11 @@ namespace Editor
       bool pickAdditive{false};
       bool selectionPending{false};
       bool selectionDragging{false};
+      bool cameraDragActive{false};
 
       float moveSpeedModifier{1.0f};
       float vpOffsetY{};
+      glm::vec2 cursorLockPos{};
       glm::vec2 mousePos{};
       glm::vec2 mousePosStart{};
       glm::vec2 mousePosClick{};
