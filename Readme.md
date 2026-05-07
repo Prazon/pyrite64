@@ -6,6 +6,7 @@
 
 <p align="center">
 N64 game-engine and editor using <a href="https://github.com/DragonMinded/libdragon">Libdragon</a> and <a href="https://github.com/HailToDodongo/tiny3d">tiny3d</a>.
+  This is a fork to include some 2D related features for 2D and 2.5D functionality. The tinted logo helps me distinguish my fork vs clean upstream fork when testing projects.
 </p>
 <br/>
 
