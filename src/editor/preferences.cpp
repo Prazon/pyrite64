@@ -38,6 +38,14 @@ void Editor::Preferences::load()
     fpsLimit = doc.value("fpsLimit", DEF.fpsLimit);
     showRotAsEuler = doc.value("showRotAsEuler", DEF.showRotAsEuler);
     mouseWheelModifiesSpeed = doc.value("mouseWheelModifiesSpeed", DEF.mouseWheelModifiesSpeed);
+
+    recentProjects.clear();
+    if (doc.contains("recentProjects") && doc["recentProjects"].is_array()) {
+      for (const auto &entry : doc["recentProjects"]) {
+        if (entry.is_string()) recentProjects.push_back(entry.get<std::string>());
+        if (recentProjects.size() >= RECENT_MAX) break;
+      }
+    }
   } else {
     applyKeymapPreset();
   }
@@ -58,6 +66,7 @@ void Editor::Preferences::save()
     .set("fpsLimit", fpsLimit)
     .set("showRotAsEuler", showRotAsEuler)
     .set("mouseWheelModifiesSpeed", mouseWheelModifiesSpeed)
+    .set("recentProjects", recentProjects)
     .toString();
   auto prefPath = getPrefsPath();
   printf("Saving prefs to %s\n", prefPath.c_str());
@@ -75,4 +84,16 @@ Editor::Input::Keymap Editor::Preferences::getCurrentKeymapPreset() const
     return Input::blenderKeymap;
   }
   return Input::standardKeymap;
+}
+
+void Editor::Preferences::pushRecentProject(const std::string &path)
+{
+  if (path.empty()) return;
+  // Move-to-front: drop existing entry (if any), then prepend.
+  std::erase(recentProjects, path);
+  recentProjects.insert(recentProjects.begin(), path);
+  if (recentProjects.size() > RECENT_MAX) {
+    recentProjects.resize(RECENT_MAX);
+  }
+  save();
 }

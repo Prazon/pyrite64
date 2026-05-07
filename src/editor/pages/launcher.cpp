@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
 
 #include "imgui.h"
@@ -205,6 +206,79 @@ void Editor::Launcher::draw()
   }
 
   ImGui::PopStyleColor(3);
+
+  // Recent projects panel — shows below the row of cards so the user can
+  // jump straight back into a recent project without going through the file
+  // picker. Same source as PROJECT_OPEN bookkeeping (ctx.prefs.recentProjects).
+  if (buttonCount == 3 && !ctx.prefs.recentProjects.empty())
+  {
+    const float panelW = 520_px;
+    const float panelH = 200_px;
+    const float panelY = midBgPointY + (texBtnAdd.getSize(0.8f).y * ImGui::Theme::zoomFactor / 2.0f) + 60_px;
+
+    ImGui::SetCursorPos({ centerPos.x - panelW / 2.0f, panelY });
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.4f));
+    ImGui::BeginChild("##recentProjects", ImVec2(panelW, panelH),
+      ImGuiChildFlags_Border | ImGuiChildFlags_AlwaysUseWindowPadding);
+
+    ImGui::PushFont(nullptr, 20_px);
+    ImGui::TextDisabled("Recent Projects");
+    ImGui::PopFont();
+    ImGui::Separator();
+
+    std::string toOpen{};
+    std::string toForget{};
+    for (const auto &path : ctx.prefs.recentProjects) {
+      ImGui::PushID(path.c_str());
+      // Display the project's directory name as the primary label and the
+      // full path as a smaller subline; the whole row is a clickable button.
+      auto fp = std::filesystem::path(path);
+      auto display = fp.parent_path().filename().string();
+      if (display.empty()) display = fp.filename().string();
+
+      bool exists = std::filesystem::exists(fp);
+      if (!exists) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.4f, 0.4f, 1.0f));
+
+      if (ImGui::Selectable(("##row_" + path).c_str(), false,
+            ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, 32_px)))
+      {
+        if (ImGui::IsMouseDoubleClicked(0)) toOpen = path;
+      }
+      ImGui::SameLine(8_px);
+      ImGui::BeginGroup();
+        ImGui::Text("%s%s", display.c_str(), exists ? "" : "  (missing)");
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.55f, 1.0f));
+        ImGui::TextUnformatted(path.c_str());
+        ImGui::PopStyleColor();
+      ImGui::EndGroup();
+
+      if (!exists) ImGui::PopStyleColor();
+
+      // Right-click to remove an entry from history (handy for stale paths).
+      if (ImGui::BeginPopupContextItem("##ctx")) {
+        if (ImGui::MenuItem("Remove from list")) toForget = path;
+        ImGui::EndPopup();
+      }
+      ImGui::PopID();
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    if (!toOpen.empty()) {
+      if (toOpen.contains(' ')) {
+        Editor::Noti::add(Editor::Noti::ERROR,
+          "Project-Path contains spaces!\nPlease move the directory to avoid build problems.");
+      } else if (!Actions::call(Actions::Type::PROJECT_OPEN, toOpen)) {
+        Editor::Noti::add(Editor::Noti::ERROR, "Could not open project!");
+      }
+    }
+    if (!toForget.empty()) {
+      auto &v = ctx.prefs.recentProjects;
+      std::erase(v, toForget);
+      ctx.prefs.save();
+    }
+  }
 
   // version + credits
   {
