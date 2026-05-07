@@ -7,6 +7,7 @@
 
 #include "../../../../context.h"
 #include "../../../imgui/helper.h"
+#include "imgui_internal.h"
 
 namespace
 {
@@ -52,7 +53,7 @@ namespace
   }
 }
 
-bool Editor::ImageEditor::draw(ImGuiID /*defDockId*/)
+bool Editor::ImageEditor::draw(ImGuiID defDockId)
 {
   auto &assetManager = ctx.project->getAssets();
   auto asset = assetManager.getEntryByUUID(assetUUID);
@@ -62,23 +63,23 @@ bool Editor::ImageEditor::draw(ImGuiID /*defDockId*/)
   winName = "Image: " + asset->name;
   auto screenSize = ImGui::GetMainViewport()->WorkSize;
 
+  // Floating fallback position/size for when the window is undocked.
+  ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowPos(
+    {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+    ImGuiCond_FirstUseEver
+  );
+
   if (forceFocusNextFrame) {
-    // Force-undock + center on first appearance this session so the window
-    // can't get lost in a hidden dock node from previous saved layouts.
-    ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
-    ImGui::SetNextWindowPos(
-      {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
-      ImGuiCond_Always
-    );
-    ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_Always);
+    // Dock as a tab next to the 3D-Viewport on first open this session.
+    ImGuiID targetDock = 0;
+    if (ImGuiWindow* vpWin = ImGui::FindWindowByName("3D-Viewport")) {
+      targetDock = vpWin->DockId;
+    }
+    if (targetDock == 0) targetDock = defDockId;
+    ImGui::SetNextWindowDockID(targetDock, ImGuiCond_Always);
     ImGui::SetNextWindowFocus();
     forceFocusNextFrame = false;
-  } else {
-    ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(
-      {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
-      ImGuiCond_FirstUseEver
-    );
   }
 
   bool isOpen = true;

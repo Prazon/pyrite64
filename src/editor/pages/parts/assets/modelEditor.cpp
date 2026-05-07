@@ -9,6 +9,7 @@
 #include "textureEditor.h"
 #include "../../../../context.h"
 #include "../../../imgui/helper.h"
+#include "imgui_internal.h"
 
 namespace
 {
@@ -117,25 +118,26 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
   winName = "Model: " + model->name;
   auto screenSize = ImGui::GetMainViewport()->WorkSize;
 
+  // Floating fallback position/size for when the window is undocked.
+  ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowPos(
+    {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+    ImGuiCond_FirstUseEver
+  );
+
   if (forceFocusNextFrame) {
-    // First appearance this session: force the window to a known visible
-    // floating position. Saved imgui.ini state can dock these into a
-    // background tab inside an invisible dock node, making the editor look
-    // like it does nothing when opened.
-    ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
-    ImGui::SetNextWindowPos(
-      {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
-      ImGuiCond_Always
-    );
-    ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_Always);
+    // First appearance this session: dock as a tab next to the 3D-Viewport.
+    // We look up the 3D-Viewport window's actual current DockId rather than
+    // using DockBuilderGetCentralNode — the central node isn't explicitly
+    // marked in the layout, and the root dockspace ID resolves elsewhere.
+    ImGuiID targetDock = 0;
+    if (ImGuiWindow* vpWin = ImGui::FindWindowByName("3D-Viewport")) {
+      targetDock = vpWin->DockId;
+    }
+    if (targetDock == 0) targetDock = defDockId;
+    ImGui::SetNextWindowDockID(targetDock, ImGuiCond_Always);
     ImGui::SetNextWindowFocus();
     forceFocusNextFrame = false;
-  } else {
-    ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(
-      {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
-      ImGuiCond_FirstUseEver
-    );
   }
 
   bool isOpen = true;

@@ -11,6 +11,8 @@
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
 #include "../../../../utils/logger.h"
+#include "../../../imgui/helper.h"
+#include "imgui_internal.h"
 
 namespace
 {
@@ -23,7 +25,8 @@ Editor::CodeEditor::CodeEditor(uint64_t uuid) : assetUUID(uuid)
   editor->SetLanguageDefinition(TextEditor::LanguageDefinition::CPlusPlus());
   editor->SetPalette(TextEditor::GetDarkPalette());
   editor->SetShowWhitespaces(false);
-  editor->SetTabSize(2);
+  // GML editor uses 4-wide tab indentation; matches modern-IDE conventions.
+  editor->SetTabSize(4);
 
   loadFromDisk();
 }
@@ -77,7 +80,15 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
   winName = baseTitle + "###CodeEditor_" + std::to_string(assetUUID);
 
   if (dockOnFirstAppearance) {
-    ImGui::SetNextWindowDockID(defDockId, ImGuiCond_Always);
+    // Dock as a tab next to the 3D-Viewport — looking up its actual DockId
+    // rather than using the root dockspace ID, since the central node isn't
+    // explicitly marked and the root resolves to the bottom group instead.
+    ImGuiID targetDock = 0;
+    if (ImGuiWindow* vpWin = ImGui::FindWindowByName("3D-Viewport")) {
+      targetDock = vpWin->DockId;
+    }
+    if (targetDock == 0) targetDock = defDockId;
+    ImGui::SetNextWindowDockID(targetDock, ImGuiCond_Always);
     dockOnFirstAppearance = false;
   } else {
     ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
@@ -111,6 +122,49 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
 
   // Editor body — fills the rest of the window.
   editor->Render("##editor", ImVec2(0, 0), false);
+
+  // Right-click context menu, mirroring the asset-browser style: icon + label,
+  // entries disabled when the operation isn't applicable. TextEditor renders
+  // into its own child window, which is what we attach the popup to.
+  if (ImGui::BeginPopupContextItem("##codeEditorCtx")) {
+    bool hasSel = editor->HasSelection();
+    bool readOnly = editor->IsReadOnly();
+    bool canUndo = editor->CanUndo();
+    bool canRedo = editor->CanRedo();
+
+    if (ImGui::MenuItem(ICON_MDI_UNDO " Undo", "Ctrl+Z", false, canUndo)) {
+      editor->Undo();
+    }
+    if (ImGui::MenuItem(ICON_MDI_REDO " Redo", "Ctrl+Y", false, canRedo)) {
+      editor->Redo();
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem(ICON_MDI_CONTENT_CUT " Cut", "Ctrl+X", false, hasSel && !readOnly)) {
+      editor->Cut();
+    }
+    if (ImGui::MenuItem(ICON_MDI_CONTENT_COPY " Copy", "Ctrl+C", false, hasSel)) {
+      editor->Copy();
+    }
+    if (ImGui::MenuItem(ICON_MDI_CONTENT_PASTE " Paste", "Ctrl+V", false, !readOnly)) {
+      editor->Paste();
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem(ICON_MDI_SELECT_ALL " Select All", "Ctrl+A")) {
+      editor->SelectAll();
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem(ICON_MDI_CONTENT_SAVE " Save", "Ctrl+S", false, isDirty())) {
+      saveToDisk();
+    }
+
+    ImGui::EndPopup();
+  }
 
   ImGui::End();
   return isOpen;

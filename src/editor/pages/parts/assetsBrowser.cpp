@@ -17,6 +17,7 @@
 #include <string>
 #include "../../../utils/logger.h"
 #include "../../../utils/proc.h"
+#include "../../../utils/filePicker.h"
 
 using FileType = Project::FileType;
 namespace fs = std::filesystem;
@@ -54,6 +55,31 @@ namespace
 
   std::string scriptName{};
   int scriptType{0};
+  std::string newScriptDir{};
+
+  // Per-tab filter for the OS file picker, used by the right-click "Import…"
+  // entry. Files are copied into the active project directory; the asset
+  // watcher picks them up and registers them as assets.
+  std::vector<Utils::FilePicker::Options::Filter> importFiltersForTab(int tab)
+  {
+    using F = Utils::FilePicker::Options::Filter;
+    switch (tab) {
+      case TAB_IDX_ASSETS:
+        return {
+          F{"Image",      "png"},
+          F{"GLTF/GLB",   "glb,gltf"},
+          F{"Font (TTF)", "ttf"},
+          F{"Audio (WAV)","wav"},
+          F{"Music (XM)", "xm"},
+        };
+      case TAB_IDX_SCRIPTS:
+        return { F{"C++ Source", "cpp"} };
+      case TAB_IDX_PREFABS:
+        return { F{"Prefab", "p64prefab"} };
+      default:
+        return {};
+    }
+  }
 }
 
 void Editor::AssetsBrowser::draw() {
@@ -572,7 +598,78 @@ void Editor::AssetsBrowser::draw() {
     }
   }
 
-  static std::string newScriptDir{};
+  // Right-click on empty space: Unity-style Create / Import submenu. Items
+  // dispatch to the same NewScript popup / file picker that the toolbar
+  // button uses, so behavior stays consistent regardless of entry point.
+  auto runImport = [&](const std::string &targetAbsDir) {
+    auto filters = importFiltersForTab(activeTab);
+    Utils::FilePicker::open(
+      [targetAbsDir](const std::string &path) {
+        if (path.empty()) return;
+        std::error_code ec;
+        fs::path src{path};
+        fs::path dst = fs::path(targetAbsDir) / src.filename();
+        if (fs::exists(dst, ec)) {
+          Editor::Noti::add(Editor::Noti::Type::ERROR,
+            "Asset already exists at destination: " + dst.filename().string());
+          return;
+        }
+        fs::copy_file(src, dst, ec);
+        if (ec) {
+          Editor::Noti::add(Editor::Noti::Type::ERROR,
+            "Import failed: " + ec.message());
+        }
+      },
+      {.title = "Import Asset…", .isDirectory = false, .customFilters = filters}
+    );
+  };
+
+  if (ImGui::BeginPopupContextWindow("AssetsBrowserCtx",
+        ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+  {
+    bool hasAny = false;
+    if (activeTab == TAB_IDX_SCRIPTS) {
+      if (ImGui::BeginMenu(ICON_MDI_PLUS " Create")) {
+        if (ImGui::MenuItem("Object Script")) {
+          newScriptDir = tabDirs[activeTab];
+          scriptName = "New_Script";
+          scriptType = 0;
+          ImGui::OpenPopup("NewScript");
+        }
+        if (ImGui::MenuItem("Global Script")) {
+          newScriptDir = tabDirs[activeTab];
+          scriptName = "New_Script";
+          scriptType = 1;
+          ImGui::OpenPopup("NewScript");
+        }
+        if (ImGui::MenuItem("Node Graph")) {
+          newScriptDir = tabDirs[activeTab];
+          scriptName = "New_Graph";
+          scriptType = 2;
+          ImGui::OpenPopup("NewScript");
+        }
+        ImGui::EndMenu();
+      }
+      hasAny = true;
+    }
+    if (activeTab == TAB_IDX_SCENES) {
+      if (ImGui::MenuItem(ICON_MDI_EARTH_BOX_PLUS " New Scene")) {
+        ctx.project->getScenes().add();
+      }
+      hasAny = true;
+    }
+    if (!importFiltersForTab(activeTab).empty()) {
+      if (hasAny) ImGui::Separator();
+      if (ImGui::MenuItem(ICON_MDI_FILE_IMPORT_OUTLINE " Import Asset…")) {
+        runImport((basePathAbs / tabDirs[activeTab]).string());
+      }
+      hasAny = true;
+    }
+    if (!hasAny) {
+      ImGui::TextDisabled("(nothing to create here)");
+    }
+    ImGui::EndPopup();
+  }
 
   if (activeTab == TAB_IDX_SCRIPTS || activeTab == TAB_IDX_SCENES)
   {
