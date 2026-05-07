@@ -255,6 +255,7 @@ add_executable(pyrite64 src/main.cpp
         src/project/component/types/compNodeGraph.cpp
         src/project/component/types/compAnimModel.cpp
         src/project/component/types/compSpriteBillboard.cpp
+        src/project/component/types/compPrimitive.cpp
         src/editor/pages/parts/createProjectOverlay.cpp
         src/editor/globalActions.cpp
         src/editor/pages/parts/toolchainOverlay.cpp
@@ -269,6 +270,10 @@ add_executable(pyrite64 src/main.cpp
         src/editor/preferences.h
         src/editor/preferences.cpp
         src/editor/pages/parts/assets/modelEditor.cpp
+        src/editor/pages/parts/assets/imageEditor.h
+        src/editor/pages/parts/assets/imageEditor.cpp
+        src/editor/pages/parts/assets/assetPreviewViewport.h
+        src/editor/pages/parts/assets/assetPreviewViewport.cpp
         src/project/assets/material.h
         src/project/assets/material.cpp
         src/project/assets/model3d.h

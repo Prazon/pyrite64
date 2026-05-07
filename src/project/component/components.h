@@ -106,6 +106,7 @@ namespace Project::Component
   MAKE_COMP(NodeGraph)
   MAKE_COMP(AnimModel)
   MAKE_COMP(SpriteBillboard)
+  MAKE_COMP(Primitive)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -270,6 +271,18 @@ namespace Project::Component
       // funcDrawOverlay intentionally null: SpriteBillboard now renders as a
       // textured 3D quad via the billboard pipeline in draw3D, not as an
       // ImGui screen-space overlay.
+    },
+    CompInfo{
+      .id = 13,
+      .icon = ICON_MDI_SHAPE_OUTLINE " ",
+      .name = "Primitive",
+      .funcInit = Primitive::init,
+      .funcDraw = Primitive::draw,
+      .funcDrawPost3D = Primitive::draw3D,
+      .funcSerialize = Primitive::serialize,
+      .funcDeserialize = Primitive::deserialize,
+      .funcBuild = Primitive::build,
+      .funcGetAABB = nullptr,
     },
   };
 
