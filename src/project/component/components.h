@@ -11,12 +11,15 @@
 #include "IconsMaterialDesignIcons.h"
 #include "../../build/sceneContext.h"
 #include "../../utils/aabb.h"
+#include "glm/mat4x4.hpp"
+#include "glm/vec4.hpp"
 
 namespace Editor
 {
   class Viewport3D;
 }
 
+struct ImDrawList;
 struct SDL_GPUCommandBuffer;
 struct SDL_GPUGraphicsPipeline;
 struct SDL_GPURenderPass;
@@ -42,6 +45,18 @@ namespace Project::Component
   typedef void(*FuncCompBuild)(Object&, Entry &entry, Build::SceneCtx &ctx);
   typedef Utils::AABB(*FuncCompGetAABB)(Object&, Entry &entry);
 
+  // Called after the 3D framebuffer is composited into the viewport's ImGui
+  // window. Lets components draw screen-space ImGui overlays (textured
+  // billboard previews, anchor markers, etc.) using the current camera
+  // matrices. Optional — leave nullptr if not used.
+  typedef void(*FuncCompDrawOverlay)(
+    Object&, Entry &entry,
+    Editor::Viewport3D &vp,
+    ImDrawList *drawList,
+    const glm::mat4 &cameraMat, const glm::mat4 &projMat,
+    const glm::vec4 &viewportRect /* {x, y, w, h} in window coords */
+  );
+
   struct CompInfo
   {
     int id{};
@@ -58,6 +73,7 @@ namespace Project::Component
     FuncCompDeserial funcDeserialize{};
     FuncCompBuild funcBuild{};
     FuncCompGetAABB funcGetAABB{};
+    FuncCompDrawOverlay funcDrawOverlay{};
   };
 
   #define MAKE_COMP(name) \
@@ -72,6 +88,9 @@ namespace Project::Component
       std::shared_ptr<void> deserialize(nlohmann::json &doc); \
       void build(Object&, Entry &entry, Build::SceneCtx &ctx); \
       Utils::AABB getAABB(Object &obj, Entry &entry); \
+      void drawOverlay(Object&, Entry &entry, Editor::Viewport3D &vp, \
+        ImDrawList *drawList, const glm::mat4 &cameraMat, const glm::mat4 &projMat, \
+        const glm::vec4 &viewportRect); \
     }
 
   MAKE_COMP(Code)
@@ -247,7 +266,8 @@ namespace Project::Component
       .funcSerialize = SpriteBillboard::serialize,
       .funcDeserialize = SpriteBillboard::deserialize,
       .funcBuild = SpriteBillboard::build,
-      .funcGetAABB = nullptr
+      .funcGetAABB = nullptr,
+      .funcDrawOverlay = SpriteBillboard::drawOverlay,
     },
   };
 

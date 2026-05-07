@@ -727,6 +727,22 @@ void Editor::Viewport3D::draw()
     (float)fb.getHeight() / ctx.prefs.renderFactorAA
   });
 
+  // SPBF64 fork: per-component screen-space overlays drawn after framebuffer.
+  // Lets components like SpriteBillboard render their actual texture as a
+  // billboard preview at the projected world position.
+  {
+    ImDrawList *overlayList = ImGui::GetWindowDrawList();
+    glm::vec4 vpRect{currPos.x, currPos.y, currSize.x, currSize.y};
+    iterateObjects(rootObj, [&](Project::Object &objIter, Project::Component::Entry *comp) {
+      if (!comp) return;
+      if (comp->id < 0 || (size_t)comp->id >= Project::Component::TABLE.size()) return;
+      auto &def = Project::Component::TABLE[comp->id];
+      if (!def.funcDrawOverlay) return;
+      def.funcDrawOverlay(objIter, *comp, *this, overlayList,
+                          uniGlobal.cameraMat, uniGlobal.projMat, vpRect);
+    });
+  }
+
   if (ImGui::BeginDragDropTarget())
   {
     if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET"))

@@ -14,6 +14,10 @@
 #include "../../../editor/pages/parts/viewport3D.h"
 #include "../../../utils/meshGen.h"
 
+#include "imgui.h"
+#include "glm/gtc/matrix_transform.hpp"
+#include "glm/ext/matrix_projection.hpp"
+
 namespace Project::Component::SpriteBillboard
 {
   struct Data
@@ -145,5 +149,81 @@ namespace Project::Component::SpriteBillboard
     glm::u8vec4 col{0xCC, 0xCC, 0xFF, 0xFF};
     if (ctx.isObjectSelected(obj.uuid)) col = Utils::Colors::kSelectionTint;
     Utils::Mesh::addSprite(*vp.getSprites(), obj.pos.resolve(obj.propOverrides), obj.uuid, 4, col);
+  }
+
+  // ImGui screen-space overlay drawn after the 3D framebuffer is composited.
+  // Renders the actual sprite as a textured billboard at the projected world
+  // position so scene authoring matches what the runtime will display.
+  void drawOverlay(Object &obj, Entry &entry, Editor::Viewport3D & /*vp*/,
+                   ImDrawList *drawList,
+                   const glm::mat4 &cameraMat, const glm::mat4 &projMat,
+                   const glm::vec4 &viewportRect)
+  {
+    Data &data = *static_cast<Data*>(entry.data.get());
+    if (data.spriteUUID.value == 0) return;
+
+    auto *assetEntry = ctx.project->getAssets().getEntryByUUID(data.spriteUUID.value);
+    if (!assetEntry || assetEntry->type != FileType::IMAGE) return;
+    if (!assetEntry->texture) return;
+
+    SDL_GPUTexture *gpuTex = assetEntry->texture->getGPUTex();
+    if (!gpuTex) return;
+
+    const float texW = (float)assetEntry->texture->getWidth();
+    const float texH = (float)assetEntry->texture->getHeight();
+    if (texW <= 0.0f || texH <= 0.0f) return;
+
+    // Cell size: 0 means use the whole sprite
+    const float cellW = data.cellW.resolve(obj.propOverrides) > 0
+                          ? (float)data.cellW.resolve(obj.propOverrides) : texW;
+    const float cellH = data.cellH.resolve(obj.propOverrides) > 0
+                          ? (float)data.cellH.resolve(obj.propOverrides) : texH;
+    const int sheetCols = (int)(texW / cellW);
+    const int frame = data.frame.resolve(obj.propOverrides);
+    const int cellX = sheetCols > 0 ? (frame % sheetCols) : 0;
+    const int cellY = sheetCols > 0 ? (frame / sheetCols) : 0;
+
+    // Project world position to viewport screen space (mirrors the selection
+    // picking path in viewport3D.cpp).
+    glm::vec3 worldPos = obj.pos.resolve(obj.propOverrides);
+    glm::vec4 viewport_glm{0.0f, 0.0f, viewportRect.z, viewportRect.w};
+    glm::vec3 proj = glm::project(worldPos, cameraMat, projMat, viewport_glm);
+    if (proj.z < 0.0f || proj.z > 1.0f) return; // off-screen / behind camera
+
+    // glm::project puts origin at bottom-left; ImGui at top-left.
+    const float screenX = viewportRect.x + proj.x;
+    const float screenY = viewportRect.y + (viewportRect.w - proj.y);
+
+    const float pixelScale = data.pixelScale.resolve(obj.propOverrides) > 0.0f
+                               ? data.pixelScale.resolve(obj.propOverrides) : 1.0f;
+    const float drawW = cellW * pixelScale;
+    const float drawH = cellH * pixelScale;
+
+    // Pivot is the pixel offset within the cell that should land on the
+    // projected world point. Default (cellW/2, cellH) = horizontal-center / feet.
+    const float pivotX = (float)data.pivotX.resolve(obj.propOverrides);
+    const float pivotY = (float)data.pivotY.resolve(obj.propOverrides);
+    const float drawTLx = screenX - pivotX * pixelScale;
+    const float drawTLy = screenY - pivotY * pixelScale;
+
+    // UV sub-rect for the selected cell within the sheet
+    const ImVec2 uv0{(cellX * cellW) / texW, (cellY * cellH) / texH};
+    const ImVec2 uv1{((cellX + 1) * cellW) / texW, ((cellY + 1) * cellH) / texH};
+
+    ImVec2 imgTL{drawTLx, drawTLy};
+    ImVec2 imgBR{drawTLx + drawW, drawTLy + drawH};
+
+    if (data.flipX.resolve(obj.propOverrides)) {
+      drawList->AddImage(ImTextureID(gpuTex), imgTL, imgBR,
+                         {uv1.x, uv0.y}, {uv0.x, uv1.y});
+    } else {
+      drawList->AddImage(ImTextureID(gpuTex), imgTL, imgBR, uv0, uv1);
+    }
+
+    // Pivot marker for the selected sprite
+    if (ctx.isObjectSelected(obj.uuid)) {
+      drawList->AddCircleFilled({screenX, screenY}, 3.0f, IM_COL32(255, 80, 80, 220));
+      drawList->AddCircle({screenX, screenY}, 4.0f, IM_COL32(255, 255, 255, 220), 0, 1.5f);
+    }
   }
 }
