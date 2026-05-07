@@ -18,6 +18,9 @@
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/ext/matrix_projection.hpp"
 
+#include <cctype>
+#include <string>
+
 namespace Project::Component::SpriteBillboard
 {
   struct Data
@@ -119,6 +122,117 @@ namespace Project::Component::SpriteBillboard
     ctx.fileObj.write<uint8_t>((uint8_t)alpha);
   }
 
+  // Auto-fill cellW/cellH from the texture if both are zero. Called after any
+  // path that assigns a new sprite UUID (picker click, drag-drop). Avoids the
+  // invisible 0x0 quad that new components would otherwise render as.
+  static void autoFillCellSize(Data &data, uint64_t newUUID)
+  {
+    if (newUUID == 0) return;
+    if (data.cellW.value != 0 || data.cellH.value != 0) return;
+    auto *assetEntry = ctx.project->getAssets().getEntryByUUID(newUUID);
+    if (!assetEntry || !assetEntry->texture) return;
+    data.cellW.value = (int32_t)assetEntry->texture->getWidth();
+    data.cellH.value = (int32_t)assetEntry->texture->getHeight();
+  }
+
+  // Searchable image-asset picker with thumbnails. Replaces a name-only combo
+  // because for sprites you really need to see the image to pick correctly.
+  // Returns true if the UUID changed.
+  static bool drawImagePicker(const char *fieldName, uint64_t &uuid)
+  {
+    auto &assets = ctx.project->getAssets();
+    const auto &imageList = assets.getTypeEntries(FileType::IMAGE);
+    auto *current = (uuid != 0) ? assets.getEntryByUUID(uuid) : nullptr;
+
+    ImGui::PushID(fieldName);
+    bool changed = false;
+
+    const float thumbSize = 24.0f;
+    const float slotH = thumbSize + 4.0f;
+    const float slotW = ImGui::CalcItemWidth();
+    ImVec2 slotTL = ImGui::GetCursorScreenPos();
+
+    bool clicked = ImGui::Button("##slot", ImVec2(slotW, slotH));
+
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 thumbTL{slotTL.x + 2.0f, slotTL.y + 2.0f};
+    ImVec2 thumbBR{thumbTL.x + thumbSize, thumbTL.y + thumbSize};
+    SDL_GPUTexture *currentTex = (current && current->texture) ? current->texture->getGPUTex() : nullptr;
+    if (currentTex) dl->AddImage(ImTextureID(currentTex), thumbTL, thumbBR);
+    else            dl->AddRectFilled(thumbTL, thumbBR, IM_COL32(40, 40, 40, 255));
+    const char *displayName = current ? current->name.c_str() : "<None>";
+    ImVec2 textPos{thumbBR.x + 6.0f, slotTL.y + (slotH - ImGui::GetFontSize()) * 0.5f};
+    dl->AddText(textPos, IM_COL32(220, 220, 220, 255), displayName);
+
+    if (ImGui::BeginDragDropTarget()) {
+      if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("ASSET")) {
+        uint64_t dropped = *(uint64_t*)payload->Data;
+        auto *droppedEntry = assets.getEntryByUUID(dropped);
+        if (droppedEntry && droppedEntry->type == FileType::IMAGE && uuid != dropped) {
+          uuid = dropped;
+          changed = true;
+        }
+      }
+      ImGui::EndDragDropTarget();
+    }
+
+    if (clicked) ImGui::OpenPopup("image_picker_popup");
+
+    static char filterBuf[64] = "";
+    static bool needFocus = false;
+    if (clicked) { filterBuf[0] = '\0'; needFocus = true; }
+
+    ImGui::SetNextWindowSizeConstraints(ImVec2(280.0f, 200.0f), ImVec2(420.0f, 480.0f));
+    if (ImGui::BeginPopup("image_picker_popup")) {
+      if (needFocus) { ImGui::SetKeyboardFocusHere(); needFocus = false; }
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::InputTextWithHint("##search", "Search...", filterBuf, sizeof(filterBuf));
+      ImGui::Separator();
+
+      std::string filter = filterBuf;
+      for (char &c : filter) c = (char)std::tolower((unsigned char)c);
+
+      ImGui::BeginChild("##image_picker_list", ImVec2(0, 0));
+      const float rowH = 36.0f;
+      const float rowThumb = 32.0f;
+      for (const auto &e : imageList) {
+        if (!filter.empty()) {
+          std::string lname = e.name;
+          for (char &c : lname) c = (char)std::tolower((unsigned char)c);
+          if (lname.find(filter) == std::string::npos) continue;
+        }
+
+        ImGui::PushID((const void*)&e);
+        bool selected = (e.conf.uuid == uuid);
+        ImVec2 rowStart = ImGui::GetCursorScreenPos();
+        bool rowClicked = ImGui::Selectable("##row", selected,
+          ImGuiSelectableFlags_AllowOverlap, ImVec2(0.0f, rowH));
+
+        ImDrawList *rdl = ImGui::GetWindowDrawList();
+        ImVec2 rt{rowStart.x + 2.0f, rowStart.y + 2.0f};
+        ImVec2 rb{rt.x + rowThumb, rt.y + rowThumb};
+        SDL_GPUTexture *tex = e.texture ? e.texture->getGPUTex() : nullptr;
+        if (tex) rdl->AddImage(ImTextureID(tex), rt, rb);
+        else     rdl->AddRectFilled(rt, rb, IM_COL32(40, 40, 40, 255));
+        ImVec2 nm{rb.x + 6.0f, rowStart.y + (rowH - ImGui::GetFontSize()) * 0.5f};
+        rdl->AddText(nm, IM_COL32(220, 220, 220, 255), e.name.c_str());
+
+        if (rowClicked) {
+          if (uuid != e.conf.uuid) { uuid = e.conf.uuid; changed = true; }
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopID();
+      }
+      ImGui::EndChild();
+      ImGui::EndPopup();
+    }
+
+    ImGui::PopID();
+
+    if (changed) Editor::UndoRedo::getHistory().markChanged(std::string("Edit ") + fieldName);
+    return changed;
+  }
+
   void draw(Object &obj, Entry &entry)
   {
     Data &data = *static_cast<Data*>(entry.data.get());
@@ -126,8 +240,11 @@ namespace Project::Component::SpriteBillboard
     if (ImTable::start("Comp", &obj)) {
       ImTable::add("Name", entry.name);
 
-      auto imageList = ctx.project->getAssets().getTypeEntries(FileType::IMAGE);
-      ImTable::addAssetVecComboBox("Sprite", imageList, data.spriteUUID.resolve(obj), [](auto){});
+      ImTable::add("Sprite");
+      uint64_t &spriteUUID = data.spriteUUID.resolve(obj);
+      if (drawImagePicker("Sprite", spriteUUID)) {
+        autoFillCellSize(data, spriteUUID);
+      }
 
       ImTable::addObjProp("Cell W (0=auto)", data.cellW);
       ImTable::addObjProp("Cell H (0=auto)", data.cellH);
