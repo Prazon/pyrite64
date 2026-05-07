@@ -115,13 +115,81 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
   if(!model)return false;
 
   winName = "Model: " + model->name;
-  ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
   auto screenSize = ImGui::GetMainViewport()->WorkSize;
-  ImGui::SetNextWindowPos({(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2}, ImGuiCond_FirstUseEver);
+
+  if (forceFocusNextFrame) {
+    // First appearance this session: force the window to a known visible
+    // floating position. Saved imgui.ini state can dock these into a
+    // background tab inside an invisible dock node, making the editor look
+    // like it does nothing when opened.
+    ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
+    ImGui::SetNextWindowPos(
+      {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+      ImGuiCond_Always
+    );
+    ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_Always);
+    ImGui::SetNextWindowFocus();
+    forceFocusNextFrame = false;
+  } else {
+    ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(
+      {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+      ImGuiCond_FirstUseEver
+    );
+  }
 
   bool isOpen = true;
   ImGui::Begin(winName.c_str(), &isOpen);
   ImGui::Text("Model: %s", model->name.c_str());
+
+  // SPBF64 fork: keep the preview viewport's mesh in sync with the asset.
+  // Rebind if the UUID changed OR if mesh3D was null at first bind and is
+  // now present (assets can finish loading after the window opens).
+  void* meshRaw = model->mesh3D.get();
+  if (previewBoundUUID != model->getUUID() || previewBoundMesh != meshRaw) {
+    preview.setMesh(model->getUUID(), model->mesh3D, &model->model);
+    previewBoundUUID = model->getUUID();
+    previewBoundMesh = meshRaw;
+  }
+
+  // Top half: 3D preview, bottom half: material/property UI.
+  ImVec2 fullAvail = ImGui::GetContentRegionAvail();
+  float splitterH = 6_px;
+  float topH = std::max(80_px, (fullAvail.y - splitterH) * previewSplitFrac);
+  float bottomH = std::max(80_px, fullAvail.y - splitterH - topH);
+
+  ImGui::BeginChild("##preview", ImVec2(0, topH), ImGuiChildFlags_Borders,
+                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  preview.draw(ImGui::GetContentRegionAvail());
+  ImGui::EndChild();
+
+  // Draggable splitter
+  ImGui::InvisibleButton("##split", ImVec2(-1, splitterH));
+  if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    splitDragging = true;
+    float dy = ImGui::GetIO().MouseDelta.y;
+    if (fullAvail.y > splitterH * 2) {
+      previewSplitFrac += dy / (fullAvail.y - splitterH);
+      previewSplitFrac = std::clamp(previewSplitFrac, 0.15f, 0.85f);
+    }
+  } else {
+    splitDragging = false;
+  }
+  if (ImGui::IsItemHovered() || splitDragging) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+  }
+  {
+    ImVec2 a = ImGui::GetItemRectMin();
+    ImVec2 b = ImGui::GetItemRectMax();
+    ImU32 col = ImGui::GetColorU32(splitDragging ? ImGuiCol_SeparatorActive : ImGuiCol_Separator);
+    ImGui::GetWindowDrawList()->AddRectFilled(
+      {a.x, (a.y + b.y) * 0.5f - 1.0f},
+      {b.x, (a.y + b.y) * 0.5f + 1.0f},
+      col
+    );
+  }
+
+  ImGui::BeginChild("##matUI", ImVec2(0, bottomH), ImGuiChildFlags_None);
 
   ImVec2 labelWidth = {89_px, -1.0f};
   bool needsReload = false;
@@ -365,6 +433,7 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
     }
     ImGui::PopID();
   }
+  ImGui::EndChild();  // ##matUI
   ImGui::End();
 
   // update placeholder indices

@@ -7,6 +7,7 @@
 #include <string>
 
 #include "imgui.h"
+#include "assetPreviewViewport.h"
 
 namespace Editor
 {
@@ -15,6 +16,14 @@ namespace Editor
     private:
       uint64_t assetUUID{};
       std::string winName{};
+
+      // SPBF64 fork: 3D preview of the asset rendered above the material UI.
+      AssetPreviewViewport preview{};
+      void*    previewBoundMesh{nullptr};
+      uint64_t previewBoundUUID{0};
+      float    previewSplitFrac{0.55f};
+      bool     splitDragging{false};
+      bool     forceFocusNextFrame{true};
 
     public:
       explicit ModelEditor(uint64_t assetUUID) : assetUUID(assetUUID) {}

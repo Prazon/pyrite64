@@ -170,10 +170,6 @@ void Editor::AssetInspector::draw() {
         ImGui::Text("%d", static_cast<int>(asset->model.t3dm.animations.size()));
 
       ImGui::EndTable();
-
-      if(ImGui::Button(ICON_MDI_PENCIL " Open Model Editor")) {
-        ctx.editorScene->openModelEditor(asset->getUUID());
-      }
     }
   }
 }

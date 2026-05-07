@@ -20,6 +20,7 @@
 #include "../imgui/notification.h"
 #include "../imgui/theme.h"
 #include "parts/assets/modelEditor.h"
+#include "parts/assets/imageEditor.h"
 
 namespace
 {
@@ -52,6 +53,11 @@ Editor::Scene::Scene()
         openModelEditor(assetUUID.get<uint64_t>());
       }
     }
+    if(json.contains("winImages")) {
+      for(const auto& assetUUID : json["winImages"]) {
+        openImageEditor(assetUUID.get<uint64_t>());
+      }
+    }
   } catch(const std::exception& e) {}
 }
 
@@ -61,6 +67,10 @@ Editor::Scene::~Scene()
   conf["winModels"] = nlohmann::json::array();
   for(const auto& [assetUUID, _] : modelEditors) {
     conf["winModels"].push_back(assetUUID);
+  }
+  conf["winImages"] = nlohmann::json::array();
+  for(const auto& [assetUUID, _] : imageEditors) {
+    conf["winImages"].push_back(assetUUID);
   }
 
   Utils::FS::saveTextFile(Utils::Proc::getAppDataPath() / "editorScene.json", conf.dump(2));
@@ -75,6 +85,16 @@ void Editor::Scene::openModelEditor(uint64_t assetUUID)
     it->second->focus();
   } else {
     modelEditors[assetUUID] = std::make_unique<ModelEditor>(assetUUID);
+  }
+}
+
+void Editor::Scene::openImageEditor(uint64_t assetUUID)
+{
+  auto it = imageEditors.find(assetUUID);
+  if(it != imageEditors.end()) {
+    it->second->focus();
+  } else {
+    imageEditors[assetUUID] = std::make_shared<ImageEditor>(assetUUID);
   }
 }
 
@@ -209,13 +229,32 @@ void Editor::Scene::draw()
     ImGui::EndPopup();
   }
 
+  // Drain any model editors that were closed last frame. Holding them for
+  // one frame lets ImGui finish rendering the draw list that referenced
+  // their preview framebuffer textures before SDL_ReleaseGPUTexture runs.
+  pendingModelEditorErase.clear();
+
   std::vector<uint64_t> delUUIDs{};
   for(auto &[uuid, editor] : modelEditors) {
     if (!editor->draw(dockSpaceID)) {
       delUUIDs.push_back(uuid);
     }
   }
-  for(auto &uuid : delUUIDs)modelEditors.erase(uuid);
+  for(auto &uuid : delUUIDs) {
+    auto it = modelEditors.find(uuid);
+    if (it != modelEditors.end()) {
+      pendingModelEditorErase.push_back(std::move(it->second));
+      modelEditors.erase(it);
+    }
+  }
+
+  std::vector<uint64_t> delImageUUIDs{};
+  for(auto &[uuid, editor] : imageEditors) {
+    if (!editor->draw(dockSpaceID)) {
+      delImageUUIDs.push_back(uuid);
+    }
+  }
+  for(auto &uuid : delImageUUIDs)imageEditors.erase(uuid);
 
   ImGui::Begin("Object");
     objectInspector.draw();

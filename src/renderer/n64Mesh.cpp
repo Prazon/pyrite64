@@ -89,7 +89,11 @@ void Renderer::N64Mesh::draw(
 ) {
   if (!scene)return;
 
-  uint32_t flagsGlobal = uniforms.mat.flags & LIGHT_MODE_ADD;
+  // Bits the caller may set on uniforms.mat.flags that should survive past
+  // `uniforms.mat = part.material;` below. LIGHT_MODE_ADD is the existing
+  // additive-light layer toggle; T3D_FLAG_NO_LIGHT lets the asset-preview
+  // viewport bypass scene lighting (added by SPBF64 fork).
+  uint32_t flagsGlobal = uniforms.mat.flags & (LIGHT_MODE_ADD | T3D_FLAG_NO_LIGHT);
 
   auto drawPart = [&](MeshPart &part)
   {
@@ -103,13 +107,18 @@ void Renderer::N64Mesh::draw(
       auto resolveTex = [&](Project::Assets::MaterialTex &tex, int texBinding)
       {
         if (tex.set.value) {
-          if(tex.dynType.value == tex.DYN_TYPE_FULL && slotIdx < 8) {
-            tex = ref.matInstance->texSlots[slotIdx];
-            ++slotIdx;
-          }
-          else if(tex.dynType.value == tex.DYN_TYPE_TILE && slotIdx < 8) {
-            tex.offset = ref.matInstance->texSlots[slotIdx].offset;
-            ++slotIdx;
+          // Dynamic material-instance slots only apply when an instance is
+          // bound. Asset previews (matInstance==nullptr) skip these and use
+          // whatever texture the model's own material declares.
+          if (ref.matInstance) {
+            if(tex.dynType.value == tex.DYN_TYPE_FULL && slotIdx < 8) {
+              tex = ref.matInstance->texSlots[slotIdx];
+              ++slotIdx;
+            }
+            else if(tex.dynType.value == tex.DYN_TYPE_TILE && slotIdx < 8) {
+              tex.offset = ref.matInstance->texSlots[slotIdx].offset;
+              ++slotIdx;
+            }
           }
           auto texEntry = ctx.project->getAssets().getEntryByUUID(tex.texUUID.value);
           if (texEntry && texEntry->texture) {
@@ -118,12 +127,12 @@ void Renderer::N64Mesh::draw(
         }
       };
 
-      if(ref.matInstance)
-      {
-        resolveTex(mat.tex0, 0);
-        resolveTex(mat.tex1, 1);
-        N64Material::convert(part, mat);
-      }
+      // Resolve textures + convert the material every draw, regardless of
+      // whether an instance is bound — asset previews still need their
+      // textures and tile/CC settings to show correctly.
+      resolveTex(mat.tex0, 0);
+      resolveTex(mat.tex1, 1);
+      N64Material::convert(part, mat);
     }
 
 
@@ -147,8 +156,15 @@ void Renderer::N64Mesh::draw(
     }
 
     uniforms.mat = part.material;
-    uniforms.mat.colPrim = lastPrim;
-    uniforms.mat.colEnv = lastEnv;
+    if (ref.matInstance) {
+      // Instance-driven prim/env overrides accumulated above.
+      uniforms.mat.colPrim = lastPrim;
+      uniforms.mat.colEnv = lastEnv;
+    }
+    // Without a material instance (asset preview path), keep the prim/env
+    // colors that N64Material::convert wrote into part.material — overriding
+    // them with the file-static lastPrim/lastEnv would bleed colors from
+    // whatever model was drawn last.
     uniforms.mat.blender.x = blender;
     uniforms.mat.flags |= flagsGlobal;
 

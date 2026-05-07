@@ -9,6 +9,7 @@
 #include "../../imgui/helper.h"
 #include "../../imgui/notification.h"
 #include "../../../context.h"
+#include "../editorScene.h"
 #include <algorithm>
 #include <filesystem>
 #include <unordered_set>
@@ -443,7 +444,19 @@ void Editor::AssetsBrowser::draw() {
       ImGui::makeTabVisible("Asset");
     }
     if (isDblClick) {
-      if (!Utils::Proc::openFile(asset.path))
+      // SPBF64 fork: prefer in-editor preview windows for art assets;
+      // fall back to OS shell-out for types we don't yet preview.
+      bool handled = false;
+      if (ctx.editorScene) {
+        if (asset.type == FileType::IMAGE) {
+          ctx.editorScene->openImageEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::MODEL_3D) {
+          ctx.editorScene->openModelEditor(asset.getUUID());
+          handled = true;
+        }
+      }
+      if (!handled && !Utils::Proc::openFile(asset.path))
       {
         Editor::Noti::add(Editor::Noti::Type::ERROR, "Failed to open File. This may be due to WSL path conversion failure.");
       }

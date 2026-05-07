@@ -19,6 +19,7 @@
 namespace Editor
 {
   class ModelEditor;
+  class ImageEditor;
 
   class Scene
   {
@@ -28,6 +29,14 @@ namespace Editor
       // Editors
       std::vector<std::shared_ptr<NodeEditor>> nodeEditors{};
       std::map<uint64_t, std::shared_ptr<ModelEditor>> modelEditors{};
+      std::map<uint64_t, std::shared_ptr<ImageEditor>> imageEditors{};
+
+      // Deferred-destroy lists for editors that own GPU resources referenced
+      // by ImGui draw data (e.g. ModelEditor's preview framebuffer texture).
+      // Erasing same-frame as the close click frees the GPU texture before
+      // ImGui's draw list — built earlier in the same frame — gets rendered,
+      // causing a use-after-free / hard crash.
+      std::vector<std::shared_ptr<ModelEditor>> pendingModelEditorErase{};
       PreferenceOverlay prefOverlay{};
       ProjectSettings projectSettings{};
       AssetsBrowser assetsBrowser{};
@@ -52,6 +61,7 @@ namespace Editor
       ~Scene();
 
       void openModelEditor(uint64_t assetUUID);
+      void openImageEditor(uint64_t assetUUID);
 
       void draw();
       void save();
