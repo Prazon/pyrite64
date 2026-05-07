@@ -60,6 +60,12 @@ namespace Editor
       };
       std::vector<SubmittedBillboard> submittedBillboards{};
 
+      // SPBF64 fork: solid-shaded primitives (Box / Sphere / etc.) submitted
+      // into a shared triangle mesh, rendered once via the "primitive"
+      // pipeline. Per-vertex shading is pre-baked on the CPU.
+      std::shared_ptr<Renderer::Mesh> meshPrimitives{};
+      Renderer::Object objPrimitives{};
+
       bool showGrid{true};
       bool showCollMesh{false};
       bool showCollObj{true};
@@ -85,6 +91,10 @@ namespace Editor
 
       std::shared_ptr<Renderer::Mesh> getBillboards() {
         return meshBillboards;
+      }
+
+      std::shared_ptr<Renderer::Mesh> getPrimitives() {
+        return meshPrimitives;
       }
 
       // Append a billboard quad to the shared billboard mesh and record its

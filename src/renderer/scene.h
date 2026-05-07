@@ -40,11 +40,13 @@ namespace Renderer
       std::unique_ptr<Shader> shaderLines{};
       std::unique_ptr<Shader> shaderSprites{};
       std::unique_ptr<Shader> shaderBillboard{};
+      std::unique_ptr<Shader> shaderPrimitive{};
 
       std::unique_ptr<Pipeline> pipelineN64{};
       std::unique_ptr<Pipeline> pipelineLines{};
       std::unique_ptr<Pipeline> pipelineSprites{};
       std::unique_ptr<Pipeline> pipelineBillboard{};
+      std::unique_ptr<Pipeline> pipelinePrimitive{};
 
       std::vector<Light> lights{};
 
@@ -75,6 +77,7 @@ namespace Renderer
         if (name == "lines") return *pipelineLines;
         if (name == "sprites") return *pipelineSprites;
         if (name == "billboard") return *pipelineBillboard;
+        if (name == "primitive") return *pipelinePrimitive;
         throw std::runtime_error("Pipeline not found: " + name);
       }
   };

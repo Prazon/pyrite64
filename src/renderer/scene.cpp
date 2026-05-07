@@ -43,6 +43,13 @@ Renderer::Scene::Scene()
     .vertTexCount = 0,
     .fragTexCount = 1,
   });
+  shaderPrimitive = std::make_unique<Shader>(ctx.gpu, Shader::Config{
+    .name = "primitive",
+    .vertUboCount = 2,    // UniformGlobal + UniformObject (modelMat + objectID)
+    .fragUboCount = 0,
+    .vertTexCount = 0,
+    .fragTexCount = 0,
+  });
 
   pipelineN64 = std::make_unique<Pipeline>(Pipeline::Info{
     .shader = *shaderN64,
@@ -95,6 +102,22 @@ Renderer::Scene::Scene()
     .useDepth = true,
     .drawsObjID = true,
     .translucent = true,
+    .vertPitch = sizeof(LineVertex),
+    .vertLayout = {
+      {SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3     , offsetof(Renderer::LineVertex, pos)},
+      {SDL_GPU_VERTEXELEMENTFORMAT_UINT       , offsetof(Renderer::LineVertex, objectId)},
+      {SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, offsetof(Renderer::LineVertex, color)},
+    }
+  });
+
+  // SPBF64 fork: solid-shaded primitives (Comp::Primitive). Lighting is
+  // baked per-vertex on the CPU side so the shader is just a pass-through.
+  // Triangle topology, depth-tested, picks via objectId.
+  pipelinePrimitive = std::make_unique<Pipeline>(Pipeline::Info{
+    .shader = *shaderPrimitive,
+    .prim = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
+    .useDepth = true,
+    .drawsObjID = true,
     .vertPitch = sizeof(LineVertex),
     .vertLayout = {
       {SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3     , offsetof(Renderer::LineVertex, pos)},

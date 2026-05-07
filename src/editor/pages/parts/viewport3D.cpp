@@ -204,6 +204,9 @@ Editor::Viewport3D::Viewport3D()
   objSprites.setMesh(meshSprites);
 
   meshBillboards = std::make_shared<Renderer::Mesh>();
+
+  meshPrimitives = std::make_shared<Renderer::Mesh>();
+  objPrimitives.setMesh(meshPrimitives);
 }
 
 void Editor::Viewport3D::addBillboardQuad(const glm::vec3 &worldPos, uint32_t objectId,
@@ -323,6 +326,9 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   meshBillboards->indices.clear();
   submittedBillboards.clear();
 
+  meshPrimitives->vertLines.clear();
+  meshPrimitives->indices.clear();
+
   auto scene = ctx.project->getScenes().getLoadedScene();
   if (!scene)return;
 
@@ -386,6 +392,16 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   meshLines->recreate(renderScene);
   meshSprites->recreate(renderScene);
   meshBillboards->recreate(renderScene);
+  meshPrimitives->recreate(renderScene);
+
+  // SPBF64 fork: solid-shaded primitives. Drawn before lines so the line
+  // gizmos (selection outlines) sit on top of the filled surface.
+  if (!meshPrimitives->vertLines.empty()) {
+    if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "3D Primitives");
+    renderScene.getPipeline("primitive").bind(renderPass3D);
+    objPrimitives.draw(renderPass3D, cmdBuff);
+    if(ctx.debugMode)SDL_PopGPUDebugGroup(cmdBuff);
+  }
 
   if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "3D Lines");
   renderScene.getPipeline("lines").bind(renderPass3D);
