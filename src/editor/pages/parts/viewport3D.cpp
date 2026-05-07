@@ -23,6 +23,11 @@
 #include "../../selectionUtils.h"
 
 #include "../../../utils/logger.h"
+
+// Declared in main.cpp at global scope; needed by the billboard pass to bind
+// a sampler when drawing per-component textured billboards.
+extern SDL_GPUSampler *texSamplerRepeat;
+
 namespace
 {
   constinit uint32_t nextPassId{0};
@@ -197,6 +202,45 @@ Editor::Viewport3D::Viewport3D()
 
   meshSprites = std::make_shared<Renderer::Mesh>();
   objSprites.setMesh(meshSprites);
+
+  meshBillboards = std::make_shared<Renderer::Mesh>();
+}
+
+void Editor::Viewport3D::addBillboardQuad(const glm::vec3 &worldPos, uint32_t objectId,
+                                          SDL_GPUTexture *texture,
+                                          const glm::vec4 &sizeAndPivot,
+                                          const glm::vec4 &uvRect,
+                                          const glm::vec4 &mode)
+{
+  if (!texture) return;
+
+  auto &mesh = *meshBillboards;
+  uint16_t baseIdx = (uint16_t)mesh.vertLines.size();
+  uint32_t indexOffset = (uint32_t)mesh.indices.size();
+
+  // 4 verts, identical data; vertex shader uses gl_VertexIndex % 4 for corner.
+  Renderer::LineVertex v{};
+  v.pos = worldPos;
+  v.objectId = objectId;
+  v.color = {0xFF, 0xFF, 0xFF, 0xFF};
+  for (int i = 0; i < 4; ++i) {
+    mesh.vertLines.push_back(v);
+  }
+  // Two triangles: 0,1,2 and 0,2,3
+  mesh.indices.push_back(baseIdx + 0);
+  mesh.indices.push_back(baseIdx + 1);
+  mesh.indices.push_back(baseIdx + 2);
+  mesh.indices.push_back(baseIdx + 0);
+  mesh.indices.push_back(baseIdx + 2);
+  mesh.indices.push_back(baseIdx + 3);
+
+  submittedBillboards.push_back({
+    .indexOffset = indexOffset,
+    .texture = texture,
+    .sizeAndPivot = sizeAndPivot,
+    .uvRect = uvRect,
+    .mode = mode,
+  });
 }
 
 Editor::Viewport3D::~Viewport3D() {
@@ -275,6 +319,10 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   meshSprites->vertLines.clear();
   meshSprites->indices.clear();
 
+  meshBillboards->vertLines.clear();
+  meshBillboards->indices.clear();
+  submittedBillboards.clear();
+
   auto scene = ctx.project->getScenes().getLoadedScene();
   if (!scene)return;
 
@@ -337,6 +385,7 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
 
   meshLines->recreate(renderScene);
   meshSprites->recreate(renderScene);
+  meshBillboards->recreate(renderScene);
 
   if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "3D Lines");
   renderScene.getPipeline("lines").bind(renderPass3D);
@@ -367,6 +416,39 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   objSprites.draw(renderPass3D, cmdBuff);
 
   if(ctx.debugMode)SDL_PopGPUDebugGroup(cmdBuff);
+
+  // SPBF64 fork: textured billboard quads — one draw per submitted billboard
+  // so each can bind its own texture/uniform.
+  if (!submittedBillboards.empty()) {
+    if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "3D Billboards");
+
+    renderScene.getPipeline("billboard").bind(renderPass3D);
+
+    // Re-push UniformGlobal in case the lines AA pass perturbed it
+    SDL_PushGPUVertexUniformData(cmdBuff, 0, &uniGlobal, sizeof(uniGlobal));
+
+    for (const auto &bb : submittedBillboards) {
+      // Per-billboard uniform: size+pivot, uv rect, mode (worldPerPixel etc.)
+      struct {
+        glm::vec4 sizeAndPivot;
+        glm::vec4 uvRect;
+        glm::vec4 mode;
+      } params{ bb.sizeAndPivot, bb.uvRect, bb.mode };
+      SDL_PushGPUVertexUniformData(cmdBuff, 1, &params, sizeof(params));
+
+      SDL_GPUTextureSamplerBinding binding{
+        .texture = bb.texture,
+        .sampler = nullptr,
+      };
+      // Use the editor's default linear sampler (set up in main.cpp).
+      binding.sampler = texSamplerRepeat;
+      SDL_BindGPUFragmentSamplers(renderPass3D, 0, &binding, 1);
+
+      meshBillboards->draw(renderPass3D, bb.indexOffset, 6);
+    }
+
+    if(ctx.debugMode)SDL_PopGPUDebugGroup(cmdBuff);
+  }
 
   SDL_EndGPURenderPass(renderPass3D);
 }

@@ -36,6 +36,13 @@ Renderer::Scene::Scene()
     .vertTexCount = 0,
     .fragTexCount = 1,
   });
+  shaderBillboard = std::make_unique<Shader>(ctx.gpu, Shader::Config{
+    .name = "billboard",
+    .vertUboCount = 2,    // UniformGlobal(set=1,b=0) + BillboardParams(set=1,b=1)
+    .fragUboCount = 0,
+    .vertTexCount = 0,
+    .fragTexCount = 1,
+  });
 
   pipelineN64 = std::make_unique<Pipeline>(Pipeline::Info{
     .shader = *shaderN64,
@@ -77,6 +84,24 @@ Renderer::Scene::Scene()
     {SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, offsetof(Renderer::LineVertex, color)},
   }
 });
+
+  // Textured 3D billboard quads. Uses the same per-vertex layout as the
+  // sprites pipeline, but a different shader (per-component texture binding,
+  // full-texture UV, world-space camera-aligned quad sizing). One draw per
+  // billboard so each can bind its own texture.
+  pipelineBillboard = std::make_unique<Pipeline>(Pipeline::Info{
+    .shader = *shaderBillboard,
+    .prim = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
+    .useDepth = true,
+    .drawsObjID = true,
+    .translucent = true,
+    .vertPitch = sizeof(LineVertex),
+    .vertLayout = {
+      {SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3     , offsetof(Renderer::LineVertex, pos)},
+      {SDL_GPU_VERTEXELEMENTFORMAT_UINT       , offsetof(Renderer::LineVertex, objectId)},
+      {SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, offsetof(Renderer::LineVertex, color)},
+    }
+  });
 }
 
 Renderer::Scene::~Scene() {

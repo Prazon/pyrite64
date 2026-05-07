@@ -48,6 +48,18 @@ namespace Editor
       std::shared_ptr<Renderer::Mesh> meshSprites{};
       Renderer::Object objSprites{};
 
+      // SPBF64 fork: textured billboards are batched into a shared mesh and
+      // drawn one-at-a-time in onRenderPass so each can bind its own texture.
+      std::shared_ptr<Renderer::Mesh> meshBillboards{};
+      struct SubmittedBillboard {
+        uint32_t indexOffset;
+        SDL_GPUTexture *texture;
+        glm::vec4 sizeAndPivot;  // .xy cell w/h, .zw pivot x/y (in cell pixels)
+        glm::vec4 uvRect;        // .xy uv0, .zw uv1
+        glm::vec4 mode;          // .x worldPerPixel, others reserved
+      };
+      std::vector<SubmittedBillboard> submittedBillboards{};
+
       bool showGrid{true};
       bool showCollMesh{false};
       bool showCollObj{true};
@@ -70,6 +82,18 @@ namespace Editor
       std::shared_ptr<Renderer::Mesh> getSprites() {
         return meshSprites;
       }
+
+      std::shared_ptr<Renderer::Mesh> getBillboards() {
+        return meshBillboards;
+      }
+
+      // Append a billboard quad to the shared billboard mesh and record its
+      // texture/uniform parameters. Called from a component's draw3D.
+      void addBillboardQuad(const glm::vec3 &worldPos, uint32_t objectId,
+                            SDL_GPUTexture *texture,
+                            const glm::vec4 &sizeAndPivot,
+                            const glm::vec4 &uvRect,
+                            const glm::vec4 &mode);
 
       /**
        * Moves the focused object to the position of the 3D viewport camera and with the same rotation.

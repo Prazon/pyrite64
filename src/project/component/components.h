@@ -267,7 +267,9 @@ namespace Project::Component
       .funcDeserialize = SpriteBillboard::deserialize,
       .funcBuild = SpriteBillboard::build,
       .funcGetAABB = nullptr,
-      .funcDrawOverlay = SpriteBillboard::drawOverlay,
+      // funcDrawOverlay intentionally null: SpriteBillboard now renders as a
+      // textured 3D quad via the billboard pipeline in draw3D, not as an
+      // ImGui screen-space overlay.
     },
   };
 

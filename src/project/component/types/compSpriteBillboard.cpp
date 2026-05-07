@@ -146,9 +146,74 @@ namespace Project::Component::SpriteBillboard
   void draw3D(Object &obj, Entry &entry, Editor::Viewport3D &vp,
               SDL_GPUCommandBuffer* /*cmdBuff*/, SDL_GPURenderPass* /*pass*/)
   {
-    glm::u8vec4 col{0xCC, 0xCC, 0xFF, 0xFF};
-    if (ctx.isObjectSelected(obj.uuid)) col = Utils::Colors::kSelectionTint;
-    Utils::Mesh::addSprite(*vp.getSprites(), obj.pos.resolve(obj.propOverrides), obj.uuid, 4, col);
+    Data &data = *static_cast<Data*>(entry.data.get());
+
+    auto *assetEntry = (data.spriteUUID.value != 0)
+        ? ctx.project->getAssets().getEntryByUUID(data.spriteUUID.value)
+        : nullptr;
+
+    // Fallback gizmo when no sprite asset is set: keep the small icon billboard
+    // so the object is still pickable in the viewport.
+    if (!assetEntry || assetEntry->type != FileType::IMAGE || !assetEntry->texture) {
+      glm::u8vec4 col{0xCC, 0xCC, 0xFF, 0xFF};
+      if (ctx.isObjectSelected(obj.uuid)) col = Utils::Colors::kSelectionTint;
+      Utils::Mesh::addSprite(*vp.getSprites(), obj.pos.resolve(obj.propOverrides),
+                             obj.uuid, 4, col);
+      return;
+    }
+
+    SDL_GPUTexture *gpuTex = assetEntry->texture->getGPUTex();
+    if (!gpuTex) return;
+
+    const float texW = (float)assetEntry->texture->getWidth();
+    const float texH = (float)assetEntry->texture->getHeight();
+    if (texW <= 0.0f || texH <= 0.0f) return;
+
+    // Cell size: 0 means use the whole sprite
+    const float cellW = data.cellW.resolve(obj.propOverrides) > 0
+                          ? (float)data.cellW.resolve(obj.propOverrides) : texW;
+    const float cellH = data.cellH.resolve(obj.propOverrides) > 0
+                          ? (float)data.cellH.resolve(obj.propOverrides) : texH;
+    const int sheetCols = (int)(texW / cellW);
+    const int frame = data.frame.resolve(obj.propOverrides);
+    const int cellX = sheetCols > 0 ? (frame % sheetCols) : 0;
+    const int cellY = sheetCols > 0 ? (frame / sheetCols) : 0;
+
+    const float pixelScale = data.pixelScale.resolve(obj.propOverrides) > 0.0f
+                              ? data.pixelScale.resolve(obj.propOverrides) : 1.0f;
+
+    // World-units-per-pixel: SPBF64 gameplay treats 1 sprite pixel = 1 world unit
+    // at zoom = 1.0. Use pixelScale as multiplier so authors can preview at the
+    // intended on-screen size.
+    const float worldPerPx = pixelScale;
+
+    glm::vec4 sizeAndPivot{
+      cellW, cellH,
+      (float)data.pivotX.resolve(obj.propOverrides),
+      (float)data.pivotY.resolve(obj.propOverrides)
+    };
+    glm::vec4 uvRect{
+      (cellX * cellW) / texW,
+      (cellY * cellH) / texH,
+      ((cellX + 1) * cellW) / texW,
+      ((cellY + 1) * cellH) / texH
+    };
+
+    if (data.flipX.resolve(obj.propOverrides)) {
+      std::swap(uvRect.x, uvRect.z);
+    }
+
+    glm::vec4 mode{ worldPerPx, ctx.isObjectSelected(obj.uuid) ? 1.0f : 0.0f, 0.0f, 0.0f };
+
+    vp.addBillboardQuad(obj.pos.resolve(obj.propOverrides), obj.uuid,
+                        gpuTex, sizeAndPivot, uvRect, mode);
+
+    // A small selection marker (still uses the icon-sprite path) so authors
+    // see the pivot point at the world anchor.
+    if (ctx.isObjectSelected(obj.uuid)) {
+      Utils::Mesh::addSprite(*vp.getSprites(), obj.pos.resolve(obj.propOverrides),
+                             obj.uuid, 4, Utils::Colors::kSelectionTint);
+    }
   }
 
   // ImGui screen-space overlay drawn after the 3D framebuffer is composited.
