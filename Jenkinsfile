@@ -2,10 +2,8 @@
 //
 // Builds the editor binary (pyrite64.exe + ./data + ./n64) on a Windows agent
 // using MSYS2 UCRT64's GCC + CMake + Ninja, matching the toolchain that
-// CLAUDE.md mandates ("On Windows use MSYS2 UCRT64"). The pipeline mirrors
-// the structure of D:\CacheGrabGitLab\SPBF\Jenkinsfile (stage-named failure
-// tracking, optional Discord notifications) but uses cmake/ninja in place of
-// Igor since this is a C++23 codebase, not GameMaker.
+// CLAUDE.md mandates ("On Windows use MSYS2 UCRT64"). Triggered by GitHub
+// webhook (githubPush) only — no SCM polling.
 //
 // To run MSYS2 binaries from Jenkins' bat steps we drive everything through
 // `bash.exe -lc` so MSYSTEM=UCRT64 is sourced and PATH includes the UCRT64
@@ -26,9 +24,9 @@ pipeline {
             description: 'CMake preset to configure and build.'
         )
         string(
-            name: 'DISCORD_WEBHOOK',
-            defaultValue: '',
-            description: 'Optional Discord webhook URL for build notifications. Leave empty to skip.'
+            name: 'DEPLOY_DIR',
+            defaultValue: 'B:\\forks\\pyrite64',
+            description: 'Destination working tree to copy pyrite64.exe into after a successful build (so taskbar shortcuts pick up the latest build). Leave empty to skip deploy.'
         )
     }
 
@@ -37,6 +35,12 @@ pipeline {
         // from /ucrt64/bin, not the system Git-Bash or PowerShell.
         MSYS2_BASH = 'C:\\msys64\\usr\\bin\\bash.exe'
         MSYSTEM    = 'UCRT64'
+
+        // Final output bundle location. cmake places pyrite64.exe at the
+        // workspace root by default; we copy it here alongside the data/ and
+        // n64/ trees so the deliverable layout mirrors SPBF's build/Windows
+        // convention and so the artifact can be grabbed from one path.
+        OUTPUT_DIR = "${WORKSPACE}\\build\\Windows"
     }
 
     options {
@@ -47,26 +51,15 @@ pipeline {
     }
 
     triggers {
-        // Poll GitHub for changes; switch to a webhook later if/when the
-        // Jenkins controller is reachable from github.com.
-        pollSCM('H/15 * * * *')
+        // GitHub webhook only — the controller is reachable from github.com,
+        // so push notifications drive the pipeline. No SCM polling.
+        githubPush()
     }
 
     stages {
         stage('Setup') {
             steps {
                 script { env.FAILED_STAGE = 'Setup' }
-                script {
-                    if (params.DISCORD_WEBHOOK?.trim()) {
-                        discordSend(
-                            webhookURL: params.DISCORD_WEBHOOK,
-                            title: "pyrite64 Build #${env.BUILD_NUMBER} - STARTED",
-                            description: "Preset: ${params.PRESET}\nClean: ${params.CLEAN_BUILD}",
-                            result: 'UNSTABLE',
-                            showChangeset: true
-                        )
-                    }
-                }
                 echo "Build #${env.BUILD_NUMBER} starting (preset=${params.PRESET}, clean=${params.CLEAN_BUILD})"
             }
         }
@@ -117,48 +110,59 @@ pipeline {
             }
         }
 
+        stage('Stage Output') {
+            steps {
+                script { env.FAILED_STAGE = 'Stage Output' }
+                // Assemble the runnable bundle in OUTPUT_DIR. CLAUDE.md
+                // requires pyrite64.exe to sit next to ./data and ./n64 at
+                // runtime, so we mirror that exact layout under build/Windows
+                // (matching the SPBF convention) for downstream consumption.
+                bat '''
+                    if exist "%OUTPUT_DIR%" rmdir /S /Q "%OUTPUT_DIR%"
+                    mkdir "%OUTPUT_DIR%"
+                    copy /Y "%WORKSPACE%\\pyrite64.exe" "%OUTPUT_DIR%\\pyrite64.exe" >nul
+                    xcopy /E /I /Y /Q "%WORKSPACE%\\data" "%OUTPUT_DIR%\\data" >nul
+                    xcopy /E /I /Y /Q "%WORKSPACE%\\n64"  "%OUTPUT_DIR%\\n64"  >nul
+                    echo Staged output bundle to %OUTPUT_DIR%
+                '''
+            }
+        }
+
         stage('Archive') {
             steps {
                 script { env.FAILED_STAGE = 'Archive' }
-                // Archive the runnable bundle: the .exe alongside the data/ and
-                // n64/ trees it expects at runtime (per CLAUDE.md). Skip build/
-                // and vendored/ to keep the artifact lean.
+                // Archive from the staged output dir so the artifact tree
+                // matches the expected runtime layout exactly.
                 archiveArtifacts(
-                    artifacts: 'pyrite64.exe, data/**, n64/**',
+                    artifacts: 'build/Windows/**',
                     fingerprint: true,
                     onlyIfSuccessful: true
                 )
             }
         }
+
+        stage('Deploy') {
+            when { expression { return params.DEPLOY_DIR?.trim() } }
+            steps {
+                script { env.FAILED_STAGE = 'Deploy' }
+                // Drop the freshly built pyrite64.exe into the user's working
+                // tree so a taskbar shortcut at <DEPLOY_DIR>\pyrite64.exe
+                // always launches the latest CI build. data/ and n64/ already
+                // live in that tree as source, so we don't overwrite them
+                // here — only the executable.
+                bat '''
+                    if not exist "%DEPLOY_DIR%" (
+                        echo DEPLOY_DIR does not exist: %DEPLOY_DIR%
+                        exit /b 1
+                    )
+                    copy /Y "%WORKSPACE%\\pyrite64.exe" "%DEPLOY_DIR%\\pyrite64.exe" >nul
+                    echo Deployed pyrite64.exe to %DEPLOY_DIR%
+                '''
+            }
+        }
     }
 
     post {
-        success {
-            script {
-                if (params.DISCORD_WEBHOOK?.trim()) {
-                    discordSend(
-                        webhookURL: params.DISCORD_WEBHOOK,
-                        title: "pyrite64 Build #${env.BUILD_NUMBER} - SUCCESS",
-                        description: "Preset: ${params.PRESET}\nCommit: ${env.GIT_COMMIT?.take(8) ?: 'unknown'}",
-                        result: 'SUCCESS',
-                        showChangeset: true
-                    )
-                }
-            }
-        }
-        failure {
-            script {
-                if (params.DISCORD_WEBHOOK?.trim()) {
-                    discordSend(
-                        webhookURL: params.DISCORD_WEBHOOK,
-                        title: "pyrite64 Build #${env.BUILD_NUMBER} - FAILED",
-                        description: "Failed at stage: **${env.FAILED_STAGE ?: 'unknown'}**\nPreset: ${params.PRESET}\nCheck console output for details.",
-                        result: 'FAILURE',
-                        showChangeset: true
-                    )
-                }
-            }
-        }
         always {
             echo "Build #${env.BUILD_NUMBER} completed (failed_stage=${env.FAILED_STAGE ?: 'none'})"
         }
