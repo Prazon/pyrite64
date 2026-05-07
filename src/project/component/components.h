@@ -86,6 +86,7 @@ namespace Project::Component
   MAKE_COMP(Culling)
   MAKE_COMP(NodeGraph)
   MAKE_COMP(AnimModel)
+  MAKE_COMP(SpriteBillboard)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -234,6 +235,18 @@ namespace Project::Component
       .funcSerialize = RigidBody::serialize,
       .funcDeserialize = RigidBody::deserialize,
       .funcBuild = RigidBody::build,
+      .funcGetAABB = nullptr
+    },
+    CompInfo{
+      .id = 12,
+      .icon = ICON_MDI_IMAGE_OUTLINE " ",
+      .name = "Sprite Billboard",
+      .funcInit = SpriteBillboard::init,
+      .funcDraw = SpriteBillboard::draw,
+      .funcDraw3D = SpriteBillboard::draw3D,
+      .funcSerialize = SpriteBillboard::serialize,
+      .funcDeserialize = SpriteBillboard::deserialize,
+      .funcBuild = SpriteBillboard::build,
       .funcGetAABB = nullptr
     },
   };
