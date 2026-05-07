@@ -216,6 +216,12 @@ bool Build::buildProject(const std::string &configPath)
   auto filesSorted = sceneCtx.files;
   std::sort(filesSorted.begin(), filesSorted.end());
 
+  // Resolve ROM header title: explicit override or fall back to project name.
+  // Libdragon's n64tool truncates to 20 chars, so do the same here so the
+  // generated Makefile reflects what will actually land in the ROM header.
+  std::string romTitle = project.conf.romTitle.empty() ? project.conf.name : project.conf.romTitle;
+  if (romTitle.size() > 20) romTitle.resize(20);
+
   // Makefile
   auto makefile = Utils::replaceAll(
     Utils::FS::loadTextFile("data/build/baseMakefile.mk"),
@@ -223,6 +229,10 @@ bool Build::buildProject(const std::string &configPath)
       {"{{N64_INST}}",          project.conf.pathN64Inst},
       {"{{ROM_NAME}}",          project.conf.romName},
       {"{{PROJECT_NAME}}",      project.conf.name},
+      {"{{ROM_TITLE}}",         romTitle},
+      {"{{ROM_SAVETYPE}}",      Project::saveTypeToMakefileString(project.conf.saveType)},
+      {"{{ROM_REGIONFREE}}",    project.conf.regionFree ? "true" : "false"},
+      {"{{ROM_RTC}}",           project.conf.rtcSupport ? "true" : "false"},
       {"{{ASSET_LIST}}",        Utils::join(filesSorted, " ")},
       {"{{USER_CODE_DIRS}}",    userCodeRules},
       {"{{P64_SELF_PATH}}",     Utils::Proc::getSelfPath().string()},

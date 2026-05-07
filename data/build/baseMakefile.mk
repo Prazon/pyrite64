@@ -57,7 +57,10 @@ build/%.dfs:
 $(BUILD_DIR)/$(ROM_NAME).dfs: $(assets_conv)
 $(BUILD_DIR)/$(ROM_NAME).elf: $(src:%.cpp=$(BUILD_DIR)/%.o) $(ENGINE_DIR)/build/engine.a
 
-$(ROM_NAME).z64: N64_ROM_TITLE="{{PROJECT_NAME}}"
+$(ROM_NAME).z64: N64_ROM_TITLE="{{ROM_TITLE}}"
+$(ROM_NAME).z64: N64_ROM_SAVETYPE={{ROM_SAVETYPE}}
+$(ROM_NAME).z64: N64_ROM_REGIONFREE={{ROM_REGIONFREE}}
+$(ROM_NAME).z64: N64_ROM_RTC={{ROM_RTC}}
 $(ROM_NAME).z64: $(BUILD_DIR)/$(ROM_NAME).dfs
 
 clean:

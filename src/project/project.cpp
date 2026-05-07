@@ -97,12 +97,33 @@ namespace
   }
 }
 
+const char *Project::saveTypeToMakefileString(uint32_t saveType) {
+  switch (static_cast<SaveType>(saveType)) {
+    case SaveType::EEPROM4K:  return "eeprom4k";
+    case SaveType::EEPROM16K: return "eeprom16k";
+    case SaveType::SRAM256K:  return "sram256k";
+    case SaveType::SRAM768K:  return "sram768k";
+    case SaveType::SRAM1M:    return "sram1m";
+    case SaveType::FlashRAM:  return "flashram";
+    case SaveType::None:
+    default:                  return "none";
+  }
+}
+
 std::string Project::ProjectConf::serialize() const {
   return Utils::JSON::Builder{}
     .set("name", name)
     .set("romName", romName)
     .set("pathEmu", pathEmu)
     .set("pathN64Inst", pathN64Inst)
+    .set("romTitle", romTitle)
+    .set("saveType", saveType)
+    .set("regionFree", regionFree)
+    .set("rtcSupport", rtcSupport)
+    .set("author", author)
+    .set("version", version)
+    .set("description", description)
+    .set("gameImageUUID", gameImageUUID)
     .set("sceneIdOnBoot", sceneIdOnBoot)
     .set("sceneIdOnReset", sceneIdOnReset)
     .set("sceneIdLastOpened", sceneIdLastOpened)
@@ -122,6 +143,14 @@ void Project::Project::deserialize(const nlohmann::json &doc) {
   conf.romName = doc.value("romName", "pyrite64");
   conf.pathEmu = doc.value("pathEmu", "ares");
   conf.pathN64Inst = doc.value("pathN64Inst", "");
+  conf.romTitle = doc.value("romTitle", "");
+  conf.saveType = doc.value("saveType", 0u);
+  conf.regionFree = doc.value("regionFree", false);
+  conf.rtcSupport = doc.value("rtcSupport", false);
+  conf.author = doc.value("author", "");
+  conf.version = doc.value("version", "");
+  conf.description = doc.value("description", "");
+  conf.gameImageUUID = doc.value("gameImageUUID", 0ull);
   conf.sceneIdOnBoot = doc.value("sceneIdOnBoot", 1);
   conf.sceneIdOnReset = doc.value("sceneIdOnReset", 1);
   conf.sceneIdLastOpened = doc.value("sceneIdLastOpened", 1);
