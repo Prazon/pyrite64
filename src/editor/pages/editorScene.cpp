@@ -21,6 +21,7 @@
 #include "../imgui/theme.h"
 #include "parts/assets/modelEditor.h"
 #include "parts/assets/imageEditor.h"
+#include "parts/assets/codeEditor.h"
 
 namespace
 {
@@ -58,6 +59,11 @@ Editor::Scene::Scene()
         openImageEditor(assetUUID.get<uint64_t>());
       }
     }
+    if(json.contains("winCode")) {
+      for(const auto& assetUUID : json["winCode"]) {
+        openCodeEditor(assetUUID.get<uint64_t>());
+      }
+    }
   } catch(const std::exception& e) {}
 }
 
@@ -71,6 +77,10 @@ Editor::Scene::~Scene()
   conf["winImages"] = nlohmann::json::array();
   for(const auto& [assetUUID, _] : imageEditors) {
     conf["winImages"].push_back(assetUUID);
+  }
+  conf["winCode"] = nlohmann::json::array();
+  for(const auto& [assetUUID, _] : codeEditors) {
+    conf["winCode"].push_back(assetUUID);
   }
 
   Utils::FS::saveTextFile(Utils::Proc::getAppDataPath() / "editorScene.json", conf.dump(2));
@@ -95,6 +105,16 @@ void Editor::Scene::openImageEditor(uint64_t assetUUID)
     it->second->focus();
   } else {
     imageEditors[assetUUID] = std::make_shared<ImageEditor>(assetUUID);
+  }
+}
+
+void Editor::Scene::openCodeEditor(uint64_t assetUUID)
+{
+  auto it = codeEditors.find(assetUUID);
+  if(it != codeEditors.end()) {
+    it->second->focus();
+  } else {
+    codeEditors[assetUUID] = std::make_shared<CodeEditor>(assetUUID);
   }
 }
 
@@ -255,6 +275,14 @@ void Editor::Scene::draw()
     }
   }
   for(auto &uuid : delImageUUIDs)imageEditors.erase(uuid);
+
+  std::vector<uint64_t> delCodeUUIDs{};
+  for(auto &[uuid, editor] : codeEditors) {
+    if (!editor->draw(dockSpaceID)) {
+      delCodeUUIDs.push_back(uuid);
+    }
+  }
+  for(auto &uuid : delCodeUUIDs)codeEditors.erase(uuid);
 
   ImGui::Begin("Object");
     objectInspector.draw();

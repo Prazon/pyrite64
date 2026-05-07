@@ -454,6 +454,10 @@ void Editor::AssetsBrowser::draw() {
         } else if (asset.type == FileType::MODEL_3D) {
           ctx.editorScene->openModelEditor(asset.getUUID());
           handled = true;
+        } else if (asset.type == FileType::CODE_OBJ
+                || asset.type == FileType::CODE_GLOBAL) {
+          ctx.editorScene->openCodeEditor(asset.getUUID());
+          handled = true;
         }
       }
       if (!handled && !Utils::Proc::openFile(asset.path))

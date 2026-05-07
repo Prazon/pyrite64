@@ -111,6 +111,9 @@ add_executable(pyrite64 src/main.cpp
         # Imgui node editor
         vendored/ImNodeFlow/src/ImNodeFlow.cpp
 
+        # ImGuiColorTextEdit (in-editor C++ source editor)
+        vendored/ImGuiColorTextEdit/TextEditor.cpp
+
         # Regex
         vendored/tiny-regex-c/re.c
 
@@ -272,6 +275,8 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/modelEditor.cpp
         src/editor/pages/parts/assets/imageEditor.h
         src/editor/pages/parts/assets/imageEditor.cpp
+        src/editor/pages/parts/assets/codeEditor.h
+        src/editor/pages/parts/assets/codeEditor.cpp
         src/editor/pages/parts/assets/assetPreviewViewport.h
         src/editor/pages/parts/assets/assetPreviewViewport.cpp
         src/project/assets/material.h
@@ -299,6 +304,7 @@ target_include_directories(pyrite64 PRIVATE
     vendored/ImGuiTextSelect
     vendored/ImViewGuizmo
     vendored/ImNodeFlow/include
+    vendored/ImGuiColorTextEdit
     vendored/glm
     vendored/ImGuizmo
     vendored/tiny3d/tools/gltf_importer/src/lib

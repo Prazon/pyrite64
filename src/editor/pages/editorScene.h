@@ -20,6 +20,7 @@ namespace Editor
 {
   class ModelEditor;
   class ImageEditor;
+  class CodeEditor;
 
   class Scene
   {
@@ -30,6 +31,7 @@ namespace Editor
       std::vector<std::shared_ptr<NodeEditor>> nodeEditors{};
       std::map<uint64_t, std::shared_ptr<ModelEditor>> modelEditors{};
       std::map<uint64_t, std::shared_ptr<ImageEditor>> imageEditors{};
+      std::map<uint64_t, std::shared_ptr<CodeEditor>> codeEditors{};
 
       // Deferred-destroy lists for editors that own GPU resources referenced
       // by ImGui draw data (e.g. ModelEditor's preview framebuffer texture).
@@ -62,6 +64,7 @@ namespace Editor
 
       void openModelEditor(uint64_t assetUUID);
       void openImageEditor(uint64_t assetUUID);
+      void openCodeEditor(uint64_t assetUUID);
 
       void draw();
       void save();
