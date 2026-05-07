@@ -17,24 +17,64 @@
 
 namespace
 {
+  // Files/directories under <project>/engine/ that are NOT mirrored from
+  // n64/engine/. Anything matching is left alone during the engine sync so
+  // user-facing build artifacts and Makefile customizations survive.
+  bool isEnginePathPreserved(const std::string &name) {
+    return name == "build" || name == ".gitignore";
+  }
+
   /**
-   * Recursively copy changed files from src to dst if file is different.
-   * This is used to make sure updated engine code is put in the project.
-   * Doing so each time would force a recompile, so the content is checked.
+   * Mirror engine files from src to dst:
+   *  - copy missing/changed files (returns count of changed-or-added files)
+   *  - delete dst files/dirs that no longer exist in src (so engine refactors
+   *    that remove a header/source don't leave stale copies in the project,
+   *    which previously caused builds to fail with mixed-version Frankenstein
+   *    headers)
    *
-   * @returns amount of files copied
+   * Doing the content-hash check avoids unnecessary recompiles when nothing
+   * actually changed. Whitelist isEnginePathPreserved keeps build outputs and
+   * other non-source files intact.
+   *
+   * @returns amount of files added/changed/removed
    */
   int copyChangedEngineFiles(const fs::path& src, const fs::path& dst) {
 
     if (!fs::exists(src)) return 0;
+
     if (fs::is_directory(src)) {
       fs::create_directories(dst);
       int count = 0;
+
+      // First pass: copy / recurse into source entries.
       for (const auto& entry : fs::directory_iterator(src)) {
         count += copyChangedEngineFiles(entry.path(), dst / entry.path().filename());
       }
+
+      // Second pass: prune dst entries that no longer exist in src.
+      if (fs::exists(dst) && fs::is_directory(dst)) {
+        std::error_code ec;
+        for (const auto& dstEntry : fs::directory_iterator(dst, ec)) {
+          if (ec) break;
+          auto name = dstEntry.path().filename().string();
+          if (isEnginePathPreserved(name)) continue;
+          if (!fs::exists(src / name)) {
+            // Stale: remove (file or directory). Counted as change so a
+            // clean build is forced when a refactor deletes engine sources.
+            std::error_code rmEc;
+            if (dstEntry.is_directory(rmEc)) {
+              auto removed = fs::remove_all(dstEntry.path(), rmEc);
+              if (!rmEc) count += static_cast<int>(removed);
+            } else {
+              if (fs::remove(dstEntry.path(), rmEc)) count++;
+            }
+          }
+        }
+      }
+
       return count;
     }
+
     std::string srcHash{};
     std::string dstHash{};
 
