@@ -115,13 +115,16 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
     ImGui::SetNextWindowSize({800,600}, ImGuiCond_Once);
   }
 
-  // Force own OS window with full OS chrome — see PrefabEditor::draw for rationale.
-  // Stable ###suffix keeps saved position/dock state across asset renames
-  // and invalidates legacy imgui.ini entries that had no ### at all.
+  // Dock as a sibling tab of Scene Editor; OS chrome on undock — see
+  // PrefabEditor::draw for rationale. Stable ###suffix keeps saved
+  // position/dock state across asset renames and invalidates legacy
+  // imgui.ini entries that had no ### at all.
   ImGuiWindowClass cls{};
   cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
   cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
+
+  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(

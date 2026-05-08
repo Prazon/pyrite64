@@ -147,7 +147,7 @@ bool Editor::PrefabEventGraphEditor::isDirty() const
   return const_cast<Project::Graph::Graph&>(graph).serialize() != savedState;
 }
 
-bool Editor::PrefabEventGraphEditor::draw()
+bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
 {
   if (!ctx.project) return false;
   auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
@@ -159,11 +159,14 @@ bool Editor::PrefabEventGraphEditor::draw()
   // multi-viewport support landed.
   winName = title + "###PrefabEventGraphWin_" + std::to_string(assetUUID);
 
-  // Force own OS window with full OS chrome — see PrefabEditor::draw for rationale.
+  // Dock as a sibling tab of Scene Editor; OS chrome on undock — see
+  // PrefabEditor::draw for rationale.
   ImGuiWindowClass cls{};
   cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
   cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
+
+  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
 
   if (!isInit) {
     isInit = true;

@@ -780,14 +780,15 @@ void Editor::Viewport3D::draw()
   // mouse pos
   ImVec2 screenPos = ImGui::GetCursorScreenPos();
   if (cameraDragActive) {
+    // SDL relative mode is on (enabled below at drag start). SDL hides the
+    // cursor and reports raw motion deltas via GetRelativeMouseState. We
+    // skip the io.WantSetMousePos warp dance — that fights multi-viewport
+    // because the warp coords/window-target ambiguity makes the cursor
+    // jitter and the camera barely move.
     float dx = 0, dy = 0;
     SDL_GetRelativeMouseState(&dx, &dy);
     mousePos.x += dx;
     mousePos.y += dy;
-    // Pin ImGui's cursor to the press position so other widgets don't see it move
-    // and the SDL3 backend warps the OS cursor back here for us.
-    io.WantSetMousePos = true;
-    io.MousePos = ImVec2(cursorLockPos.x, cursorLockPos.y);
   } else {
     mousePos = {ImGui::GetMousePos().x, ImGui::GetMousePos().y};
     mousePos.x -= screenPos.x;
@@ -961,6 +962,18 @@ void Editor::Viewport3D::draw()
         // Drain SDL's accumulated relative motion so the first per-frame read
         // doesn't include any cursor movement from before the drag started.
         SDL_GetRelativeMouseState(nullptr, nullptr);
+        // Multi-viewport-safe drag: enable SDL relative mouse mode on the
+        // SDL window the cursor is currently over (which may be a child
+        // platform viewport when this Viewport3D belongs to an asset editor
+        // floating in its own OS window). SDL hides the cursor and gives us
+        // raw motion deltas — no OS-cursor warp needed.
+        SDL_Window* dragWin = nullptr;
+        if (auto *vp = ImGui::GetWindowViewport()) {
+          dragWin = (SDL_Window*)vp->PlatformHandle;
+        }
+        if (!dragWin) dragWin = ctx.window;
+        SDL_SetWindowRelativeMouseMode(dragWin, true);
+        cameraDragWindow = dragWin;
         cameraDragActive = true;
       }
     }
@@ -1037,6 +1050,11 @@ void Editor::Viewport3D::draw()
   } else {
     camera.stopRotateDelta();
     camera.stopMoveDelta();
+    if (cameraDragActive && cameraDragWindow) {
+      // Restore normal cursor; cursor reappears at its pre-drag screen pos.
+      SDL_SetWindowRelativeMouseMode((SDL_Window*)cameraDragWindow, false);
+      cameraDragWindow = nullptr;
+    }
     cameraDragActive = false;
     mousePosStart = mousePos = {0,0};
   }

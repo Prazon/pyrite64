@@ -160,9 +160,9 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
 
   std::string baseTitle = std::string{ICON_MDI_PACKAGE_VARIANT_CLOSED " "}
     + asset->name + (isDirty() ? " *" : "");
-  // ID suffix bumped (was ###PrefabEditor_) so stale imgui.ini entries from
-  // the old auto-dock-into-3D-Viewport behavior don't override our new
-  // spawn-as-its-own-OS-window default.
+  // Stable ImGui ID via ###suffix so renaming the asset doesn't lose
+  // saved dock state, and so legacy imgui.ini entries (no ### before this)
+  // don't override our default tab placement next to Scene Editor.
   winName = baseTitle + "###PrefabEditorWin_" + std::to_string(assetUUID);
 
   // Dock as a sibling tab of "Scene Editor" in the outer top region on

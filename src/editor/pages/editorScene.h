@@ -69,10 +69,19 @@ namespace Editor
       MemoryDashboard memoryDashboard{};
       SceneGraph sceneGraph{};
 
+      // Two-level dockspace, Unreal-style:
+      //   outer (MAIN_DOCK)   -> dockTopID + dockBottomID (Files/Log/ROM, universal)
+      //   "Scene Editor" tab  -> nested dockspace with sceneDockLeftID +
+      //                          sceneDockRightID + sceneDockCenterID (3D-Viewport)
+      // Asset editors dock into dockTopID as siblings of the Scene Editor tab,
+      // so focusing one swaps the entire upper region instead of squeezing the
+      // editor into the same panel as the 3D-Viewport.
       bool dockSpaceInit{false};
-      ImGuiID dockLeftID;
-      ImGuiID dockRightID;
-      ImGuiID dockBottomID;
+      ImGuiID dockTopID{0};
+      ImGuiID dockBottomID{0};
+      ImGuiID sceneDockLeftID{0};
+      ImGuiID sceneDockRightID{0};
+      ImGuiID sceneDockCenterID{0};
 
       uint64_t pendingNodeEditorCloseUUID{0};
       bool pendingNodeEditorClosePopup{false};

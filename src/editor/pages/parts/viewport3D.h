@@ -70,6 +70,10 @@ namespace Editor
       bool selectionPending{false};
       bool selectionDragging{false};
       bool cameraDragActive{false};
+      // SDL_Window we enabled relative mouse mode on at drag start, so we can
+      // disable it on the same window even if ImGui's current viewport
+      // changes (e.g. user releases the button after the viewport flickered).
+      void* cameraDragWindow{nullptr};
 
       float moveSpeedModifier{1.0f};
       float vpOffsetY{};

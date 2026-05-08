@@ -184,50 +184,101 @@ void Editor::Scene::draw()
   ImGui::Begin("MAIN_DOCK", NULL, host_window_flags);
   ImGui::PopStyleVar(3);
 
-  auto dockSpaceID = ImGui::GetID("DockSpace");
-  auto dockSpace = ImGui::DockBuilderGetNode(dockSpaceID);
-
-  dockSpaceID = ImGui::DockSpace(dockSpaceID, ImVec2(0.0f, 0.0f), 0, 0);
+  // Outer dockspace. Layout-id bumped to "DockSpaceV2" so the previous
+  // single-region layout from imgui.ini doesn't override the new
+  // top/bottom + nested-Scene-Editor structure on first run after upgrade.
+  auto outerDockID = ImGui::GetID("DockSpaceV2");
+  auto outerNode = ImGui::DockBuilderGetNode(outerDockID);
+  outerDockID = ImGui::DockSpace(outerDockID, ImVec2(0.0f, 0.0f), 0, 0);
   ImGui::End();
 
-  if(!dockSpace)
+  if(!outerNode)
   {
-    ImGui::DockBuilderRemoveNode(dockSpaceID); // Clear out existing layout
-    ImGui::DockBuilderAddNode(dockSpaceID); // Add empty node
-    ImGui::DockBuilderSetNodeSize(dockSpaceID, ImGui::GetMainViewport()->Size);
+    ImGui::DockBuilderRemoveNode(outerDockID);
+    ImGui::DockBuilderAddNode(outerDockID);
+    ImGui::DockBuilderSetNodeSize(outerDockID, ImGui::GetMainViewport()->Size);
 
-    dockLeftID = ImGui::DockBuilderSplitNode(dockSpaceID, ImGuiDir_Left, 0.15f, nullptr, &dockSpaceID);
-    dockRightID = ImGui::DockBuilderSplitNode(dockSpaceID, ImGuiDir_Right, 0.25f, nullptr, &dockSpaceID);
-    dockBottomID = ImGui::DockBuilderSplitNode(dockSpaceID, ImGuiDir_Down, 0.25f, nullptr, &dockSpaceID);
+    // Bottom (universal) holds Files / Log / ROM. Visible regardless of which
+    // tab is active in the upper region.
+    dockBottomID = ImGui::DockBuilderSplitNode(outerDockID, ImGuiDir_Down, 0.25f, nullptr, &outerDockID);
+    // Top is the tab strip area: Scene Editor + every open asset editor.
+    dockTopID = outerDockID;
 
-    // Center
-    ImGui::DockBuilderDockWindow("3D-Viewport", dockSpaceID);
-    // ImGui::DockBuilderDockWindow("Node-Editor", dockSpaceID);
-
-    // Left
-    //ImGui::DockBuilderDockWindow("Project", dockLeftID);
-    ImGui::DockBuilderDockWindow("Scene", dockLeftID);
-    ImGui::DockBuilderDockWindow("Graph", dockLeftID);
-    ImGui::DockBuilderDockWindow("Layers", dockLeftID);
-
-    // Right
-    ImGui::DockBuilderDockWindow("Asset", dockRightID);
-    ImGui::DockBuilderDockWindow("Object", dockRightID);
-    ImGui::DockBuilderDockWindow("Model", dockRightID);
-
-    // Bottom
-    ImGui::DockBuilderDockWindow("Files", dockBottomID);
-    ImGui::DockBuilderDockWindow("Log", dockBottomID);
-    ImGui::DockBuilderDockWindow("ROM", dockBottomID);
-
-    ImGui::DockBuilderFinish(dockSpaceID);
+    ImGui::DockBuilderDockWindow("Scene Editor", dockTopID);
+    ImGui::DockBuilderDockWindow("Files",        dockBottomID);
+    ImGui::DockBuilderDockWindow("Log",          dockBottomID);
+    ImGui::DockBuilderDockWindow("ROM",          dockBottomID);
+    ImGui::DockBuilderFinish(outerDockID);
   }
+  else
+  {
+    // Existing layout: re-resolve the named windows to their current dock
+    // node IDs so we still know where to send asset editors on first open.
+    if (auto *w = ImGui::FindWindowByName("Scene Editor")) dockTopID = w->DockId;
+    if (auto *w = ImGui::FindWindowByName("Files"))        dockBottomID = w->DockId;
+  }
+
+  // Scene Editor wrapper hosts a nested dockspace with the actual scene
+  // panels. NoCollapse so the user can't accidentally fold it shut from the
+  // tab bar; padding zeroed so the inner dockspace fills the tab content.
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0,0});
+  ImGui::Begin("Scene Editor", nullptr, ImGuiWindowFlags_NoCollapse);
+  ImGui::PopStyleVar();
+  {
+    auto sceneDockID = ImGui::GetID("SceneEditorDockV2");
+    auto sceneNode = ImGui::DockBuilderGetNode(sceneDockID);
+    sceneDockID = ImGui::DockSpace(sceneDockID, ImVec2(0.0f, 0.0f), 0, 0);
+
+    if (!sceneNode) {
+      ImGui::DockBuilderRemoveNode(sceneDockID);
+      ImGui::DockBuilderAddNode(sceneDockID);
+      ImGui::DockBuilderSetNodeSize(sceneDockID, ImGui::GetContentRegionAvail());
+
+      sceneDockLeftID  = ImGui::DockBuilderSplitNode(sceneDockID, ImGuiDir_Left,  0.18f, nullptr, &sceneDockID);
+      sceneDockRightID = ImGui::DockBuilderSplitNode(sceneDockID, ImGuiDir_Right, 0.28f, nullptr, &sceneDockID);
+      sceneDockCenterID = sceneDockID;
+
+      // Lock the 3D-Viewport's node so the user can't drop other windows onto
+      // it or split it — keeps the central viewport exclusive, like Unreal's
+      // Level Viewport. Other panels still dock into the left/right groups.
+      if (auto *centerNode = ImGui::DockBuilderGetNode(sceneDockCenterID)) {
+        centerNode->LocalFlags |=
+          ImGuiDockNodeFlags_NoDockingOverMe |
+          ImGuiDockNodeFlags_NoDockingSplit |
+          ImGuiDockNodeFlags_NoTabBar;
+      }
+
+      ImGui::DockBuilderDockWindow("3D-Viewport", sceneDockCenterID);
+      ImGui::DockBuilderDockWindow("Scene",       sceneDockLeftID);
+      ImGui::DockBuilderDockWindow("Graph",       sceneDockLeftID);
+      ImGui::DockBuilderDockWindow("Layers",      sceneDockLeftID);
+      ImGui::DockBuilderDockWindow("Asset",       sceneDockRightID);
+      ImGui::DockBuilderDockWindow("Object",      sceneDockRightID);
+      ImGui::DockBuilderDockWindow("Model",       sceneDockRightID);
+      ImGui::DockBuilderFinish(sceneDockID);
+    }
+  }
+  ImGui::End();
 
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2_px, 2_px));
   ImGui::Begin("3D-Viewport");
+    // Re-apply the central-viewport lock every frame so it survives returning
+    // users whose imgui.ini already has the layout cached (LocalFlags isn't
+    // fully restored from .ini).
+    if (auto *node = ImGui::GetWindowDockNode()) {
+      node->LocalFlags |=
+        ImGuiDockNodeFlags_NoDockingOverMe |
+        ImGuiDockNodeFlags_NoDockingSplit |
+        ImGuiDockNodeFlags_NoTabBar;
+    }
     viewport3d.draw();
   ImGui::End();
   ImGui::PopStyleVar(1);
+
+  // Asset editors dock into the outer top region (siblings of the
+  // Scene Editor tab). dockTopID is what we hand them as their default
+  // dock target on first open.
+  ImGuiID dockSpaceID = dockTopID;
 
   std::vector<uint32_t> delIndices{};
   for(uint32_t i = 0; i < nodeEditors.size(); ++i) {
@@ -391,7 +442,7 @@ void Editor::Scene::draw()
   // state); a confirm-modal is the natural follow-up.
   std::vector<uint64_t> delEventGraphUUIDs{};
   for(auto &[uuid, editor] : prefabEventGraphEditors) {
-    if (!editor->draw()) {
+    if (!editor->draw(dockSpaceID)) {
       delEventGraphUUIDs.push_back(uuid);
     }
   }
@@ -551,7 +602,11 @@ void Editor::Scene::draw()
         if(ImGui::MenuItem(ICON_MDI_MAGNIFY_MINUS "Zoom Out")) {
           ImGui::Theme::changeZoom(-1);
         }
-        if(ImGui::MenuItem("Reset Layout"))ImGui::DockBuilderRemoveNode(dockSpaceID);
+        if(ImGui::MenuItem("Reset Layout")) {
+          // Nuke both dockspaces; they get rebuilt next frame from defaults.
+          ImGui::DockBuilderRemoveNode(ImGui::GetID("DockSpaceV2"));
+          ImGui::DockBuilderRemoveNode(ImGui::GetID("SceneEditorDockV2"));
+        }
         ImGui::EndMenu();
       }
 

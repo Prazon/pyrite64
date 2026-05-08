@@ -30,7 +30,7 @@ namespace Editor
     public:
       explicit PrefabEventGraphEditor(uint64_t prefabAssetUUID);
 
-      bool draw();
+      bool draw(ImGuiID defDockId = 0);
       void focus() const;
       void save();
       void discardUnsavedChanges();

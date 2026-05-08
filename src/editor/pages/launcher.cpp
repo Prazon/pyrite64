@@ -265,14 +265,19 @@ void Editor::Launcher::draw()
       ImGui::EndPopup();
     }
 
-    //separator
-    float y = ImGui::GetCursorScreenPos().y;
-    y -= 16_px;
-    ImGui::SetCursorPosY(y);
+    // Separator just above the rows. Two coordinate systems matter here:
+    // SetCursorPosY takes window-relative Y, AddLine takes screen-space Y.
+    // Mixing them previously made the cursor advance further each frame
+    // (window-Y was set to the screen-Y), pushing the window's content
+    // bounds past its own size — which trips ImGui's
+    // "SetCursorPos extends boundary" error every frame.
+    float yWin    = ImGui::GetCursorPosY() - 16_px;
+    float yScreen = ImGui::GetCursorScreenPos().y - 16_px;
+    ImGui::SetCursorPosY(yWin);
     ImGui::GetWindowDrawList()->AddLine(
-      ImVec2(8_px, y), 
-      ImVec2(vp->Size.x - 8_px, y), 
-      ImGui::GetColorU32(ImGuiCol_Separator), 
+      ImVec2(8_px,                yScreen),
+      ImVec2(vp->Size.x - 8_px,   yScreen),
+      ImGui::GetColorU32(ImGuiCol_Separator),
       1_px
     );
     
