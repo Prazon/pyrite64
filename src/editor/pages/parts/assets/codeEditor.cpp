@@ -82,9 +82,10 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
   // spawn-as-its-own-OS-window default.
   winName = baseTitle + "###CodeEditorWin_" + std::to_string(assetUUID);
 
-  // Force own OS window via NoAutoMerge — see PrefabEditor::draw for rationale.
+  // Force own OS window with full OS chrome — see PrefabEditor::draw for rationale.
   ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
+  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
 
   auto *mvp = ImGui::GetMainViewport();

@@ -159,9 +159,10 @@ bool Editor::PrefabEventGraphEditor::draw()
   // multi-viewport support landed.
   winName = title + "###PrefabEventGraphWin_" + std::to_string(assetUUID);
 
-  // Force own OS window via NoAutoMerge — see PrefabEditor::draw for rationale.
+  // Force own OS window with full OS chrome — see PrefabEditor::draw for rationale.
   ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
+  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
 
   if (!isInit) {

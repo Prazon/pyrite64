@@ -167,11 +167,14 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
 
   // Force ImGui to give this editor its own OS-level platform window
   // (Unreal-style asset editor) instead of merging it back into the main
-  // viewport. Without NoAutoMerge, an ImGui window placed inside the main
-  // viewport's bounds is rendered as a sub-window and can't be resized or
-  // maximized by the OS — only by ImGui's internal handles.
+  // viewport. NoAutoMerge -> always own viewport. Clearing NoDecoration
+  // restores the OS title bar, resize handles, and maximize button —
+  // ImGui defaults secondary viewports to borderless via
+  // ConfigViewportsNoDecoration=true, which is fine for tooltips but wrong
+  // for asset editors the user actually drags around between monitors.
   ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
+  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
 
   auto *mvp = ImGui::GetMainViewport();
@@ -278,11 +281,41 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   ImGui::SameLine();
 
   ImGui::BeginChild("##InspectorPane", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    inspector.draw(scene, selection);
+    drawDetailsPanel();
   ImGui::EndChild();
 
   ImGui::End();
   return isOpen;
+}
+
+void Editor::PrefabEditor::clearMyPrefabSelection()
+{
+  detailsKind = DetailsKind::OBJECT;
+  detailsVarIdx = -1;
+  detailsFuncName.clear();
+  renameBuffer.clear();
+}
+
+void Editor::PrefabEditor::drawDetailsPanel()
+{
+  // UE-style mutual-exclusion: clicking an Object node in the Components
+  // tree clobbers the my-prefab selection so Details snaps back to the
+  // object inspector. Detect by watching selection.primary() for changes
+  // — if it just became non-zero this frame, the user just clicked.
+  uint32_t curSel = selection.primary();
+  if (curSel != 0 && curSel != lastSelectionPrimary) {
+    detailsKind = DetailsKind::OBJECT;
+    detailsVarIdx = -1;
+    detailsFuncName.clear();
+  }
+  lastSelectionPrimary = curSel;
+
+  switch (detailsKind) {
+    case DetailsKind::VARIABLE: drawVariableDetails(); break;
+    case DetailsKind::FUNCTION: drawFunctionDetails(); break;
+    case DetailsKind::OBJECT:
+    default:                    inspector.draw(scene, selection); break;
+  }
 }
 
 void Editor::PrefabEditor::drawLeftPane()
@@ -343,158 +376,54 @@ void Editor::PrefabEditor::drawLeftPane()
 void Editor::PrefabEditor::drawVariablesPanel()
 {
   // Header: add a new variable. Defaults to INT, name is auto-generated.
-  if (ImGui::Button(ICON_MDI_PLUS " Add Variable")) {
+  // Clicking selects the new variable so the user can immediately edit
+  // it in the details panel — UE Blueprint pattern.
+  if (ImGui::SmallButton(ICON_MDI_PLUS " Add")) {
     Project::PrefabVarDef v{};
     v.uuid = Utils::Hash::sha256_64bit(
       std::to_string(rand()) + std::to_string(variables.size())
     );
-    v.name = "NewVar" + std::to_string(variables.size());
+    v.name = "NewVar_" + std::to_string(variables.size() + 1);
     v.kind = Project::PrefabVarKind::INT;
     v.defaultValue.set<int32_t>(0);
     variables.push_back(std::move(v));
+    detailsKind = DetailsKind::VARIABLE;
+    detailsVarIdx = static_cast<int>(variables.size()) - 1;
+    detailsFuncName.clear();
   }
   ImGui::SameLine();
   ImGui::TextDisabled("(%zu)", variables.size());
-  ImGui::Separator();
 
   if (variables.empty()) {
-    ImGui::TextDisabled("No variables.");
+    ImGui::TextDisabled("(none)");
     return;
   }
 
-  static const char* kindNames[] = {
-    "Int", "Float", "Bool", "Vec3", "Quat",
-    "Object Ref", "Prefab Ref", "Asset Ref",
+  // Selectable rows — single-line "icon + name + type-tag". Clicking the
+  // row selects the variable for the details panel; no inline editing in
+  // the panel itself (kept minimal, like UE5 My Blueprint).
+  static const char* kindShort[] = {
+    "int", "float", "bool", "vec3", "quat", "obj", "prefab", "asset",
   };
-
-  if (!ImGui::BeginTable("##Vars", 4,
-        ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
-    return;
-  }
-  ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.25f);
-  ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 0.20f);
-  ImGui::TableSetupColumn("Default", ImGuiTableColumnFlags_WidthStretch, 0.45f);
-  ImGui::TableSetupColumn("##Del", ImGuiTableColumnFlags_WidthFixed, 28.0f);
-  ImGui::TableHeadersRow();
-
-  int delIdx = -1;
   for (size_t i = 0; i < variables.size(); ++i) {
-    auto &v = variables[i];
+    const auto &v = variables[i];
     ImGui::PushID(static_cast<int>(i));
-    ImGui::TableNextRow();
-
-    // Name
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    char nameBuf[128]{};
-    std::snprintf(nameBuf, sizeof(nameBuf), "%s", v.name.c_str());
-    if (ImGui::InputText("##name", nameBuf, sizeof(nameBuf))) {
-      v.name = nameBuf;
+    bool sel = (detailsKind == DetailsKind::VARIABLE
+                && detailsVarIdx == static_cast<int>(i));
+    std::string label = std::string{ICON_MDI_VARIABLE " "} + v.name;
+    if (ImGui::Selectable(label.c_str(), sel,
+          ImGuiSelectableFlags_AllowOverlap)) {
+      detailsKind = DetailsKind::VARIABLE;
+      detailsVarIdx = static_cast<int>(i);
+      detailsFuncName.clear();
     }
-
-    // Type
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    int kindIdx = static_cast<int>(v.kind);
-    if (ImGui::Combo("##kind", &kindIdx, kindNames, IM_ARRAYSIZE(kindNames))) {
-      v.kind = static_cast<Project::PrefabVarKind>(kindIdx);
-      // Reset the default to a sane zero of the new type — switching kinds
-      // would otherwise leave a GenericValue payload typed for the old kind.
-      v.defaultValue = GenericValue{};
-      v.typeArg = 0;
-      switch (v.kind) {
-        case Project::PrefabVarKind::INT:        v.defaultValue.set<int32_t>(0); break;
-        case Project::PrefabVarKind::FLOAT:      v.defaultValue.set<float>(0.0f); break;
-        case Project::PrefabVarKind::BOOL:       v.defaultValue.set<bool>(false); break;
-        case Project::PrefabVarKind::VEC3:       v.defaultValue.set<glm::vec3>({0,0,0}); break;
-        case Project::PrefabVarKind::QUAT:       v.defaultValue.set<glm::quat>(glm::quat{1,0,0,0}); break;
-        case Project::PrefabVarKind::OBJECT_REF:
-        case Project::PrefabVarKind::PREFAB_REF:
-        case Project::PrefabVarKind::ASSET_REF:  v.defaultValue.set<uint64_t>(0); break;
-      }
-    }
-
-    // Default value widget (per-type)
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    switch (v.kind) {
-      case Project::PrefabVarKind::INT: {
-        int val = v.defaultValue.get<int32_t>();
-        if (ImGui::DragInt("##def", &val)) v.defaultValue.set<int32_t>(val);
-        break;
-      }
-      case Project::PrefabVarKind::FLOAT: {
-        float val = v.defaultValue.get<float>();
-        if (ImGui::DragFloat("##def", &val, 0.01f)) v.defaultValue.set<float>(val);
-        break;
-      }
-      case Project::PrefabVarKind::BOOL: {
-        bool val = v.defaultValue.get<bool>();
-        if (ImGui::Checkbox("##def", &val)) v.defaultValue.set<bool>(val);
-        break;
-      }
-      case Project::PrefabVarKind::VEC3: {
-        glm::vec3 val = v.defaultValue.get<glm::vec3>();
-        if (ImGui::DragFloat3("##def", &val.x, 0.01f)) v.defaultValue.set<glm::vec3>(val);
-        break;
-      }
-      case Project::PrefabVarKind::QUAT: {
-        glm::quat q = v.defaultValue.get<glm::quat>();
-        float xyzw[4]{q.x, q.y, q.z, q.w};
-        if (ImGui::DragFloat4("##def", xyzw, 0.01f)) {
-          v.defaultValue.set<glm::quat>(glm::quat{xyzw[3], xyzw[0], xyzw[1], xyzw[2]});
-        }
-        break;
-      }
-      case Project::PrefabVarKind::OBJECT_REF: {
-        // Per-instance only — class-level default is always null. Object refs
-        // resolve at scene-graph time, not at prefab-edit time.
-        ImGui::TextDisabled("(null — set per instance)");
-        break;
-      }
-      case Project::PrefabVarKind::PREFAB_REF: {
-        // typeArg pins the target prefab type. Instances will be picked from
-        // prefabs of that type (or its descendants) via a scene picker.
-        std::string label = "(none)";
-        if (ctx.project) {
-          auto *e = ctx.project->getAssets().getEntryByUUID(v.typeArg);
-          if (e) label = e->name;
-        }
-        if (ImGui::BeginCombo("##def", label.c_str())) {
-          if (ctx.project) {
-            for (const auto &e : ctx.project->getAssets().getTypeEntries(Project::FileType::PREFAB)) {
-              uint64_t entryUUID = e.getUUID();
-              if (entryUUID == assetUUID) continue; // can't ref self
-              bool sel = (entryUUID == v.typeArg);
-              std::string entryLabel = e.name + "##" + std::to_string(entryUUID);
-              if (ImGui::Selectable(entryLabel.c_str(), sel)) {
-                v.typeArg = entryUUID;
-              }
-            }
-          }
-          ImGui::EndCombo();
-        }
-        break;
-      }
-      case Project::PrefabVarKind::ASSET_REF: {
-        // Asset-ref variables are reserved for a follow-up phase; the on-disk
-        // schema accepts them but the inspector picker isn't wired yet.
-        ImGui::TextDisabled("(asset ref - TODO)");
-        break;
-      }
-    }
-
-    // Delete row
-    ImGui::TableNextColumn();
-    if (ImGui::SmallButton(ICON_MDI_DELETE)) {
-      delIdx = static_cast<int>(i);
-    }
+    // Right-aligned type tag.
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x
+                    + ImGui::GetCursorPosX() - 60.0f);
+    int k = static_cast<int>(v.kind);
+    if (k < 0 || k >= IM_ARRAYSIZE(kindShort)) k = 0;
+    ImGui::TextDisabled("%s", kindShort[k]);
     ImGui::PopID();
-  }
-  ImGui::EndTable();
-
-  if (delIdx >= 0) {
-    variables.erase(variables.begin() + delIdx);
   }
 }
 
@@ -521,9 +450,6 @@ void Editor::PrefabEditor::drawFunctionsPanel()
   const std::string prefabName = getName();
   functions = Project::scanPrefabFunctions(ctx.project->getPath(), prefabName);
 
-  // "+ Add" mirrors UE5's My Blueprint panel header. Picks a default name
-  // that doesn't collide with an existing function so repeated clicks
-  // produce NewFunction, NewFunction_2, NewFunction_3...
   if (ImGui::SmallButton(ICON_MDI_PLUS " Add")) {
     auto isTaken = [&](const std::string &n) {
       for (const auto &f : functions) if (f.name == n) return true;
@@ -537,29 +463,42 @@ void Editor::PrefabEditor::drawFunctionsPanel()
       }
     }
     Project::addPrefabFunction(ctx.project->getPath(), prefabName, fnName);
-    // The next draw will rescan and pick the new entry up automatically.
+    // Select the new function so the user can see its details immediately.
+    detailsKind = DetailsKind::FUNCTION;
+    detailsFuncName = fnName;
+    detailsVarIdx = -1;
+    renameBuffer = fnName;
   }
+  ImGui::SameLine();
+  ImGui::TextDisabled("(%zu)", functions.size());
 
   if (functions.empty()) {
-    ImGui::TextDisabled("No functions.");
+    ImGui::TextDisabled("(none)");
     return;
   }
 
-  // Compact class-method list: name first, full signature underneath in
-  // dimmed text. Matches the visual rhythm of Unreal's My Blueprint pane
-  // where each entry is a single clickable row.
+  // Selectable row per function — UE-Blueprint style. Single click selects
+  // (details panel populates), double click opens the .cpp body in the
+  // editor's CodeEditor, right click brings up rename / delete / open.
   for (const auto &f : functions) {
     ImGui::PushID(f.name.c_str());
-    ImGui::Bullet();
-    ImGui::SameLine();
-    ImGui::TextUnformatted(f.name.c_str());
-    if (!f.returnType.empty() || !f.params.empty()) {
-      ImGui::Indent();
-      ImGui::TextDisabled("%s(%s)",
-        f.returnType.c_str(),
-        f.params.empty() ? "" : f.params.c_str()
-      );
-      ImGui::Unindent();
+    bool sel = (detailsKind == DetailsKind::FUNCTION
+                && detailsFuncName == f.name);
+    std::string label = std::string{ICON_MDI_FUNCTION " "} + f.name;
+    if (ImGui::Selectable(label.c_str(), sel,
+          ImGuiSelectableFlags_AllowDoubleClick)) {
+      detailsKind = DetailsKind::FUNCTION;
+      detailsFuncName = f.name;
+      detailsVarIdx = -1;
+      renameBuffer = f.name;
+      if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+          && ctx.project && ctx.editorScene) {
+        // Open the prefab's .cpp source in CodeEditor.
+        std::string cppPath = ctx.project->getPath() + "/src/user/"
+                            + prefabName + ".cpp";
+        auto *entry = ctx.project->getAssets().getByPath(cppPath);
+        if (entry) ctx.editorScene->openCodeEditor(entry->getUUID());
+      }
     }
     ImGui::PopID();
   }

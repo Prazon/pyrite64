@@ -121,9 +121,10 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
   winName = "Model: " + model->name
     + "###ModelEditorWin_" + std::to_string(assetUUID);
 
-  // Force own OS window via NoAutoMerge — see PrefabEditor::draw for rationale.
+  // Force own OS window with full OS chrome — see PrefabEditor::draw for rationale.
   ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
+  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
 
   auto *mvp = ImGui::GetMainViewport();

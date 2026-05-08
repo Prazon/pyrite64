@@ -76,12 +76,39 @@ namespace Editor
       // are cheap and the cost-of-stale is otherwise immediate confusion.
       std::vector<Project::PrefabFunctionDesc> functions{};
 
+      // What the right-side details panel is showing. Object is the default
+      // (the existing ObjectInspector view). Selecting a variable or function
+      // in the My Prefab panel switches the details to a UE-Blueprint-style
+      // editor for that entry; clearing or selecting an Object node switches
+      // back. Index is into `variables` for VARIABLE; for FUNCTION we store
+      // the function name (the scan list is rebuilt each frame, so name is
+      // the stable identifier we can reselect against).
+      enum class DetailsKind : int { OBJECT = 0, VARIABLE = 1, FUNCTION = 2 };
+      DetailsKind detailsKind{DetailsKind::OBJECT};
+      int          detailsVarIdx{-1};
+      std::string  detailsFuncName{};
+      // Rename buffer used by the function-details rename input — separate
+      // so the user can stage a name before committing the file rewrite.
+      std::string  renameBuffer{};
+      // Tracks the SceneGraph's current primary selection so we can switch
+      // the details panel back to the Object inspector the moment the user
+      // clicks an object node (UE-Blueprint behavior: object & my-prefab
+      // selections are mutually exclusive in the details pane).
+      uint32_t     lastSelectionPrimary{0};
+
       void loadFromDisk();
       void saveToDisk();
       void drawLeftPane();
       void drawGraphsPanel();
       void drawVariablesPanel();
       void drawFunctionsPanel();
+      void drawDetailsPanel();
+      void drawVariableDetails();
+      void drawFunctionDetails();
+      // Clear the variable/function selection so the details panel falls
+      // back to the object inspector. Called when the user picks an Object
+      // node (since they're navigating the hierarchy now).
+      void clearMyPrefabSelection();
 
     public:
       explicit PrefabEditor(uint64_t assetUUID);
