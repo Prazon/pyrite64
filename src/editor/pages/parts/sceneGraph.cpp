@@ -9,6 +9,7 @@
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "../../../context.h"
+#include "../../../project/component/components.h"
 #include "../../../project/scene/scene.h"
 #include "../../../project/selection.h"
 #include "../../imgui/helper.h"
@@ -217,9 +218,20 @@ namespace
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 3_px));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
 
+    // SPBF64 fork: lead with an icon hinting at what's on this object so
+    // the hierarchy is scannable at a glance, like Unity / Godot scene trees.
+    // Priority: prefab badge > first component's icon. Empty objects show no
+    // icon. Component icons are pulled straight from Project::Component::TABLE
+    // so they stay in sync with the inspector and component-add menu.
     std::string nameID{};
     if(obj.uuidPrefab.value) {
       nameID += ICON_MDI_PACKAGE_VARIANT_CLOSED " ";
+    } else if (!obj.components.empty()) {
+      const auto &compEntry = obj.components.front();
+      if (compEntry.id >= 0 && (size_t)compEntry.id < Project::Component::TABLE.size()) {
+        const auto &def = Project::Component::TABLE[compEntry.id];
+        if (def.icon) nameID += def.icon;
+      }
     }
     nameID += obj.name + "##" + std::to_string(obj.uuid);
 

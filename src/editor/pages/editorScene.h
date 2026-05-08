@@ -37,9 +37,14 @@ namespace Editor
       // other asset editors above.
       std::map<uint64_t, std::shared_ptr<PrefabEditor>> prefabEditors{};
 
-      // Holds prefab editors that the user closed; we drop them next frame
-      // so any in-flight ImGui draw using their resources finishes safely.
-      // The unsaved-on-close popup also uses this list as its target.
+      // Defer-destroy list: PrefabEditor owns a Viewport3D whose framebuffer
+      // GPU texture is referenced by ImGui's draw list for the current frame.
+      // Erasing same-frame causes a use-after-free / hard crash when the draw
+      // list is rendered. Hold the editor alive for one frame; drained at the
+      // top of the next draw before any rendering. Mirrors pendingModelEditorErase.
+      std::vector<std::shared_ptr<PrefabEditor>> pendingPrefabEditorErase{};
+
+      // The unsaved-on-close popup target.
       uint64_t pendingPrefabEditorCloseUUID{0};
       bool pendingPrefabEditorClosePopup{false};
 

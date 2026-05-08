@@ -269,10 +269,12 @@ void Editor::Scene::draw()
     ImGui::EndPopup();
   }
 
-  // Drain any model editors that were closed last frame. Holding them for
-  // one frame lets ImGui finish rendering the draw list that referenced
-  // their preview framebuffer textures before SDL_ReleaseGPUTexture runs.
+  // Drain any model / prefab editors that were closed last frame. Holding
+  // them for one frame lets ImGui finish rendering the draw list that
+  // referenced their preview framebuffer textures before SDL_ReleaseGPUTexture
+  // runs. Same hazard for both: each owns a GPU framebuffer.
   pendingModelEditorErase.clear();
+  pendingPrefabEditorErase.clear();
 
   std::vector<uint64_t> delUUIDs{};
   for(auto &[uuid, editor] : modelEditors) {
@@ -306,6 +308,8 @@ void Editor::Scene::draw()
 
   // SPBF64 fork: prefab editors. On close attempts, prompt the user if there
   // are unsaved changes; same pattern as the unsaved-NodeGraph popup above.
+  // Erase paths route through pendingPrefabEditorErase so the Viewport3D's
+  // GPU framebuffer outlives the current frame's ImGui draw list.
   std::vector<uint64_t> delPrefabUUIDs{};
   for(auto &[uuid, editor] : prefabEditors) {
     if (!editor->draw(dockSpaceID)) {
@@ -317,7 +321,13 @@ void Editor::Scene::draw()
       }
     }
   }
-  for(auto &uuid : delPrefabUUIDs)prefabEditors.erase(uuid);
+  for(auto &uuid : delPrefabUUIDs) {
+    auto it = prefabEditors.find(uuid);
+    if (it != prefabEditors.end()) {
+      pendingPrefabEditorErase.push_back(std::move(it->second));
+      prefabEditors.erase(it);
+    }
+  }
 
   if (pendingPrefabEditorClosePopup) {
     ImGui::OpenPopup("Unsaved Prefab");
@@ -335,12 +345,16 @@ void Editor::Scene::draw()
       ImGui::Spacing();
       if (ImGui::Button("Save", {100_px, 0})) {
         editor->save();
+        // Defer-erase: keep the editor (and its Viewport3D's GPU texture)
+        // alive until next frame.
+        pendingPrefabEditorErase.push_back(std::move(it->second));
         prefabEditors.erase(it);
         pendingPrefabEditorCloseUUID = 0;
         ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
       if (ImGui::Button("Discard", {100_px, 0})) {
+        pendingPrefabEditorErase.push_back(std::move(it->second));
         prefabEditors.erase(it);
         pendingPrefabEditorCloseUUID = 0;
         ImGui::CloseCurrentPopup();
