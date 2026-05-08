@@ -80,19 +80,23 @@ namespace
 
     struct Face { float nx, ny, nz; int16_t v[4][3]; };
     int16_t X = (int16_t)hx, Y = (int16_t)hy, Z = (int16_t)hz;
+    // Pre-negated copies — unary minus on int16_t promotes to int and would
+    // narrow when stored back into the int16_t v[4][3] brace-initializer
+    // under -Werror=narrowing.
+    int16_t NX = (int16_t)-X, NY = (int16_t)-Y, NZ = (int16_t)-Z;
     Face faces[6] = {
       // +Y top
-      {0,1,0, {{-X, Y,-Z},{ X, Y,-Z},{ X, Y, Z},{-X, Y, Z}}},
+      {0,1,0, {{NX, Y,NZ},{ X, Y,NZ},{ X, Y, Z},{NX, Y, Z}}},
       // -Y bottom
-      {0,-1,0,{{-X,-Y, Z},{ X,-Y, Z},{ X,-Y,-Z},{-X,-Y,-Z}}},
+      {0,-1,0,{{NX,NY, Z},{ X,NY, Z},{ X,NY,NZ},{NX,NY,NZ}}},
       // +X right
-      {1,0,0, {{ X,-Y,-Z},{ X, Y,-Z},{ X, Y, Z},{ X,-Y, Z}}},
+      {1,0,0, {{ X,NY,NZ},{ X, Y,NZ},{ X, Y, Z},{ X,NY, Z}}},
       // -X left
-      {-1,0,0,{{-X,-Y, Z},{-X, Y, Z},{-X, Y,-Z},{-X,-Y,-Z}}},
+      {-1,0,0,{{NX,NY, Z},{NX, Y, Z},{NX, Y,NZ},{NX,NY,NZ}}},
       // +Z front
-      {0,0,1, {{-X,-Y, Z},{ X,-Y, Z},{ X, Y, Z},{-X, Y, Z}}},
+      {0,0,1, {{NX,NY, Z},{ X,NY, Z},{ X, Y, Z},{NX, Y, Z}}},
       // -Z back
-      {0,0,-1,{{-X, Y,-Z},{ X, Y,-Z},{ X,-Y,-Z},{-X,-Y,-Z}}},
+      {0,0,-1,{{NX, Y,NZ},{ X, Y,NZ},{ X,NY,NZ},{NX,NY,NZ}}},
     };
 
     uint32_t idx = 0;
@@ -124,11 +128,12 @@ namespace
     *outVertCount = COUNT;
 
     int16_t X = (int16_t)hx, Z = (int16_t)hz;
+    int16_t NX = (int16_t)-X, NZ = (int16_t)-Z;
     uint16_t n = packNormal(0, 1, 0);
-    writeVert(verts, 0, {-X, 0, -Z, n}, rgba);
-    writeVert(verts, 1, { X, 0, -Z, n}, rgba);
+    writeVert(verts, 0, {NX, 0, NZ, n}, rgba);
+    writeVert(verts, 1, { X, 0, NZ, n}, rgba);
     writeVert(verts, 2, { X, 0,  Z, n}, rgba);
-    writeVert(verts, 3, {-X, 0,  Z, n}, rgba);
+    writeVert(verts, 3, {NX, 0,  Z, n}, rgba);
 
     rspq_block_begin();
     t3d_vert_load(verts, 0, 4);
@@ -150,6 +155,7 @@ namespace
     *outVertCount = COUNT;
 
     int16_t X = (int16_t)hx, Y = (int16_t)hy, Z = (int16_t)hz;
+    int16_t NX = (int16_t)-X, NY = (int16_t)-Y, NZ = (int16_t)-Z;
     // Side faces: each has a tip + 2 base corners.
     struct Side { float nx, ny, nz; int16_t a[3], b[3]; };
     // Tip is at (0, +Y, 0). Base lies on -Y plane.
@@ -158,13 +164,13 @@ namespace
     float invLenZ = 1.0f / sqrtf(hy*hy + hz*hz);
     Side sides[4] = {
       // +Z side: base goes from (-X,-Y,Z) to (X,-Y,Z); tip up.
-      {0,           hz*invLenZ, hy*invLenZ, {-X,-Y, Z}, { X,-Y, Z}},
+      {0,           hz*invLenZ, hy*invLenZ, {NX,NY, Z}, { X,NY, Z}},
       // +X side
-      {hx*invLen,   hy*invLen,   0,         { X,-Y, Z}, { X,-Y,-Z}},
+      {hx*invLen,   hy*invLen,   0,         { X,NY, Z}, { X,NY,NZ}},
       // -Z side
-      {0,           hz*invLenZ, -hy*invLenZ,{ X,-Y,-Z}, {-X,-Y,-Z}},
+      {0,           hz*invLenZ, -hy*invLenZ,{ X,NY,NZ}, {NX,NY,NZ}},
       // -X side
-      {-hx*invLen,  hy*invLen,   0,         {-X,-Y,-Z}, {-X,-Y, Z}},
+      {-hx*invLen,  hy*invLen,   0,         {NX,NY,NZ}, {NX,NY, Z}},
     };
 
     uint32_t idx = 0;
@@ -177,10 +183,10 @@ namespace
     }
     // Base quad (4 verts, down-facing normal).
     uint16_t nDown = packNormal(0, -1, 0);
-    writeVert(verts, idx++, {-X,-Y, Z, nDown}, rgba);
-    writeVert(verts, idx++, { X,-Y, Z, nDown}, rgba);
-    writeVert(verts, idx++, { X,-Y,-Z, nDown}, rgba);
-    writeVert(verts, idx++, {-X,-Y,-Z, nDown}, rgba);
+    writeVert(verts, idx++, {NX,NY, Z, nDown}, rgba);
+    writeVert(verts, idx++, { X,NY, Z, nDown}, rgba);
+    writeVert(verts, idx++, { X,NY,NZ, nDown}, rgba);
+    writeVert(verts, idx++, {NX,NY,NZ, nDown}, rgba);
 
     rspq_block_begin();
     t3d_vert_load(verts, 0, COUNT);
