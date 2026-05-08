@@ -54,7 +54,6 @@ namespace Editor
       // operate on the prefab subtree.
       Viewport3D viewport{scene, selection};
 
-      bool dockOnFirstAppearance{true};
       bool forceFocusNextFrame{true};
       // Last-saved JSON of the prefab subtree; used for dirty detection.
       std::string savedJSON{};

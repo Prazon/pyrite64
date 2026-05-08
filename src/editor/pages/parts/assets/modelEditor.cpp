@@ -125,17 +125,10 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
     ImGuiCond_FirstUseEver
   );
 
+  // Open as a floating window — user can dock or drag it to its own OS window
+  // (Unreal-style asset editor). imgui.ini restores position/dock state on
+  // subsequent sessions.
   if (forceFocusNextFrame) {
-    // First appearance this session: dock as a tab next to the 3D-Viewport.
-    // We look up the 3D-Viewport window's actual current DockId rather than
-    // using DockBuilderGetCentralNode — the central node isn't explicitly
-    // marked in the layout, and the root dockspace ID resolves elsewhere.
-    ImGuiID targetDock = 0;
-    if (ImGuiWindow* vpWin = ImGui::FindWindowByName("3D-Viewport")) {
-      targetDock = vpWin->DockId;
-    }
-    if (targetDock == 0) targetDock = defDockId;
-    ImGui::SetNextWindowDockID(targetDock, ImGuiCond_Always);
     ImGui::SetNextWindowFocus();
     forceFocusNextFrame = false;
   }

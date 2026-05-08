@@ -25,6 +25,7 @@ namespace Editor
       bool draw(ImGuiID defDockId);
       void save();
       void discardUnsavedChanges();
+      void focus() const;
 
       [[nodiscard]] bool isDirty() const { return dirty; }
       [[nodiscard]] uint64_t getAssetUUID() const { return currentAsset ? currentAsset->getUUID() : 0; }

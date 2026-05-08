@@ -79,20 +79,15 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
   std::string baseTitle = "Code: " + asset->name + (isDirty() ? " *" : "");
   winName = baseTitle + "###CodeEditor_" + std::to_string(assetUUID);
 
-  if (dockOnFirstAppearance) {
-    // Dock as a tab next to the 3D-Viewport — looking up its actual DockId
-    // rather than using the root dockspace ID, since the central node isn't
-    // explicitly marked and the root resolves to the bottom group instead.
-    ImGuiID targetDock = 0;
-    if (ImGuiWindow* vpWin = ImGui::FindWindowByName("3D-Viewport")) {
-      targetDock = vpWin->DockId;
-    }
-    if (targetDock == 0) targetDock = defDockId;
-    ImGui::SetNextWindowDockID(targetDock, ImGuiCond_Always);
-    dockOnFirstAppearance = false;
-  } else {
-    ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
-  }
+  // Open as a floating window — user can dock or drag it to its own OS window
+  // (Unreal-style asset editor). imgui.ini restores position/dock state on
+  // subsequent sessions.
+  auto screenSize = ImGui::GetMainViewport()->WorkSize;
+  ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowPos(
+    {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+    ImGuiCond_FirstUseEver
+  );
   if (forceFocusNextFrame) {
     ImGui::SetNextWindowFocus();
     forceFocusNextFrame = false;

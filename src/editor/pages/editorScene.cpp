@@ -524,6 +524,46 @@ void Editor::Scene::draw()
         ImGui::EndMenu();
       }
 
+      // Lists currently-open asset editor windows so the user can refocus one
+      // that's been hidden, minimized, or dragged onto a different OS viewport
+      // (multi-viewport mode lets these escape the main window).
+      if(ImGui::BeginMenu("Window"))
+      {
+        auto assetLabel = [](uint64_t uuid) -> std::string {
+          if (!ctx.project) return std::to_string(uuid);
+          auto *e = ctx.project->getAssets().getEntryByUUID(uuid);
+          return e ? e->name : std::to_string(uuid);
+        };
+        bool any = false;
+        auto section = [&](const char *icon, const char *header, auto &map) {
+          if (map.empty()) return;
+          if (any) ImGui::Separator();
+          ImGui::TextDisabled("%s", header);
+          for (const auto &[uuid, editor] : map) {
+            std::string label = std::string(icon) + " " + assetLabel(uuid);
+            if (ImGui::MenuItem(label.c_str())) editor->focus();
+          }
+          any = true;
+        };
+        section(ICON_MDI_PACKAGE_VARIANT_CLOSED, "Prefabs", prefabEditors);
+        section(ICON_MDI_CUBE_OUTLINE,           "Models",  modelEditors);
+        section(ICON_MDI_IMAGE_OUTLINE,          "Images",  imageEditors);
+        section(ICON_MDI_CODE_BRACES,            "Code",    codeEditors);
+        if (!nodeEditors.empty()) {
+          if (any) ImGui::Separator();
+          ImGui::TextDisabled("Node Graphs");
+          for (const auto &editor : nodeEditors) {
+            std::string label = std::string(ICON_MDI_GRAPH_OUTLINE) + " " + editor->getName();
+            if (ImGui::MenuItem(label.c_str())) editor->focus();
+          }
+          any = true;
+        }
+        if (!any) {
+          ImGui::MenuItem("(no editors open)", nullptr, false, false);
+        }
+        ImGui::EndMenu();
+      }
+
       ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 40_px);
 
       const char* tooltip{};

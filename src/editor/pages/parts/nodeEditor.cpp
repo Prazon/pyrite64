@@ -165,3 +165,8 @@ void Editor::NodeEditor::discardUnsavedChanges()
   dirty = false;
   ctx.project->getAssets().clearNodeGraphDirty(currentAsset->getUUID());
 }
+
+void Editor::NodeEditor::focus() const
+{
+  ImGui::SetWindowFocus(name.c_str());
+}
