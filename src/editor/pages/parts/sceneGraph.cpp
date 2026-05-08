@@ -31,6 +31,15 @@ namespace
   // from the public showComponentsInline flag — set once per frame, no
   // reentry concern since ImGui drives this single-threaded.
   bool g_showComponentsInline{false};
+  // Mirror of SceneGraph::prefabRootMode + selectedComponentUUID — set
+  // once per draw so the per-row code paths can branch without having
+  // to thread a context object through the recursive helpers.
+  bool g_prefabRootMode{false};
+  uint64_t g_selectedComponentUUID{0};
+  // Outputs back to the SceneGraph instance.
+  uint32_t g_pendingPromoteToRoot{0};
+  uint32_t g_pendingComponentObjUUID{0};
+  uint64_t g_pendingComponentUUID{0};
 
   struct DragDropTask {
     uint32_t sourceUUID{0};
@@ -224,16 +233,20 @@ namespace
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 3_px));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
 
-    // SPBF64 fork: lead with an icon hinting at what's on this object so
-    // the hierarchy is scannable at a glance, like Unity / Godot scene trees.
-    // Priority: prefab badge > first component's icon. Empty objects show no
-    // icon. Component icons are pulled straight from Project::Component::TABLE
-    // so they stay in sync with the inspector and component-add menu.
+    // Lead with an icon hinting at what's on this object so the hierarchy
+    // is scannable at a glance. In prefab-root mode the topmost node (the
+    // prefab root, drawn at parent==null in that mode) gets the prefab
+    // icon unconditionally — UE Blueprint badges the actor root the same
+    // way regardless of what components live on it. Otherwise: prefab
+    // badge for prefab-instance objects, then first component's icon.
     std::string nameID{};
-    if(obj.uuidPrefab.value || obj.fromPrefab) {
+    bool isPrefabRoot = (g_prefabRootMode && obj.parent == nullptr);
+    if (isPrefabRoot
+        || obj.uuidPrefab.value
+        || obj.fromPrefab) {
       nameID += ICON_MDI_PACKAGE_VARIANT_CLOSED " ";
     }
-    if (!obj.components.empty()) {
+    if (!isPrefabRoot && !obj.components.empty()) {
       const auto &compEntry = obj.components.front();
       if (compEntry.id >= 0 && (size_t)compEntry.id < Project::Component::TABLE.size()) {
         const auto &def = Project::Component::TABLE[compEntry.id];
@@ -353,6 +366,15 @@ namespace
           Editor::UndoRedo::getHistory().markChanged("Add Object");
         }
 
+        // "Make Root" (prefab editor only): promote this object to be the
+        // prefab's root. Defers the actual reparenting to the host so the
+        // mutation happens after the in-tree iteration finishes.
+        if (g_prefabRootMode && obj.parent && obj.parent->parent) {
+          if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED " Make Root")) {
+            g_pendingPromoteToRoot = obj.uuid;
+          }
+        }
+
         if (obj.parent) {
           if (!obj.isPrefabInstance() && ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " To Prefab")) {
             scene.createPrefabFromObject(obj.uuid);
@@ -366,20 +388,28 @@ namespace
       // Render components as leaf children when the host (PrefabEditor)
       // requested it. Components are listed before child Objects so the
       // tree reads as "this object's bits, then its sub-objects" — same
-      // ordering as UE5's Components panel.
+      // ordering as UE5's Components panel. Each row is a Selectable so
+      // clicking one routes through pendingComponentUUID for the host to
+      // pick up and drive its single-component details view.
       if (g_showComponentsInline) {
         for (const auto &compEntry : obj.components) {
           if (compEntry.id < 0
               || (size_t)compEntry.id >= Project::Component::TABLE.size()) continue;
           const auto &def = Project::Component::TABLE[compEntry.id];
           ImGui::PushID((int)compEntry.uuid ^ (int)(compEntry.uuid >> 32));
-          ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 2_px));
+          ImGui::Indent(ImGui::GetTreeNodeToLabelSpacing());
           std::string compLabel = std::string{def.icon ? def.icon : ""}
             + " " + (compEntry.name.empty() ? std::string{def.name} : compEntry.name);
-          ImGui::TreeNodeEx(compLabel.c_str(),
-            ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen
-            | ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth);
-          ImGui::PopStyleVar();
+          bool selectedComp = (g_selectedComponentUUID == compEntry.uuid);
+          if (ImGui::Selectable(compLabel.c_str(), selectedComp,
+                ImGuiSelectableFlags_SpanAllColumns)) {
+            g_pendingComponentObjUUID = obj.uuid;
+            g_pendingComponentUUID    = compEntry.uuid;
+            // Also flip the host's object-selection to the parent so
+            // gizmos / viewport highlighting stay coherent.
+            selection.set(obj.uuid);
+          }
+          ImGui::Unindent(ImGui::GetTreeNodeToLabelSpacing());
           ImGui::PopID();
         }
       }
@@ -398,7 +428,13 @@ void Editor::SceneGraph::draw(Project::Scene &scene, Project::Selection &selecti
   dragDropTask = {};
   deleteObj = nullptr;
   deleteSelection = false;
-  g_showComponentsInline = this->showComponentsInline;
+  g_showComponentsInline    = this->showComponentsInline;
+  g_prefabRootMode          = this->prefabRootMode;
+  g_selectedComponentUUID   = this->selectedComponentUUID;
+  // Reset outputs each frame; the host reads them after draw() returns.
+  g_pendingPromoteToRoot    = 0;
+  g_pendingComponentObjUUID = 0;
+  g_pendingComponentUUID    = 0;
   bool isFocus = ImGui::IsWindowFocused();
   // While rename is active, shortcuts stay disabled, so the text field can own the keyboard input
   bool isRenaming = renameObjectUUID != 0;
@@ -417,7 +453,25 @@ void Editor::SceneGraph::draw(Project::Scene &scene, Project::Selection &selecti
   }
 
   auto &root = scene.getRootObject();
-  drawObjectNode(scene, selection, root, keyDelete);
+  if (g_prefabRootMode) {
+    // In prefab editor: skip the synthetic Scene wrapper and render the
+    // first child as the topmost node. The wrapper exists only because
+    // the editor reuses Scene to host the prefab subtree; the user
+    // shouldn't have to see it.
+    if (!root.children.empty() && root.children.front()) {
+      drawObjectNode(scene, selection, *root.children.front(), keyDelete);
+    } else {
+      ImGui::TextDisabled("(empty prefab)");
+    }
+  } else {
+    drawObjectNode(scene, selection, root, keyDelete);
+  }
+
+  // Surface the in-frame outputs to the SceneGraph instance so the host
+  // (PrefabEditor) can poll them after draw() returns.
+  this->pendingPromoteToRoot     = g_pendingPromoteToRoot;
+  this->pendingComponentObjUUID  = g_pendingComponentObjUUID;
+  this->pendingComponentUUID     = g_pendingComponentUUID;
 
   ImGui::PopStyleVar(1);
 

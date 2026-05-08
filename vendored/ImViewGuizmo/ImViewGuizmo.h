@@ -187,18 +187,19 @@ namespace ImViewGuizmo {
 #ifdef IMVIEWGUIZMO_IMPLEMENTATION
 namespace ImViewGuizmo {
 
-    // Internal function to reset hover states once per frame
+    // Internal hover-state reset. Called at the start of every gizmo
+    // function (Rotate / Zoom / Pan) so multiple gizmo instances in the
+    // same frame don't leak their hover states into each other — when
+    // there's more than one viewport (e.g. main editor + a prefab
+    // editor's docked viewport), the previous per-frame reset meant
+    // whichever Rotate ran second inherited the first's hoveredAxisID
+    // and lit up the wrong axis. activeTool is preserved across calls
+    // so click-and-drag interactions still work.
     static void BeginFrame() {
-        static int lastFrame = -1;
-        int currentFrame = ImGui::GetFrameCount();
-        if (lastFrame != currentFrame) {
-            lastFrame = currentFrame;
-            Context& ctx = GetContext();
-            // Reset hover states, but keep active tool state
-            ctx.hoveredAxisID = -1;
-            ctx.isZoomButtonHovered = false;
-            ctx.isPanButtonHovered = false;
-        }
+        Context& ctx = GetContext();
+        ctx.hoveredAxisID = -1;
+        ctx.isZoomButtonHovered = false;
+        ctx.isPanButtonHovered = false;
     }
 
     bool Rotate(vec3& cameraPos, quat& cameraRot, ImVec2 position, float snapDistance, float rotationSpeed)

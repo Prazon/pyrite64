@@ -166,7 +166,12 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
   cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
 
-  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  // First-frame dock override wins over the loop-passed default. Lets the
+  // PrefabEditor host its event graph as a sibling tab of its viewport.
+  ImGuiID openDockId = (firstDockTarget && !firstDockApplied)
+                        ? firstDockTarget : defDockId;
+  if (openDockId) ImGui::SetNextWindowDockID(openDockId, ImGuiCond_FirstUseEver);
+  if (firstDockTarget && !firstDockApplied) firstDockApplied = true;
 
   if (!isInit) {
     isInit = true;

@@ -27,6 +27,12 @@ namespace Editor
       bool isInit{false};
       bool forceFocusNextFrame{true};
 
+      // Caller-supplied first-frame dock override (PrefabEditor uses this so
+      // the EventGraph window opens as a tab next to its viewport instead of
+      // landing on the outer Scene-Editor strip).
+      ImGuiID firstDockTarget{0};
+      bool   firstDockApplied{false};
+
     public:
       explicit PrefabEventGraphEditor(uint64_t prefabAssetUUID);
 
@@ -34,6 +40,13 @@ namespace Editor
       void focus() const;
       void save();
       void discardUnsavedChanges();
+      // Re-arm the first-frame dock override on a re-open call so a new
+      // host can land the window where it wants even if the editor was
+      // already alive. See codeEditor.h for matching rationale.
+      void setFirstDockTarget(ImGuiID dockId) {
+        firstDockTarget = dockId;
+        firstDockApplied = false;
+      }
 
       [[nodiscard]] uint64_t getAssetUUID() const { return assetUUID; }
       [[nodiscard]] bool isDirty() const;

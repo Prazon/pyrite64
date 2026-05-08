@@ -14,6 +14,7 @@
 #define IMVIEWGUIZMO_IMPLEMENTATION 1
 #include "ImGuizmo.h"
 #include "ImViewGuizmo.h"
+#include "../../utils/hash.h"
 #include "../../utils/logger.h"
 #include "../../utils/ringBuffer.h"
 #include "../../utils/updater.h"
@@ -129,6 +130,25 @@ void Editor::Scene::openCodeEditor(uint64_t assetUUID)
   }
 }
 
+void Editor::Scene::openCodeEditorByPath(const std::string &absolutePath, ImGuiID dockTarget)
+{
+  // Hash the absolute path into a stable synthetic UUID so the codeEditors
+  // map de-dupes when the same file is reopened from different call sites.
+  uint64_t synthUUID = Utils::Hash::sha256_64bit(absolutePath);
+  auto it = codeEditors.find(synthUUID);
+  if (it != codeEditors.end()) {
+    // Already open — refresh the dock target so a follow-up open from a
+    // different host (e.g. another PrefabEditor) can still land it where
+    // expected on its first draw cycle. focus() ensures the user sees it.
+    if (dockTarget) it->second->setFirstDockTarget(dockTarget);
+    it->second->focus();
+    return;
+  }
+  auto editor = std::make_shared<CodeEditor>(synthUUID, absolutePath);
+  if (dockTarget) editor->setFirstDockTarget(dockTarget);
+  codeEditors[synthUUID] = std::move(editor);
+}
+
 void Editor::Scene::openPrefabEditor(uint64_t assetUUID)
 {
   auto it = prefabEditors.find(assetUUID);
@@ -139,15 +159,17 @@ void Editor::Scene::openPrefabEditor(uint64_t assetUUID)
   }
 }
 
-void Editor::Scene::openPrefabEventGraphEditor(uint64_t prefabAssetUUID)
+void Editor::Scene::openPrefabEventGraphEditor(uint64_t prefabAssetUUID, ImGuiID dockTarget)
 {
   auto it = prefabEventGraphEditors.find(prefabAssetUUID);
   if(it != prefabEventGraphEditors.end()) {
+    if (dockTarget) it->second->setFirstDockTarget(dockTarget);
     it->second->focus();
-  } else {
-    prefabEventGraphEditors[prefabAssetUUID]
-      = std::make_shared<PrefabEventGraphEditor>(prefabAssetUUID);
+    return;
   }
+  auto editor = std::make_shared<PrefabEventGraphEditor>(prefabAssetUUID);
+  if (dockTarget) editor->setFirstDockTarget(dockTarget);
+  prefabEventGraphEditors[prefabAssetUUID] = std::move(editor);
 }
 
 void Editor::Scene::draw()

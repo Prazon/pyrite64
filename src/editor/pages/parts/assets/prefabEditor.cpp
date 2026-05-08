@@ -248,6 +248,9 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
     ImGui::DockBuilderDockWindow(winVP.c_str(),   center);
     ImGui::DockBuilderDockWindow(winDet.c_str(),  right);
     ImGui::DockBuilderFinish(dockspaceID);
+    // Remember the viewport's node so we can dock EventGraph + function
+    // source tabs next to it from openPrefabEventGraphEditor / openCodeEditorByPath.
+    viewportDockNodeID = center;
   }
 
   ImGui::End(); // host
@@ -269,6 +272,13 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   ImGui::End();
 
   ImGui::Begin(winVP.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    // Refresh the viewport's dock node each frame so user-driven layout
+    // changes (drag-out, re-dock, OS-window split) keep the EventGraph /
+    // function-source spawn target in sync with where the viewport actually
+    // lives now. firstBuild seeds this; this line keeps it current.
+    if (auto *node = ImGui::GetWindowDockNode()) {
+      viewportDockNodeID = node->ID;
+    }
     viewport.draw();
   ImGui::End();
 
@@ -371,6 +381,11 @@ void Editor::PrefabEditor::drawLeftPane()
 
 void Editor::PrefabEditor::drawVariablesPanel()
 {
+  // Scope all IDs in this panel under "vars" so the +Add button doesn't
+  // collide with the identical button in drawFunctionsPanel (both render
+  // into the same My-Prefab window — ImGui hashes button labels and would
+  // otherwise emit "two visible items with conflicting ID" warnings).
+  ImGui::PushID("vars");
   // Header: add a new variable. Defaults to INT, name is auto-generated.
   // Clicking selects the new variable so the user can immediately edit
   // it in the details panel — UE Blueprint pattern.
@@ -392,6 +407,7 @@ void Editor::PrefabEditor::drawVariablesPanel()
 
   if (variables.empty()) {
     ImGui::TextDisabled("(none)");
+    ImGui::PopID(); // "vars"
     return;
   }
 
@@ -421,6 +437,7 @@ void Editor::PrefabEditor::drawVariablesPanel()
     ImGui::TextDisabled("%s", kindShort[k]);
     ImGui::PopID();
   }
+  ImGui::PopID(); // "vars"
 }
 
 void Editor::PrefabEditor::drawGraphsPanel()
@@ -432,13 +449,23 @@ void Editor::PrefabEditor::drawGraphsPanel()
   // prefab on save.
   if (ImGui::Selectable(ICON_MDI_GRAPH " EventGraph", false,
         ImGuiSelectableFlags_AllowDoubleClick)) {
-    if (ctx.editorScene) ctx.editorScene->openPrefabEventGraphEditor(assetUUID);
+    if (ctx.editorScene) {
+      // Dock the graph into our viewport node so it opens as a sibling tab
+      // of the prefab viewport (UE-Blueprint feel: the graph and the
+      // 3D-preview share the central area).
+      ctx.editorScene->openPrefabEventGraphEditor(assetUUID, viewportDockNodeID);
+    }
   }
 }
 
 void Editor::PrefabEditor::drawFunctionsPanel()
 {
   if (!ctx.project) return;
+
+  // ID-scope this panel separately from drawVariablesPanel so the +Add
+  // button (identical label/glyph) doesn't collide with the variables
+  // version inside the shared My-Prefab window.
+  ImGui::PushID("funcs");
 
   // Re-scan each draw — the .h is edited in an external editor, so changes
   // there should appear immediately. Scans are I/O-light (one regex pass
@@ -470,6 +497,7 @@ void Editor::PrefabEditor::drawFunctionsPanel()
 
   if (functions.empty()) {
     ImGui::TextDisabled("(none)");
+    ImGui::PopID(); // "funcs"
     return;
   }
 
@@ -489,15 +517,19 @@ void Editor::PrefabEditor::drawFunctionsPanel()
       renameBuffer = f.name;
       if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
           && ctx.project && ctx.editorScene) {
-        // Open the prefab's .cpp source in CodeEditor.
+        // Open the prefab's .cpp source via path-based opener — these files
+        // live at <project>/src/user/<name>.cpp and use `namespace User::`,
+        // which AssetManager::buildCodeEntry doesn't dispatch on, so they
+        // never appear as AssetManagerEntries. Pass viewportDockNodeID so
+        // the new tab lands as a sibling of this prefab editor's viewport.
         std::string cppPath = ctx.project->getPath() + "/src/user/"
                             + prefabName + ".cpp";
-        auto *entry = ctx.project->getAssets().getByPath(cppPath);
-        if (entry) ctx.editorScene->openCodeEditor(entry->getUUID());
+        ctx.editorScene->openCodeEditorByPath(cppPath, viewportDockNodeID);
       }
     }
     ImGui::PopID();
   }
+  ImGui::PopID(); // "funcs"
 }
 
 void Editor::PrefabEditor::drawVariableDetails()
@@ -669,15 +701,11 @@ void Editor::PrefabEditor::drawFunctionDetails()
 
   ImGui::Spacing();
   ImGui::Separator();
-  if (ImGui::Button(ICON_MDI_PENCIL " Open in Editor")) {
-    if (ctx.editorScene) {
-      std::string cppPath = ctx.project->getPath() + "/src/user/"
-                          + getName() + ".cpp";
-      auto *entry = ctx.project->getAssets().getByPath(cppPath);
-      if (entry) ctx.editorScene->openCodeEditor(entry->getUUID());
-    }
-  }
-  ImGui::SameLine();
+  // Editing source is initiated by double-clicking the function row in the
+  // Functions panel — the redundant "Open in Editor" button used to live
+  // here but was removed: the row gesture is the canonical entry point and
+  // it docks the source tab next to the prefab viewport, which the button
+  // path didn't.
   if (ImGui::Button(ICON_MDI_DELETE " Delete")) {
     if (Project::removePrefabFunction(
           ctx.project->getPath(), getName(), detailsFuncName)) {

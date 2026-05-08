@@ -93,12 +93,20 @@ namespace Editor
       void openModelEditor(uint64_t assetUUID);
       void openImageEditor(uint64_t assetUUID);
       void openCodeEditor(uint64_t assetUUID);
+      // Path-based code-editor open: needed for files outside the
+      // AssetManager (per-prefab user .cpp lives in src/user/<name>.cpp and
+      // uses `namespace User::` which buildCodeEntry doesn't dispatch on).
+      // The synthetic UUID is sha256_64bit of the absolute path so re-opens
+      // de-dupe through codeEditors. dockTarget, when nonzero, becomes the
+      // editor's first-frame dock override.
+      void openCodeEditorByPath(const std::string &absolutePath, ImGuiID dockTarget = 0);
       // SPBF64 fork: open the dedicated prefab editor for the given .prefab asset.
       void openPrefabEditor(uint64_t assetUUID);
       // Open the event graph window for the given prefab. Idempotent — if a
       // window is already open, brings it to the front instead of creating a
-      // new one.
-      void openPrefabEventGraphEditor(uint64_t prefabAssetUUID);
+      // new one. dockTarget, when nonzero, becomes the editor's first-frame
+      // dock override (used by PrefabEditor to land it next to its viewport).
+      void openPrefabEventGraphEditor(uint64_t prefabAssetUUID, ImGuiID dockTarget = 0);
 
       void draw();
       void save();

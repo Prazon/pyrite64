@@ -71,6 +71,13 @@ namespace Editor
       // bottom is the "My Prefab" panel (variables + functions).
       float leftVerticalSplitFrac{0.55f};
 
+      // Dock node ID of this editor's viewport tab — captured at firstBuild
+      // and refreshed each frame from the live ImGui window so it survives
+      // user rearrangements. Passed to openPrefabEventGraphEditor /
+      // openCodeEditorByPath so the EventGraph and function-source tabs land
+      // as siblings of the viewport instead of on the outer Scene-Editor strip.
+      ImGuiID viewportDockNodeID{0};
+
       // Cached list of P64_NODE-tagged user functions for this prefab.
       // Refreshed each frame the Functions section is visible — file scans
       // are cheap and the cost-of-stale is otherwise immediate confusion.

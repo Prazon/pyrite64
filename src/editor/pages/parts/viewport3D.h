@@ -65,6 +65,12 @@ namespace Editor
 
       bool isMouseHover{false};
       bool isMouseDown{false};
+      // Per-instance "mouse is over the camera-rotation gizmo" — was a
+      // file-static, but with multiple viewports (main editor + prefab
+      // editor's docked viewport) the static was getting stomped between
+      // draws, so the inactive viewport's gizmo would light up when the
+      // mouse hovered over the *other* viewport.
+      bool overRotGizmo{false};
       Utils::RequestVal<uint32_t> pickedObjID{};
       bool pickAdditive{false};
       bool selectionPending{false};

@@ -31,13 +31,36 @@ Editor::CodeEditor::CodeEditor(uint64_t uuid) : assetUUID(uuid)
   loadFromDisk();
 }
 
+Editor::CodeEditor::CodeEditor(uint64_t syntheticUUID, std::string absolutePath)
+  : assetUUID(syntheticUUID), pathOverride(std::move(absolutePath))
+{
+  editor = std::make_unique<TextEditor>();
+  editor->SetLanguageDefinition(TextEditor::LanguageDefinition::CPlusPlus());
+  editor->SetPalette(TextEditor::GetDarkPalette());
+  editor->SetShowWhitespaces(false);
+  editor->SetTabSize(4);
+
+  // Display name = filename (asset->name analogue) so the tab label reads
+  // naturally for files that have no AssetManagerEntry.
+  auto slash = pathOverride.find_last_of("/\\");
+  nameOverride = (slash == std::string::npos)
+    ? pathOverride
+    : pathOverride.substr(slash + 1);
+
+  loadFromDisk();
+}
+
 void Editor::CodeEditor::loadFromDisk()
 {
-  if (!ctx.project) return;
-  auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
-  if (!asset) return;
+  if (!pathOverride.empty()) {
+    filePath = pathOverride;
+  } else {
+    if (!ctx.project) return;
+    auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
+    if (!asset) return;
+    filePath = asset->path;
+  }
 
-  filePath = asset->path;
   std::ifstream f(filePath);
   if (!f.is_open()) {
     editor->SetText("");
@@ -69,14 +92,20 @@ bool Editor::CodeEditor::isDirty() const
 
 bool Editor::CodeEditor::draw(ImGuiID defDockId)
 {
-  if (!ctx.project) return false;
-  auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
-  if (!asset) return false;
+  std::string displayName;
+  if (!pathOverride.empty()) {
+    displayName = nameOverride;
+  } else {
+    if (!ctx.project) return false;
+    auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
+    if (!asset) return false;
+    displayName = asset->name;
+  }
 
   // Title shows the file name + asterisk for unsaved changes. Window ID is
   // tied to the UUID so multiple files can be open simultaneously without
   // ImGui ID collisions.
-  std::string baseTitle = "Code: " + asset->name + (isDirty() ? " *" : "");
+  std::string baseTitle = "Code: " + displayName + (isDirty() ? " *" : "");
   // ID suffix bumped (was ###CodeEditor_) so stale imgui.ini entries from
   // the old auto-dock-into-3D-Viewport behavior don't override our new
   // spawn-as-its-own-OS-window default.
@@ -89,7 +118,13 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
   cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
 
-  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  // Caller-supplied first-frame dock override wins over the loop-passed
+  // default. PrefabEditor uses this to drop function source tabs next to
+  // its viewport rather than the outer Scene-Editor strip.
+  ImGuiID openDockId = (firstDockTarget && !firstDockApplied)
+                        ? firstDockTarget : defDockId;
+  if (openDockId) ImGui::SetNextWindowDockID(openDockId, ImGuiCond_FirstUseEver);
+  if (firstDockTarget && !firstDockApplied) firstDockApplied = true;
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);

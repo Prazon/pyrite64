@@ -48,7 +48,6 @@ namespace
     ImGuizmo::OPERATION::SCALE
   };
   constinit bool isTransWorld = true;
-  constinit bool overRotGizmo = false;
 
   // A toggleable "connected" button (like in toolbars)
   bool ConnectedToggleButton(const char* text, bool active, bool first, bool last, ImVec2 size = ImVec2(20, 20))
@@ -953,7 +952,16 @@ void Editor::Viewport3D::draw()
       }
     }
 
-    if(!isMouseDown && newMouseDown) {
+    // Drag-start MUST require this viewport to actually be hovered. mouseHeld*
+    // is global state, so without this gate every Viewport3D in the frame
+    // (main 3D-Viewport + prefab editor's nested viewport) would race to
+    // claim SDL_GetRelativeMouseState — the first one to drain wins, the
+    // others see zero delta and stay still. That's why right-click rotation
+    // worked in scene viewport but not prefab: scene drew first and stole
+    // the deltas. Middle-click bypassed this because isCameraFlying gated
+    // only on right; the inactive viewport entered the block via
+    // isCameraFlying for right-click but had isMouseHover==false here.
+    if(!isMouseDown && newMouseDown && isMouseHover) {
       mousePosStart = mousePos;
       bool wantCapture = (isAltDown && mouseHeldLeft) || mouseHeldMiddle || mouseHeldRight;
       if (wantCapture && !cameraDragActive) {
