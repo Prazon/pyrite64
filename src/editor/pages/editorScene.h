@@ -88,6 +88,17 @@ namespace Editor
       uint64_t pendingNodeEditorCloseUUID{0};
       bool pendingNodeEditorClosePopup{false};
 
+      // Restoration of persisted open editors must happen after a project is
+      // loaded — PrefabEditor::loadFromDisk needs ctx.project, and instantiating
+      // it with a null project leaves it permanently empty. The constructor
+      // populates these vectors from editorScene.json; processPendingRestores()
+      // drains them at the top of draw() once ctx.project is non-null.
+      std::vector<uint64_t> pendingRestoreModels{};
+      std::vector<uint64_t> pendingRestoreImages{};
+      std::vector<uint64_t> pendingRestoreCode{};
+      std::vector<uint64_t> pendingRestorePrefabs{};
+      void processPendingRestores();
+
     public:
       Scene();
       ~Scene();

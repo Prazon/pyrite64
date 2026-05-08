@@ -25,6 +25,7 @@
 #include "parts/assets/codeEditor.h"
 #include "parts/assets/prefabEditor.h"
 #include "parts/assets/prefabEventGraphEditor.h"
+#include "../../project/compile/compileErrors.h"
 
 namespace
 {
@@ -52,26 +53,21 @@ Editor::Scene::Scene()
   try
   {
     auto json = Utils::JSON::loadFile(Utils::Proc::getAppDataPath() / "editorScene.json");
-    if(json.contains("winModels")) {
-      for(const auto& assetUUID : json["winModels"]) {
-        openModelEditor(assetUUID.get<uint64_t>());
+    // Don't instantiate editors yet — ctx.project hasn't been opened by the
+    // boot sequence in main.cpp. Stash UUIDs and let processPendingRestores()
+    // run them once the project is live. PrefabEditor in particular caches
+    // its in-memory subtree on construction; building it without a project
+    // leaves it permanently stillborn.
+    auto stashList = [&](const char *key, std::vector<uint64_t> &out) {
+      if (!json.contains(key)) return;
+      for (const auto &assetUUID : json[key]) {
+        out.push_back(assetUUID.get<uint64_t>());
       }
-    }
-    if(json.contains("winImages")) {
-      for(const auto& assetUUID : json["winImages"]) {
-        openImageEditor(assetUUID.get<uint64_t>());
-      }
-    }
-    if(json.contains("winCode")) {
-      for(const auto& assetUUID : json["winCode"]) {
-        openCodeEditor(assetUUID.get<uint64_t>());
-      }
-    }
-    if(json.contains("winPrefabs")) {
-      for(const auto& assetUUID : json["winPrefabs"]) {
-        openPrefabEditor(assetUUID.get<uint64_t>());
-      }
-    }
+    };
+    stashList("winModels",  pendingRestoreModels);
+    stashList("winImages",  pendingRestoreImages);
+    stashList("winCode",    pendingRestoreCode);
+    stashList("winPrefabs", pendingRestorePrefabs);
   } catch(const std::exception& e) {}
 }
 
