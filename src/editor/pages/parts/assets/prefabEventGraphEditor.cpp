@@ -254,7 +254,12 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
         canvasSize.x * 0.5f - (nodePos.x + nodeSize.x * 0.5f),
         canvasSize.y * 0.5f - (nodePos.y + nodeSize.y * 0.5f),
       };
-      graph.graph.getGrid().setScroll(target);
+      // ImNodeFlow's grid wrapper only exposes scroll() as a const-ref
+      // getter (no public setter upstream). We strip the top-level const
+      // to write into the same `m_scroll` member — well-defined because
+      // the underlying member is non-const. Lets us recenter on a node
+      // without patching the vendored submodule.
+      const_cast<ImVec2&>(graph.graph.getGrid().scroll()) = target;
       highlightNodeUUID    = pendingFocusNodeUUID;
       highlightSecondsLeft = 2.0f;
     }
