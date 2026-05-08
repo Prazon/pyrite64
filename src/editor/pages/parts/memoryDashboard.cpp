@@ -6,6 +6,7 @@
 
 #include "imgui.h"
 #include "../../../context.h"
+#include "../../../project/project.h"
 #include "../../../utils/string.h"
 #include "../../imgui/theme.h"
 #include <filesystem>
@@ -163,7 +164,9 @@ void Editor::MemoryDashboard::refresh()
 
 void Editor::MemoryDashboard::drawBudgetBar()
 {
-  uint64_t cartLimit = CART_SIZES[selectedCartSize];
+  uint32_t cartIdx = ctx.project ? ctx.project->conf.cartSize : 3;
+  if (cartIdx >= (uint32_t)Project::CART_SIZE_COUNT) cartIdx = Project::CART_SIZE_COUNT - 1;
+  uint64_t cartLimit = Project::CART_SIZES[cartIdx];
   uint64_t usedSize = totalRomSize > 0 ? totalRomSize : 0;
 
   // Fall back to sum of scanned files if no ROM exists
@@ -179,7 +182,7 @@ void Editor::MemoryDashboard::drawBudgetBar()
   // Header text
   ImGui::Text("ROM: %s / %s  [%.1f%%]",
     Utils::byteSize(usedSize).c_str(),
-    CART_LABELS[selectedCartSize],
+    Project::CART_LABELS[cartIdx],
     percent);
 
   // Stacked bar
@@ -294,10 +297,12 @@ void Editor::MemoryDashboard::draw()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4_px, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0);
 
-    ImGui::Text("Cart:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(80_px);
-    ImGui::Combo("##CartSize", &selectedCartSize, CART_LABELS, CART_SIZE_COUNT);
+    uint32_t cartIdx = ctx.project ? ctx.project->conf.cartSize : 3;
+    if (cartIdx >= (uint32_t)Project::CART_SIZE_COUNT) cartIdx = Project::CART_SIZE_COUNT - 1;
+    ImGui::Text("Cart: %s", Project::CART_LABELS[cartIdx]);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Set in Project Settings → ROM Layout");
+    }
 
     ImGui::SameLine();
     if(ImGui::Button("Refresh", {64_px, 0})) {

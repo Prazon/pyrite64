@@ -35,18 +35,8 @@ namespace Editor
         std::string compression{};
       };
 
-      static constexpr int CART_SIZE_COUNT = 4;
-      static constexpr uint64_t CART_SIZES[CART_SIZE_COUNT] = {
-        8 * 1024 * 1024,
-        16 * 1024 * 1024,
-        32 * 1024 * 1024,
-        64 * 1024 * 1024,
-      };
-      static constexpr const char* CART_LABELS[CART_SIZE_COUNT] = {
-        "8 MB", "16 MB", "32 MB", "64 MB"
-      };
-
-      int selectedCartSize{3}; // default 64 MB
+      // Cart size lives in ProjectConf now (see project.h). The dashboard is
+      // a read-only view of the budget the user picked in Project Settings.
       uint64_t totalRomSize{0};
       uint64_t categoryTotals[static_cast<int>(AssetCategory::_COUNT)]{};
       std::vector<AssetEntry> entries{};

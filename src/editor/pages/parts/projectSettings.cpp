@@ -7,6 +7,7 @@
 #include "imgui.h"
 #include "../../../context.h"
 #include "../../../project/assetManager.h"
+#include "../../../project/project.h"
 #include "../../../renderer/texture.h"
 #include "../../../utils/logger.h"
 #include "misc/cpp/imgui_stdlib.h"
@@ -48,6 +49,46 @@ bool Editor::ProjectSettings::draw()
       const float scale = (texW > 0.0f) ? std::min(1.0f, maxW / texW) : 1.0f;
       ImGui::Image((ImTextureID)entry->texture->getGPUTex(), ImVec2(texW * scale, texH * scale));
     }
+
+    ImTable::end();
+  }
+
+  if (ImGui::CollapsingHeader("Default Scenes", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // Boot/Reset selection used to live next to the assets browser; centralized
+    // here so it sits with the other project-wide config and the assets browser
+    // can devote its space to a Unreal-style content view.
+    ImTable::start("Default Scenes");
+
+    const auto &scenes = ctx.project->getScenes().getEntries();
+    if (scenes.empty()) {
+      ImTable::add("");
+      ImGui::TextDisabled("(no scenes yet)");
+    } else {
+      ImTable::add("On Boot");
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::VectorComboBox("##Boot", scenes, ctx.project->conf.sceneIdOnBoot);
+
+      ImTable::add("On Reset");
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::VectorComboBox("##Reset", scenes, ctx.project->conf.sceneIdOnReset);
+    }
+    ImTable::end();
+  }
+
+  if (ImGui::CollapsingHeader("ROM Layout", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // Cart Size is advisory: it colors the ROM Memory Dashboard's budget bar
+    // but is not enforced by the build pipeline. Kept here so the dashboard
+    // stays a read-only view of project-level configuration.
+    ImTable::start("ROM Layout");
+
+    std::vector<ImTable::ComboEntry> cartSizes{};
+    for (int i = 0; i < Project::CART_SIZE_COUNT; ++i) {
+      cartSizes.push_back({(uint32_t)i, Project::CART_LABELS[i]});
+    }
+    ImTable::addVecComboBox("Cart Size", cartSizes, ctx.project->conf.cartSize);
+
+    ImTable::add("");
+    ImGui::TextDisabled("Used by the ROM Memory Dashboard's budget bar.");
 
     ImTable::end();
   }

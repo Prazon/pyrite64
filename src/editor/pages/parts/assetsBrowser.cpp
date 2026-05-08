@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <unordered_set>
+#include <unordered_map>
 #include <SDL3/SDL.h>
 #include <string>
 #include "../../../utils/logger.h"
@@ -27,16 +28,36 @@ namespace fs = std::filesystem;
 
 namespace
 {
-  constexpr int TAB_IDX_SCENES = 0;
-  constexpr int TAB_IDX_ASSETS = 1;
-  constexpr int TAB_IDX_SCRIPTS = 2;
-  constexpr int TAB_IDX_PREFABS = 3;
+  using ChipKind = Editor::AssetsBrowser::ChipKind;
 
-  struct TabDef
-  {
+  // Two physical roots are mirrored as a single virtual "Content" tree. Code
+  // routes into src/user, everything else into assets/. Per CLAUDE.md this
+  // split is enforced by libdragon's source-vs-data build pipeline, so the
+  // mirror is the closest we can get to a unified root without forking
+  // n64.mk.
+  struct ChipDef {
     const char* name;
-    std::vector<FileType> fileTypes{};
-    bool showScenes{false};
+    const char* icon;
+    FileType    type;          // FileType::UNKNOWN for chips with no AssetManager type (Scenes)
+    bool        underSrcUser;  // true → src/user/, false → assets/
+  };
+
+  // Order matches Editor::AssetsBrowser::ChipKind. The table is addressable
+  // by the same enum the header defines so callers can index chips[CHIP_X]
+  // and CHIP_DEFS[CHIP_X] without drift.
+  constexpr std::array<ChipDef, ChipKind::CHIP_COUNT> CHIP_DEFS = {
+    ChipDef{ "Scenes",      ICON_MDI_EARTH_BOX,                FileType::UNKNOWN,    false },
+    ChipDef{ "Prefabs",     ICON_MDI_PACKAGE_VARIANT_CLOSED,   FileType::PREFAB,     false },
+    ChipDef{ "Images",      ICON_MDI_FILE_IMAGE_OUTLINE,       FileType::IMAGE,      false },
+    ChipDef{ "Models",      ICON_MDI_CUBE_OUTLINE,             FileType::MODEL_3D,   false },
+    ChipDef{ "Audio",       ICON_MDI_MUSIC,                    FileType::AUDIO,      false },
+    ChipDef{ "Music (XM)",  ICON_MDI_PIANO,                    FileType::MUSIC_XM,   false },
+    ChipDef{ "Fonts",       ICON_MDI_FORMAT_FONT,              FileType::FONT,       false },
+    ChipDef{ "Scripts",     ICON_MDI_LANGUAGE_CPP,             FileType::CODE_OBJ,   true  },
+    ChipDef{ "Globals",     ICON_MDI_SCRIPT_OUTLINE,           FileType::CODE_GLOBAL,true  },
+    ChipDef{ "Node Graphs", ICON_MDI_GRAPH_OUTLINE,            FileType::NODE_GRAPH, false },
+    ChipDef{ "Res. Types",  ICON_MDI_DATABASE_OUTLINE,         FileType::RESOURCE_TYPE,     true  },
+    ChipDef{ "Resources",   ICON_MDI_DATABASE_EDIT_OUTLINE,    FileType::RESOURCE_INSTANCE, false },
   };
 
   std::string normalizeDir(std::string dir)
@@ -56,136 +77,125 @@ namespace
     return left + "/" + right;
   }
 
+  // Resolve the absolute physical path for one half of the virtual tree.
+  fs::path physicalRoot(bool srcUser)
+  {
+    fs::path base = fs::path(ctx.project->getPath()) / (srcUser ? "src/user" : "assets");
+    std::error_code ec;
+    auto abs = fs::absolute(base, ec);
+    return ec ? base : abs;
+  }
+
+  // Per-tab filter state held outside the AssetsBrowser instance because the
+  // popup dispatch decouples the menu click from the popup body that consumes
+  // these. Deliberately not class members — the script popup is a singleton
+  // anyway.
   std::string scriptName{};
   int scriptType{0};
   std::string newScriptDir{};
 
-  // Per-tab filter for the OS file picker, used by the right-click "Import…"
-  // entry. Files are copied into the active project directory; the asset
-  // watcher picks them up and registers them as assets.
-  std::vector<Utils::FilePicker::Options::Filter> importFiltersForTab(int tab)
-  {
-    using F = Utils::FilePicker::Options::Filter;
-    switch (tab) {
-      case TAB_IDX_ASSETS:
-        return {
-          F{"Image",      "png"},
-          F{"GLTF/GLB",   "glb,gltf"},
-          F{"Font (TTF)", "ttf"},
-          F{"Audio (WAV)","wav"},
-          F{"Music (XM)", "xm"},
-        };
-      case TAB_IDX_SCRIPTS:
-        return { F{"C++ Source", "cpp"} };
-      case TAB_IDX_PREFABS:
-        return { F{"Prefab", "p64prefab"} };
-      default:
-        return {};
-    }
-  }
+  // "Create Resource Instance" popup state — same singleton-popup rationale
+  // as the script popup above.
+  std::string newResourceName{};
+  std::string newResourceDir{};
+  uint64_t newResourceTypeUUID{0};
 }
 
 void Editor::AssetsBrowser::draw() {
-  auto &scenes = ctx.project->getScenes().getEntries();
+  if (!ctx.project) return;
+  auto &scenes   = ctx.project->getScenes().getEntries();
+  auto &assetMgr = ctx.project->getAssets();
 
-  const std::array<TabDef, 4> TABS{
-    TabDef{
-      .name = ICON_MDI_EARTH_BOX "  Scenes",
-      .showScenes = true
-    },
-    TabDef{
-      .name = ICON_MDI_FILE "  Assets",
-      .fileTypes = {FileType::IMAGE, FileType::AUDIO, FileType::MUSIC_XM, FileType::MODEL_3D, FileType::FONT}
-    },
-    TabDef{
-      .name = ICON_MDI_SCRIPT_OUTLINE "  Scripts",
-      .fileTypes = {FileType::CODE_OBJ, FileType::CODE_GLOBAL, FileType::NODE_GRAPH}
-    },
-    TabDef{
-      .name = ICON_MDI_PACKAGE_VARIANT_CLOSED "  Prefabs",
-      .fileTypes = {FileType::PREFAB}
-    },
-  };
+  currentDir = normalizeDir(currentDir);
 
-  ImGui::BeginChild("LEFT", ImVec2(94_px, 0), ImGuiChildFlags_Borders);
-  for (int i=0; i<TABS.size(); ++i) {
-    bool isActive = i == activeTab;
-    if (ImGui::Selectable(TABS[i].name, isActive))activeTab = i;
+  fs::path assetsRootAbs  = physicalRoot(false);
+  fs::path scriptsRootAbs = physicalRoot(true);
+
+  // Both physical roots' current-dir paths. Either may not exist on disk
+  // yet (legacy projects that only ever wrote to one root). All listing
+  // tolerates that.
+  fs::path assetsCurAbs  = assetsRootAbs  / currentDir;
+  fs::path scriptsCurAbs = scriptsRootAbs / currentDir;
+
+  // ── LEFT: filter chip rail ────────────────────────────────────────────
+  // Resizable via the splitter button between LEFT and RIGHT below; the
+  // pattern mirrors PrefabEditor's drawSplitter (assets/prefabEditor.cpp).
+  constexpr float SPLITTER_W   = 4.0f;
+  constexpr float CHIP_MIN_W   = 60.0f;
+  constexpr float CHIP_MAX_PAD = 200.0f; // leave at least this much for the grid
+  float fullAvail = ImGui::GetContentRegionAvail().x;
+  chipPanelWidth = ImClamp(chipPanelWidth, CHIP_MIN_W,
+                           std::max(CHIP_MIN_W, fullAvail - CHIP_MAX_PAD - SPLITTER_W));
+
+  ImGui::BeginChild("LEFT", ImVec2(chipPanelWidth, 0), ImGuiChildFlags_Borders);
+  for (int i = 0; i < ChipKind::CHIP_COUNT; ++i) {
+    const auto &def = CHIP_DEFS[i];
+    bool on = chips[i];
+    std::string label = std::string(def.icon) + "  " + def.name;
+    // Selectable's "selected" state stands in for "filter on". Right-click
+    // pops the solo / show-all menu.
+    if (ImGui::Selectable((label + "##chip").c_str(), on)) {
+      chips[i] = !on;
+    }
+    if (ImGui::BeginPopupContextItem(("chipctx" + std::to_string(i)).c_str())) {
+      if (ImGui::MenuItem("Solo")) {
+        for (int j = 0; j < ChipKind::CHIP_COUNT; ++j) chips[j] = (j == i);
+      }
+      if (ImGui::MenuItem("Show All")) {
+        chips.fill(true);
+      }
+      ImGui::EndPopup();
+    }
   }
   ImGui::EndChild();
 
-  float sceneOptionsWidth = 140_px;
-
-  if(activeTab == TAB_IDX_SCENES)
-  {
-    // right align
-    ImGui::SameLine();
-    ImGui::BeginChild("END", ImVec2(sceneOptionsWidth, 0), ImGuiChildFlags_Borders);
-
-    ImGui::Text("On Boot");
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::VectorComboBox("##Boot", scenes, ctx.project->conf.sceneIdOnBoot);
-
-    ImGui::Text("On Reset");
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::VectorComboBox("##Reset", scenes, ctx.project->conf.sceneIdOnReset);
-
-    ImGui::EndChild();
+  // Vertical splitter — drag to resize the chip rail. Styled like
+  // ImGuiCol_Separator so it visually reads as a divider, not a button.
+  ImGui::SameLine();
+  ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetStyleColorVec4(ImGuiCol_Separator));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
+  ImGui::Button("##chipSplitter", ImVec2(SPLITTER_W, -1));
+  ImGui::PopStyleColor(3);
+  if (ImGui::IsItemActive()) {
+    chipPanelWidth = ImClamp(chipPanelWidth + ImGui::GetIO().MouseDelta.x,
+                             CHIP_MIN_W,
+                             std::max(CHIP_MIN_W, fullAvail - CHIP_MAX_PAD - SPLITTER_W));
+  }
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
   }
 
-  const auto &tab = TABS[activeTab];
-  auto &dirState = tabDirs[activeTab];
-  dirState = normalizeDir(dirState);
-
-  fs::path basePath{};
-  fs::path basePathAbs{};
-  const char* baseLabel = nullptr;
-  if (activeTab == TAB_IDX_ASSETS || activeTab == TAB_IDX_PREFABS) {
-    basePath = fs::path(ctx.project->getPath()) / "assets";
-    baseLabel = ICON_MDI_FOLDER " Assets";
-  } else if (activeTab == TAB_IDX_SCRIPTS) {
-    basePath = fs::path(ctx.project->getPath()) / "src" / "user";
-    baseLabel = ICON_MDI_FOLDER " Scripts";
-  }
-  if (baseLabel) {
-    std::error_code absEc;
-    basePathAbs = fs::absolute(basePath, absEc);
-    if (absEc) {
-      basePathAbs = basePath;
-    }
-  }
-
-  auto availWidth = ImGui::GetContentRegionAvail().x - 24_px;
-  if(activeTab == TAB_IDX_SCENES)availWidth -= sceneOptionsWidth - 4_px;
-
+  // ── RIGHT: breadcrumb + grid ──────────────────────────────────────────
+  auto availWidth = ImGui::GetContentRegionAvail().x - 24_px - chipPanelWidth - SPLITTER_W;
   ImGui::SameLine();
   ImGui::BeginChild("RIGHT");
 
-  if (baseLabel)
+  // Breadcrumb + search (Content / sub / dir)
   {
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetColorU32(ImGuiCol_ButtonHovered));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::GetColorU32(ImGuiCol_ButtonHovered));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetColorU32(ImGuiCol_Button));
-    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetColorU32(ImGuiCol_WindowBg));
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetColorU32(ImGuiCol_WindowBg));
 
     ImGui::BeginChild("PATH", ImVec2(0, 21_px), 0,
       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoMove
     );
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4_px, 3_px));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,  ImVec2(4_px, 4_px));
 
-    std::vector<std::string> crumbParts{};
-    if (!dirState.empty()) {
-      size_t start = 0;
-      while (start < dirState.size()) {
-        size_t sep = dirState.find('/', start);
-        if (sep == std::string::npos) sep = dirState.size();
-        crumbParts.push_back(dirState.substr(start, sep - start));
-        start = sep + 1;
-      }
+    if (ImGui::Button(ICON_MDI_FOLDER " Content")) {
+      currentDir.clear();
     }
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4_px, 4_px));
-    if (ImGui::Button(baseLabel)) {
-      dirState.clear();
+    std::vector<std::string> crumbParts{};
+    if (!currentDir.empty()) {
+      size_t start = 0;
+      while (start < currentDir.size()) {
+        size_t sep = currentDir.find('/', start);
+        if (sep == std::string::npos) sep = currentDir.size();
+        crumbParts.push_back(currentDir.substr(start, sep - start));
+        start = sep + 1;
+      }
     }
     std::string accum{};
     for (const auto &part : crumbParts) {
@@ -194,12 +204,11 @@ void Editor::AssetsBrowser::draw() {
       ImGui::SameLine();
       accum = joinDir(accum, part);
       if (ImGui::Button(part.c_str())) {
-        dirState = accum;
+        currentDir = accum;
       }
     }
     ImGui::PopStyleVar(2);
 
-    // search field on the right side
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - 160_px - 2_px);
     ImGui::SetNextItemWidth(160_px);
@@ -207,36 +216,32 @@ void Editor::AssetsBrowser::draw() {
 
     ImGui::EndChild();
     ImGui::PopStyleColor(3);
-  } else {
-    ImGui::Dummy({0, 4_px});
   }
 
   ImGui::BeginChild("ASSETS");
 
-  float imageSize = 64_px;
-  float itemWidth = imageSize + 18_px;
-  float currentWidth = 0.0f;
-  ImVec2 textBtnSize{imageSize+12_px, imageSize+8_px};
+  float imageSize  = 64_px;
+  float itemWidth  = imageSize + 18_px;
+  float currentWid = 0.0f;
+  ImVec2 textBtnSize{imageSize + 12_px, imageSize + 8_px};
 
   float cursorStartX = ImGui::GetCursorPosX();
-  float cursorY = ImGui::GetCursorPosY();
+  float cursorY      = ImGui::GetCursorPosY();
 
   auto checkLineBreak = [&]() {
-    if ((currentWidth+itemWidth*2) > availWidth) {
-      currentWidth = 0.0f;
+    if ((currentWid + itemWidth*2) > availWidth) {
+      currentWid = 0.0f;
       cursorY += imageSize + 28_px;
-      if (activeTab == TAB_IDX_SCENES)cursorY -= 12_px;
-
       ImGui::SetCursorPos({cursorStartX, cursorY});
     } else {
-      if (currentWidth != 0)ImGui::SameLine();
+      if (currentWid != 0) ImGui::SameLine();
     }
-    currentWidth += itemWidth;
+    currentWid += itemWidth;
   };
 
   auto drawRename = [&](const std::string &label, const ImVec2 &startPos) {
-    ImVec2 rectMin{startPos.x,                startPos.y + imageSize + 8};
-    ImVec2 rectMax{startPos.x + imageSize + 14_px, startPos.y + imageSize + 8_px + 16_px};
+    ImVec2 rectMin{startPos.x,                  startPos.y + imageSize + 8};
+    ImVec2 rectMax{startPos.x + imageSize+14_px, startPos.y + imageSize + 8_px + 16_px};
 
     ImVec2 originalCursor = ImGui::GetCursorPos();
     ImGui::SetCursorScreenPos(rectMin);
@@ -245,20 +250,69 @@ void Editor::AssetsBrowser::draw() {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2_px, 0));
     if (ImGui::InputText("##renameInput", renameBuffer, sizeof(renameBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
       fs::path oldPath = renamePath;
-      std::string newFileName = std::string(renameBuffer) + oldPath.extension().string();
-      fs::path newPath = oldPath.parent_path() / newFileName;
+      bool isDir = fs::is_directory(oldPath);
 
-      std::error_code ec;
-      if (oldPath != newPath) {
-        if (fs::exists(newPath)) Utils::Logger::log("A file with that name already exists.", Utils::Logger::LEVEL_ERROR);
-        else {
-          fs::rename(oldPath, newPath, ec);
+      if (isDir) {
+        // Folder rename: cross-root mirror. Apply to whichever physical
+        // sides exist, then rewrite scene relPaths under the old prefix.
+        std::string newName = renameBuffer;
+        if (!newName.empty() && newName != oldPath.filename().string()) {
+          fs::path parent = oldPath.parent_path();
+          fs::path newAbs = parent / newName;
+
+          // Determine which physical root this anchor is in so we can
+          // rename the mirror on the other side too.
+          std::error_code ec;
+          fs::path otherOld, otherNew;
+          {
+            auto lex = oldPath.lexically_relative(assetsRootAbs);
+            if (!lex.empty() && !lex.string().starts_with("..")) {
+              otherOld = scriptsRootAbs / lex;
+              otherNew = scriptsRootAbs / lex.parent_path() / newName;
+            } else {
+              auto lex2 = oldPath.lexically_relative(scriptsRootAbs);
+              if (!lex2.empty() && !lex2.string().starts_with("..")) {
+                otherOld = assetsRootAbs / lex2;
+                otherNew = assetsRootAbs / lex2.parent_path() / newName;
+              }
+            }
+          }
+
+          fs::rename(oldPath, newAbs, ec);
           if (ec) Utils::Logger::log("Rename failed: " + ec.message(), Utils::Logger::LEVEL_ERROR);
-          else {
-            fs::path oldConf = oldPath.string() + ".conf";
-            fs::path newConf = newPath.string() + ".conf";
-            fs::rename(oldConf, newConf, ec);
-            if (ec) Utils::Logger::log("Failed to move .conf: " + ec.message(), Utils::Logger::LEVEL_ERROR);
+
+          if (!otherOld.empty() && fs::exists(otherOld)) {
+            std::error_code ec2;
+            fs::rename(otherOld, otherNew, ec2);
+            if (ec2) Utils::Logger::log("Mirror rename failed: " + ec2.message(), Utils::Logger::LEVEL_ERROR);
+          }
+
+          // Compute the virtual prefix swap and rewrite scene relPaths.
+          std::string oldVirt = joinDir(currentDir, oldPath.filename().string());
+          std::string newVirt = joinDir(currentDir, newName);
+          ctx.project->getScenes().renameSceneFolder(oldVirt, newVirt);
+        }
+      } else {
+        // File rename: preserve the existing extension and any sidecar
+        // .conf the asset pipeline owns.
+        std::string newFileName = std::string(renameBuffer) + oldPath.extension().string();
+        fs::path newPath = oldPath.parent_path() / newFileName;
+
+        std::error_code ec;
+        if (oldPath != newPath) {
+          if (fs::exists(newPath)) {
+            Utils::Logger::log("A file with that name already exists.", Utils::Logger::LEVEL_ERROR);
+          } else {
+            fs::rename(oldPath, newPath, ec);
+            if (ec) Utils::Logger::log("Rename failed: " + ec.message(), Utils::Logger::LEVEL_ERROR);
+            else {
+              fs::path oldConf = oldPath.string() + ".conf";
+              fs::path newConf = newPath.string() + ".conf";
+              if (fs::exists(oldConf)) {
+                fs::rename(oldConf, newConf, ec);
+                if (ec) Utils::Logger::log("Failed to move .conf: " + ec.message(), Utils::Logger::LEVEL_ERROR);
+              }
+            }
           }
         }
       }
@@ -295,17 +349,17 @@ void Editor::AssetsBrowser::draw() {
     }
   };
 
-  auto drawGridButton = [&](const std::string &path, ImTextureRef icon, const char* iconTxt,
+  auto drawGridButton = [&](const std::string &id, ImTextureRef icon, const char* iconTxt,
     const std::string &label, bool selected, float alpha) {
     bool clicked = false;
     if(selected) {
-      ImGui::PushStyleColor(ImGuiCol_Button, {0.5f,0.5f,0.7f,1});
+      ImGui::PushStyleColor(ImGuiCol_Button,        {0.5f,0.5f,0.7f,1});
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.5f,0.5f,0.7f,0.8f});
     }
 
-    ImGui::PushID(path.c_str());
+    ImGui::PushID(id.c_str());
     auto sPos = ImGui::GetCursorScreenPos();
-    bool isRenaming = path == renamePath;
+    bool isRenaming = id == renamePath;
     if (isRenaming) drawRename(label, sPos);
     else drawLabel(label, sPos);
 
@@ -315,7 +369,6 @@ void Editor::AssetsBrowser::draw() {
         {imageSize, imageSize}, {0,0}, {1,1}, {0,0,0,0},
         {1,1,1, alpha}
       );
-
     } else {
       ImGui::PushFont(nullptr, 40_px);
       clicked = ImGui::Button(iconTxt, textBtnSize);
@@ -324,114 +377,241 @@ void Editor::AssetsBrowser::draw() {
 
     ImGui::PopID();
 
-    if(selected)ImGui::PopStyleColor(2);
+    if(selected) ImGui::PopStyleColor(2);
     return clicked && !isRenaming;
   };
 
+  // ── Collect items at currentDir ──────────────────────────────────────
+  // Folders (union of both physical roots), filtered to direct children.
   std::vector<std::string> folders{};
   std::unordered_set<std::string> folderSet{};
-  // Mark folders that contain assets for the active tab
-  std::unordered_map<std::string, bool> folderHasAssets{};
-  std::vector<const Project::AssetManagerEntry*> assets{};
+  std::unordered_map<std::string, bool> folderHasContent{};
 
-  if (baseLabel) {
-    for(const auto type : tab.fileTypes)
+  auto addFoldersFromRoot = [&](const fs::path &absRoot) {
+    if (absRoot.empty()) return;
+    std::error_code ec;
+    for (auto it = fs::directory_iterator(absRoot, ec);
+         !ec && it != fs::directory_iterator();
+         it.increment(ec))
     {
-      for (const auto &asset : ctx.project->getAssets().getTypeEntries(type))
-      {
-        std::error_code ec;
-        std::error_code absEc;
-        auto assetPathAbs = fs::absolute(fs::path(asset.path), absEc);
-        if (absEc) {
-          assetPathAbs = fs::path(asset.path);
-        }
-        auto rel = assetPathAbs.lexically_relative(basePathAbs);
-        if (ec) continue;
-        auto relStr = rel.generic_string();
-        if (relStr == ".") continue;
-        if (relStr.starts_with("..")) {
-          if (dirState.empty()) {
-            assets.push_back(&asset);
-          }
-          continue;
-        }
-
-        if (!dirState.empty()) {
-          auto prefix = dirState + "/";
-          if (!relStr.starts_with(prefix)) {
-            continue;
-          }
-          relStr = relStr.substr(prefix.size());
-        }
-
-        // Split into folders vs files at the current depth
-        auto slashPos = relStr.find('/');
-        if (slashPos != std::string::npos) {
-          auto folder = relStr.substr(0, slashPos);
-          if (folderSet.insert(folder).second) {
-            folders.push_back(folder);
-          }
-          folderHasAssets[folder] = true;
-        } else {
-          assets.push_back(&asset);
-        }
-      }
+      const auto &entry = *it;
+      if (!entry.is_directory()) continue;
+      auto name = entry.path().filename().string();
+      // Hide the generated outputs directory at the Content root.
+      if (currentDir.empty() && name == "p64") continue;
+      if (folderSet.insert(name).second) folders.push_back(name);
     }
+  };
+  addFoldersFromRoot(assetsCurAbs);
+  addFoldersFromRoot(scriptsCurAbs);
 
-    // Also list folders that exist on disk even if empty for this tab
-    if (!basePathAbs.empty()) {
-      fs::path listRoot = basePathAbs;
-      if (!dirState.empty()) {
-        listRoot /= dirState;
-      }
-      std::error_code dirEc;
-      for (auto it = fs::directory_iterator(listRoot, dirEc);
-           !dirEc && it != fs::directory_iterator();
-           it.increment(dirEc)) {
-        const auto &dirEntry = *it;
-        if (!dirEntry.is_directory()) continue;
-        auto name = dirEntry.path().filename().string();
-        if (folderSet.insert(name).second) {
-          folders.push_back(name);
-        }
-      }
-    }
+  // Files at currentDir (one pass per enabled chip's FileType). Also flag
+  // folders that contain matching content so the icon is filled vs outline.
+  std::vector<const Project::AssetManagerEntry*> assetItems{};
+  for (int chipIdx = 0; chipIdx < ChipKind::CHIP_COUNT; ++chipIdx) {
+    if (!chips[chipIdx]) continue;
+    const auto &def = CHIP_DEFS[chipIdx];
+    if (def.type == FileType::UNKNOWN) continue; // Scenes handled separately
 
-    std::sort(folders.begin(), folders.end());
-    std::sort(assets.begin(), assets.end(), [](const auto *a, const auto *b) {
-      return a->name < b->name;
-    });
+    fs::path rootAbs = physicalRoot(def.underSrcUser);
+    for (const auto &asset : assetMgr.getTypeEntries(def.type)) {
+      std::error_code ec;
+      auto absPath = fs::absolute(fs::path(asset.path), ec);
+      if (ec) absPath = fs::path(asset.path);
+      auto rel = absPath.lexically_relative(rootAbs).generic_string();
+      if (rel == ".") continue;
+      if (rel.starts_with("..")) continue;
 
-    for (const auto &folder : folders) {
-      if(!searchFilter.empty() && !folder.contains(searchFilter)) {
-        continue;
-      }
-      checkLineBreak();
-      std::string folderPath = (basePathAbs / dirState / folder).string();
-
-      // Show a filled folder when it contains assets for this tab, outlined (empty) folder otherwise
-      const char* folderIcon = folderHasAssets[folder] ? ICON_MDI_FOLDER : ICON_MDI_FOLDER_OUTLINE;
-      if (drawGridButton(folderPath, ImTextureRef(nullptr), folderIcon, folder, false, 1.0f)) {
-        dirState = joinDir(dirState, folder);
+      if (!currentDir.empty()) {
+        auto prefix = currentDir + "/";
+        if (!rel.starts_with(prefix)) continue;
+        rel = rel.substr(prefix.size());
       }
 
-      if(ImGui::BeginPopupContextItem(folder.c_str())) {
-        showContextMenu(folderPath);
-        ImGui::EndPopup();
-      }
-
-      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("Folder: %s", joinDir(dirState, folder).c_str());
+      auto slashPos = rel.find('/');
+      if (slashPos != std::string::npos) {
+        // The asset is inside a subfolder; mark that folder as filled.
+        folderHasContent[rel.substr(0, slashPos)] = true;
+      } else {
+        assetItems.push_back(&asset);
       }
     }
   }
 
-  for (const auto *assetPtr : assets)
+  std::sort(folders.begin(), folders.end());
+  std::sort(assetItems.begin(), assetItems.end(),
+    [](const auto *a, const auto *b) { return a->name < b->name; });
+
+  // Scenes at currentDir (chip-gated). ID-keyed flat pool — relPath places
+  // them virtually without changing on-disk layout (data/scenes/<id>/).
+  std::vector<const Project::SceneEntry*> sceneItems{};
+  if (chips[ChipKind::CHIP_SCENES]) {
+    for (const auto &sc : scenes) {
+      if (sc.relPath != currentDir) continue;
+      sceneItems.push_back(&sc);
+    }
+  }
+
+  // ── Render: scenes → folders → files ─────────────────────────────────
+  static int  ctxSceneId = -1;
+  // Track whether we accepted a SCENE drag-drop this frame so we can apply
+  // it after the loop without invalidating iteration.
+  pendingSceneMoveId = 0;
+  pendingSceneMoveTarget.clear();
+
+  if (chips[ChipKind::CHIP_SCENES])
+  {
+    for (const auto *scPtr : sceneItems)
+    {
+      const auto &scene = *scPtr;
+      auto activeScene = ctx.project->getScenes().getLoadedScene();
+
+      bool isSelected = activeScene && (activeScene->getId() == scene.id);
+      const auto &liveName = isSelected ? activeScene->getName() : scene.name;
+      const auto &displayName = liveName.empty() ? "(unnamed)" : liveName;
+
+      if (!searchFilter.empty() && displayName.find(searchFilter) == std::string::npos) continue;
+
+      checkLineBreak();
+
+      if (isSelected) {
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.5f,0.5f,0.7f,1});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.5f,0.5f,0.7f,0.8f});
+      }
+
+      ImGui::PushID(scene.id);
+      ImVec2 lblPos = ImGui::GetCursorScreenPos();
+      drawLabel(displayName, lblPos);
+
+      ImGui::PushFont(nullptr, 40_px);
+      bool pressed = ImGui::Button(ICON_MDI_EARTH_BOX, textBtnSize);
+      ImGui::PopFont();
+      ImGui::PopID();
+
+      if (pressed) {
+        ctx.project->getScenes().loadScene(scene.id);
+        ctx.project->conf.sceneIdLastOpened = scene.id;
+        ctx.project->saveConfig();
+      }
+
+      if (isSelected) ImGui::PopStyleColor(2);
+
+      if (ImGui::BeginDragDropSource()) {
+        ImGui::SetDragDropPayload("SCENE", &scene.id, sizeof(scene.id));
+        ImGui::TextUnformatted(displayName.c_str());
+        ImGui::EndDragDropSource();
+      }
+
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Scene: %s\nID: %d\n\nDrag onto a folder to move\nRight-click for options",
+                          displayName.c_str(), scene.id);
+      }
+
+      if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        ctxSceneId = scene.id;
+        ImGui::OpenPopup("SceneCtxMenu");
+      }
+    }
+
+    if (ImGui::BeginPopup("SceneCtxMenu")) {
+      bool canDelete = scenes.size() > 1;
+
+      if (ImGui::MenuItem(ICON_MDI_CONTENT_COPY " Duplicate")) {
+        ctx.project->getScenes().duplicate(ctxSceneId);
+      }
+      if (ImGui::MenuItem(ICON_MDI_FOLDER_OPEN " Move to root")) {
+        ctx.project->getScenes().setSceneRelPath(ctxSceneId, "");
+      }
+      if (!canDelete) ImGui::BeginDisabled();
+      if (ImGui::MenuItem(ICON_MDI_TRASH_CAN_OUTLINE " Delete")) {
+        ctx.project->getScenes().remove(ctxSceneId);
+        const auto &after = ctx.project->getScenes().getEntries();
+        ctx.project->conf.sceneIdLastOpened = after.empty() ? 0 : after.front().id;
+        ctx.project->saveConfig();
+      }
+      if (!canDelete) {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+          ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
+        }
+        ImGui::EndDisabled();
+      }
+      ImGui::EndPopup();
+    }
+  }
+
+  // Folders
+  for (const auto &folder : folders) {
+    if (!searchFilter.empty() && folder.find(searchFilter) == std::string::npos) continue;
+
+    checkLineBreak();
+    // Build a unique virtual id so PushID/popups don't collide with files of
+    // the same name. The id also doubles as the folder's virtual rel path.
+    std::string virtChild = joinDir(currentDir, folder);
+    std::string folderId  = "folder://" + virtChild;
+
+    bool filled = folderHasContent[folder];
+    const char* folderIcon = filled ? ICON_MDI_FOLDER : ICON_MDI_FOLDER_OUTLINE;
+
+    bool clicked = drawGridButton(folderId, ImTextureRef(nullptr), folderIcon, folder, false, 1.0f);
+
+    // Drag-drop target: a scene dropped here moves to this folder.
+    if (ImGui::BeginDragDropTarget()) {
+      if (const auto *payload = ImGui::AcceptDragDropPayload("SCENE")) {
+        int sid = *static_cast<const int*>(payload->Data);
+        pendingSceneMoveId = sid;
+        pendingSceneMoveTarget = virtChild;
+      }
+      ImGui::EndDragDropTarget();
+    }
+
+    if (ImGui::BeginPopupContextItem(folderId.c_str())) {
+      // Resolve which physical sides this virtual folder lives on.
+      fs::path assetSide  = assetsRootAbs  / virtChild;
+      fs::path scriptSide = scriptsRootAbs / virtChild;
+      bool hasAssetSide  = fs::exists(assetSide);
+      bool hasScriptSide = fs::exists(scriptSide);
+
+      if (!hasAssetSide) ImGui::BeginDisabled();
+      if (ImGui::MenuItem(ICON_MDI_FOLDER_OPEN " Show Assets folder")) {
+        Utils::Proc::openInFileBrowser(assetSide.string());
+      }
+      if (!hasAssetSide) ImGui::EndDisabled();
+
+      if (!hasScriptSide) ImGui::BeginDisabled();
+      if (ImGui::MenuItem(ICON_MDI_FOLDER_OPEN " Show Scripts folder")) {
+        Utils::Proc::openInFileBrowser(scriptSide.string());
+      }
+      if (!hasScriptSide) ImGui::EndDisabled();
+
+      ImGui::Separator();
+      if (ImGui::MenuItem(ICON_MDI_RENAME " Rename")) {
+        // Pick whichever side actually exists as the rename anchor; the
+        // mirror is renamed in lockstep inside drawRename().
+        renamePath = (hasAssetSide ? assetSide : scriptSide).string();
+        std::string stem = folder;
+        strncpy(renameBuffer, stem.c_str(), sizeof(renameBuffer) - 1);
+        renameBuffer[sizeof(renameBuffer) - 1] = '\0';
+      }
+      if (ImGui::MenuItem(ICON_MDI_DELETE " Delete")) {
+        deleteFolderPath = virtChild;
+      }
+      ImGui::EndPopup();
+    }
+
+    if (clicked) {
+      currentDir = virtChild;
+    }
+
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Folder: %s", virtChild.c_str());
+    }
+  }
+
+  // Files
+  for (const auto *assetPtr : assetItems)
   {
     const auto &asset = *assetPtr;
-    if(!searchFilter.empty() && !asset.name.contains(searchFilter)) {
-      continue;
-    }
+    if (!searchFilter.empty() && asset.name.find(searchFilter) == std::string::npos) continue;
 
     checkLineBreak();
 
@@ -440,20 +620,16 @@ void Editor::AssetsBrowser::draw() {
     if (asset.texture) {
       icon = ImTextureRef(asset.texture->getGPUTex());
     } else {
-      if (asset.type == FileType::MODEL_3D) {
-        iconTxt = ICON_MDI_CUBE_OUTLINE;
-      } else if (asset.type == FileType::AUDIO) {
-        iconTxt = ICON_MDI_MUSIC;
-      } else if (asset.type == FileType::MUSIC_XM) {
-        iconTxt = ICON_MDI_PIANO;
-      } else if (asset.type == FileType::FONT) {
-        iconTxt = ICON_MDI_FORMAT_FONT;
-      } else if (asset.type == FileType::PREFAB) {
-        iconTxt = ICON_MDI_PACKAGE_VARIANT_CLOSED;
-      } else if (asset.type == FileType::CODE_OBJ || asset.type == FileType::CODE_GLOBAL) {
-        iconTxt = ICON_MDI_LANGUAGE_CPP;
-      } else if (asset.type == FileType::NODE_GRAPH) {
-        iconTxt = ICON_MDI_GRAPH_OUTLINE;
+      switch (asset.type) {
+        case FileType::MODEL_3D:    iconTxt = ICON_MDI_CUBE_OUTLINE;             break;
+        case FileType::AUDIO:       iconTxt = ICON_MDI_MUSIC;                    break;
+        case FileType::MUSIC_XM:    iconTxt = ICON_MDI_PIANO;                    break;
+        case FileType::FONT:        iconTxt = ICON_MDI_FORMAT_FONT;              break;
+        case FileType::PREFAB:      iconTxt = ICON_MDI_PACKAGE_VARIANT_CLOSED;   break;
+        case FileType::CODE_OBJ:    iconTxt = ICON_MDI_LANGUAGE_CPP;             break;
+        case FileType::CODE_GLOBAL: iconTxt = ICON_MDI_SCRIPT_OUTLINE;           break;
+        case FileType::NODE_GRAPH:  iconTxt = ICON_MDI_GRAPH_OUTLINE;            break;
+        default: break;
       }
     }
 
@@ -473,8 +649,6 @@ void Editor::AssetsBrowser::draw() {
       ImGui::makeTabVisible("Asset");
     }
     if (isDblClick) {
-      // SPBF64 fork: prefer in-editor preview windows for art assets;
-      // fall back to OS shell-out for types we don't yet preview.
       bool handled = false;
       if (ctx.editorScene) {
         if (asset.type == FileType::IMAGE) {
@@ -492,14 +666,14 @@ void Editor::AssetsBrowser::draw() {
           handled = true;
         }
       }
-      if (!handled && !Utils::Proc::openFile(asset.path))
-      {
-        Editor::Noti::add(Editor::Noti::Type::ERROR, "Failed to open File. This may be due to WSL path conversion failure.");
+      if (!handled && !Utils::Proc::openFile(asset.path)) {
+        Editor::Noti::add(Editor::Noti::Type::ERROR,
+          "Failed to open File. This may be due to WSL path conversion failure.");
       }
     }
 
     if (ImGui::BeginDragDropSource()) {
-      if(icon._TexID) {
+      if (icon._TexID) {
         ImGui::ImageButton(asset.name.c_str(), icon, {imageSize*0.75f, imageSize*0.75f});
       } else {
         ImGui::Button(iconTxt, textBtnSize);
@@ -508,17 +682,12 @@ void Editor::AssetsBrowser::draw() {
       ImGui::EndDragDropSource();
     }
 
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      auto tooltipPath = dirState.empty() ? asset.name : (dirState + "/" + asset.name);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      auto tooltipPath = currentDir.empty() ? asset.name : (currentDir + "/" + asset.name);
       ImGui::SetTooltip("File: %s", tooltipPath.c_str());
     }
 
-    if(ImGui::BeginPopupContextItem(asset.path.c_str())) {
-      // Prefab-only: spawn a variant. The new .prefab is empty-patched and
-      // sits next to the parent on disk; opening it in PrefabEditor and
-      // saving captures whatever overrides the user makes as a JSON Patch
-      // against the parent. Mirrors Godot's "New Inherited Scene" / Unity's
-      // "Variant" workflow.
+    if (ImGui::BeginPopupContextItem(asset.path.c_str())) {
       if (asset.type == FileType::PREFAB && asset.prefab) {
         if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " Create Variant")) {
           fs::path srcPath{asset.path};
@@ -554,102 +723,78 @@ void Editor::AssetsBrowser::draw() {
     }
   }
 
-  if (!deletePath.empty()) {
-    ImGui::OpenPopup("Confirm Delete");
+  // Apply pending scene drag-drop after the grid pass so we don't mutate
+  // SceneManager during iteration.
+  if (pendingSceneMoveId != 0) {
+    ctx.project->getScenes().setSceneRelPath(pendingSceneMoveId, pendingSceneMoveTarget);
   }
-  
+
+  // ── Confirm dialogs ──────────────────────────────────────────────────
+  if (!deletePath.empty()) ImGui::OpenPopup("Confirm Delete");
   if (ImGui::BeginPopupModal("Confirm Delete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::Text("This action cannot be undone!\nAre you sure you want to delete this asset?");
     ImGui::Separator();
-    
     if (ImGui::Button("OK", ImVec2(120_px, 0))) {
-        fs::remove(deletePath);
-        deletePath.clear();
-        ImGui::CloseCurrentPopup(); 
+      fs::remove(deletePath);
+      deletePath.clear();
+      ImGui::CloseCurrentPopup();
     }
-
     ImGui::SameLine();
     ImGui::SetItemDefaultFocus();
     if (ImGui::Button("Cancel", ImVec2(120_px, 0))) {
-        deletePath.clear();
-        ImGui::CloseCurrentPopup(); 
+      deletePath.clear();
+      ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
   }
 
-  static int ctxSceneId = -1;
-
-  if(tab.showScenes)
-  {
-    for (const auto &scene : scenes)
-    {
-      checkLineBreak();
-      auto activeScene = ctx.project->getScenes().getLoadedScene();
-
-      bool isSelected = activeScene && (activeScene->getId() == scene.id);
-      const auto &liveName = isSelected ? activeScene->getName() : scene.name;
-      const auto &displayName = liveName.empty() ? "(unnamed)" : liveName;
-      auto buttonLabel = displayName + "##" + std::to_string(scene.id);
-
-      if(isSelected) {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.5f,0.5f,0.7f,1});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.5f,0.5f,0.7f,0.8f});
-      }
-
-      if (ImGui::Button(buttonLabel.c_str(), textBtnSize)) {
-        ctx.project->getScenes().loadScene(scene.id);
-        ctx.project->conf.sceneIdLastOpened = scene.id;
-        ctx.project->saveConfig();
-      }
-
-      if(isSelected)ImGui::PopStyleColor(2);
-
-      if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-      {
-        ImGui::SetTooltip("Scene: %s\nID: %d\n\nRight-click for options", displayName.c_str(), scene.id);
-      }
-
-      if(ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-        ctxSceneId = scene.id;
-        ImGui::OpenPopup("SceneCtxMenu");
-      }
+  // Folder delete: warn about nested scenes (which sit outside the two
+  // physical roots) so the user knows what's about to vanish.
+  if (!deleteFolderPath.empty()) ImGui::OpenPopup("Confirm Folder Delete");
+  if (ImGui::BeginPopupModal("Confirm Folder Delete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+    auto sceneIds = ctx.project->getScenes().findScenesUnder(deleteFolderPath);
+    ImGui::Text("Delete folder \"%s\" and everything inside?", deleteFolderPath.c_str());
+    if (!sceneIds.empty()) {
+      ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+        "This will also delete %d scene%s assigned to this folder.",
+        (int)sceneIds.size(), sceneIds.size() == 1 ? "" : "s");
     }
+    ImGui::Separator();
+    if (ImGui::Button("OK", ImVec2(120_px, 0))) {
+      // Remove scenes first (they live outside the physical mirror).
+      for (int sid : sceneIds) ctx.project->getScenes().remove(sid);
 
-    if(ImGui::BeginPopup("SceneCtxMenu")) {
-      bool canDelete = scenes.size() > 1;
+      // Then nuke whichever physical sides exist.
+      fs::path assetSide  = assetsRootAbs  / deleteFolderPath;
+      fs::path scriptSide = scriptsRootAbs / deleteFolderPath;
+      std::error_code ec;
+      if (fs::exists(assetSide))  fs::remove_all(assetSide,  ec);
+      if (fs::exists(scriptSide)) fs::remove_all(scriptSide, ec);
 
-      if(ImGui::MenuItem(ICON_MDI_CONTENT_COPY " Duplicate")) {
-        ctx.project->getScenes().duplicate(ctxSceneId);
-      }
-
-      if(!canDelete) ImGui::BeginDisabled();
-      if(ImGui::MenuItem(ICON_MDI_TRASH_CAN_OUTLINE " Delete")) {
-        ctx.project->getScenes().remove(ctxSceneId);
-        ctx.project->conf.sceneIdLastOpened = ctx.project->getScenes().getEntries().empty()
-          ? 0 : ctx.project->getScenes().getEntries().front().id;
-        ctx.project->saveConfig();
-      }
-
-      if(!canDelete) {
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-          ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
-        ImGui::EndDisabled();
-      }
-      ImGui::EndPopup();
+      deleteFolderPath.clear();
+      ImGui::CloseCurrentPopup();
     }
+    ImGui::SameLine();
+    ImGui::SetItemDefaultFocus();
+    if (ImGui::Button("Cancel", ImVec2(120_px, 0))) {
+      deleteFolderPath.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
   }
 
-  // Right-click on empty space: Unity-style Create / Import submenu. Items
-  // dispatch to the same NewScript popup / file picker that the toolbar
-  // button uses, so behavior stays consistent regardless of entry point.
-  auto runImport = [&](const std::string &targetAbsDir) {
-    auto filters = importFiltersForTab(activeTab);
+  // ── Empty-area Create / Import context menu ──────────────────────────
+  bool wantsNewScript = false;
+  bool wantsNewResource = false;
+
+  auto runImportTo = [&](const fs::path &targetAbsDir, const std::vector<Utils::FilePicker::Options::Filter> &filters) {
+    fs::create_directories(targetAbsDir);
     Utils::FilePicker::open(
-      [targetAbsDir](const std::string &path) {
+      [targetAbsDirStr = targetAbsDir.string()](const std::string &path) {
         if (path.empty()) return;
         std::error_code ec;
         fs::path src{path};
-        fs::path dst = fs::path(targetAbsDir) / src.filename();
+        fs::path dst = fs::path(targetAbsDirStr) / src.filename();
         if (fs::exists(dst, ec)) {
           Editor::Noti::add(Editor::Noti::Type::ERROR,
             "Asset already exists at destination: " + dst.filename().string());
@@ -665,10 +810,6 @@ void Editor::AssetsBrowser::draw() {
     );
   };
 
-  // SPBF64 fork: "New Prefab" creates a blank .prefab in the active directory
-  // and immediately opens it in the dedicated PrefabEditor. Mirrors how
-  // Unreal's Content Browser "Create > Blueprint" produces a fresh asset
-  // ready to edit, rather than requiring an existing scene object.
   auto createBlankPrefab = [&](const fs::path &dir) {
     fs::create_directories(dir);
     auto pickName = [&](){
@@ -691,188 +832,112 @@ void Editor::AssetsBrowser::draw() {
     prefab.obj.rot.value = {0, 0, 0, 1};
 
     Utils::FS::saveTextFile(fullPath.string(), prefab.serialize());
-
-    // Scaffold a paired user-source stub at <project>/src/user/<stem>.{h,cpp}
-    // so the prefab has a well-known place to declare P64_NODE functions for
-    // its event graph. Existing files are never overwritten — this is a
-    // first-time-only convenience, not a sync.
-    fs::path userDir = fs::path{ctx.project->getPath()} / "src" / "user";
-    fs::create_directories(userDir);
-    fs::path userHeader = userDir / (stem + ".h");
-    fs::path userSource = userDir / (stem + ".cpp");
-
-    auto sanitizeIdent = [](std::string s) {
-      for (auto &c : s) {
-        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-              || (c >= '0' && c <= '9') || c == '_';
-        if (!ok) c = '_';
-      }
-      if (s.empty() || (s[0] >= '0' && s[0] <= '9')) s.insert(s.begin(), '_');
-      return s;
-    };
-    std::string ident = sanitizeIdent(stem);
-
-    std::error_code _ec;
-    if (!fs::exists(userHeader, _ec)) {
-      std::string headerStub =
-        "// Per-prefab user code for \"" + stem + "\".\n"
-        "// Functions tagged with P64_NODE are surfaced as nodes in the\n"
-        "// prefab's event graph and dispatched from the runtime.\n"
-        "#pragma once\n"
-        "#include \"script/prefabNode.h\"\n"
-        "#include \"p64/prefabVars.h\"\n\n"
-        "namespace User::" + ident + " {\n"
-        "  // P64_NODE void OnReady(P64::Object* self);\n"
-        "  // P64_NODE void OnTick(P64::Object* self, float dt);\n"
-        "}\n";
-      Utils::FS::saveTextFile(userHeader.string(), headerStub);
-    }
-    if (!fs::exists(userSource, _ec)) {
-      std::string sourceStub =
-        "#include \"" + stem + ".h\"\n\n"
-        "namespace User::" + ident + " {\n"
-        "  // implementations go here\n"
-        "}\n";
-      Utils::FS::saveTextFile(userSource.string(), sourceStub);
-    }
-
     ctx.project->getAssets().reload();
 
-    // Find the freshly-created entry by path and open it.
     if (ctx.editorScene) {
       auto* entry = ctx.project->getAssets().getByPath(fullPath.string());
-      if (entry) {
-        ctx.editorScene->openPrefabEditor(entry->getUUID());
-      }
+      if (entry) ctx.editorScene->openPrefabEditor(entry->getUUID());
     }
   };
 
-  // OpenPopup is scoped by the current ID stack, so calling it from inside
-  // BeginPopupContextWindow opens a popup nested under the context menu —
-  // which BeginPopup("NewScript") at the parent scope will never find.
-  // Defer the open until after EndPopup so it lands at the right scope.
-  bool wantsNewScript = false;
   if (ImGui::BeginPopupContextWindow("AssetsBrowserCtx",
         ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
   {
-    bool hasAny = false;
-
-    // "New Folder" — available on every tab that uses on-disk folders. Skipped
-    // for the Scenes tab because scenes are managed by SceneManager rather than
-    // a directory tree. Picks the first free `NewFolder`/`NewFolder_N` slot in
-    // the current dirState so multiple invocations don't collide.
-    if (activeTab != TAB_IDX_SCENES) {
-      if (ImGui::MenuItem(ICON_MDI_FOLDER_PLUS " New Folder")) {
-        fs::path parent = basePathAbs;
-        if (!dirState.empty()) parent /= dirState;
-        std::error_code ec;
-        fs::create_directories(parent, ec);
-
-        fs::path target;
+    // New Folder — eager-mirror across both physical roots so the
+    // virtual tree stays parallel.
+    if (ImGui::MenuItem(ICON_MDI_FOLDER_PLUS " New Folder")) {
+      auto pickFreeName = [&](){
         for (int i = 0; i < 1000; ++i) {
           std::string name = (i == 0) ? "NewFolder" : ("NewFolder_" + std::to_string(i + 1));
-          fs::path candidate = parent / name;
-          std::error_code existsEc;
-          if (!fs::exists(candidate, existsEc)) { target = candidate; break; }
+          // Reserve "p64" at the Content root.
+          if (currentDir.empty() && name == "p64") continue;
+          fs::path candA = assetsCurAbs  / name;
+          fs::path candS = scriptsCurAbs / name;
+          if (!fs::exists(candA) && !fs::exists(candS)) return name;
         }
-        if (!target.empty()) {
-          std::error_code mkEc;
-          fs::create_directory(target, mkEc);
-          if (mkEc) {
-            Editor::Noti::add(Editor::Noti::Type::ERROR,
-              "Failed to create folder: " + mkEc.message());
-          }
-        }
-      }
-      hasAny = true;
+        return std::string{"NewFolder"};
+      };
+      std::string name = pickFreeName();
+      std::error_code ec;
+      fs::create_directories(assetsCurAbs  / name, ec);
+      fs::create_directories(scriptsCurAbs / name, ec);
     }
 
-    if (activeTab == TAB_IDX_PREFABS) {
-      if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " New Prefab")) {
-        createBlankPrefab(basePathAbs / tabDirs[activeTab]);
+    ImGui::Separator();
+
+    if (ImGui::MenuItem(ICON_MDI_EARTH_BOX_PLUS " New Scene")) {
+      ctx.project->getScenes().add();
+      // Place the freshly-created scene at the current virtual folder.
+      const auto &after = ctx.project->getScenes().getEntries();
+      if (!after.empty() && !currentDir.empty()) {
+        ctx.project->getScenes().setSceneRelPath(after.back().id, currentDir);
       }
-      hasAny = true;
     }
-    if (activeTab == TAB_IDX_SCRIPTS) {
-      if (ImGui::BeginMenu(ICON_MDI_PLUS " Create")) {
-        if (ImGui::MenuItem("Object Script")) {
-          newScriptDir = tabDirs[activeTab];
-          scriptName = "New_Script";
-          scriptType = 0;
-          wantsNewScript = true;
+
+    if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " New Prefab")) {
+      createBlankPrefab(assetsCurAbs);
+    }
+
+    if (ImGui::BeginMenu(ICON_MDI_FILE_DOCUMENT_PLUS_OUTLINE " New Script")) {
+      if (ImGui::MenuItem("Object Script")) {
+        newScriptDir = currentDir; scriptName = "New_Script"; scriptType = 0;
+        wantsNewScript = true;
+      }
+      if (ImGui::MenuItem("Global Script")) {
+        newScriptDir = currentDir; scriptName = "New_Script"; scriptType = 1;
+        wantsNewScript = true;
+      }
+      if (ImGui::MenuItem("Node Graph")) {
+        newScriptDir = currentDir; scriptName = "New_Graph";  scriptType = 2;
+        wantsNewScript = true;
+      }
+      ImGui::EndMenu();
+    }
+
+    {
+      const auto &resourceTypes = ctx.project->getAssets().getTypeEntries(FileType::RESOURCE_TYPE);
+      if (!resourceTypes.empty()) {
+        if (ImGui::BeginMenu(ICON_MDI_DATABASE_PLUS " New Resource Instance")) {
+          for (const auto &typeEntry : resourceTypes) {
+            if (ImGui::MenuItem(typeEntry.name.c_str())) {
+              newResourceDir = currentDir;
+              newResourceName = "New_" + fs::path(typeEntry.name).stem().string();
+              newResourceTypeUUID = typeEntry.getUUID();
+              wantsNewResource = true;
+            }
+          }
+          ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Global Script")) {
-          newScriptDir = tabDirs[activeTab];
-          scriptName = "New_Script";
-          scriptType = 1;
-          wantsNewScript = true;
-        }
-        if (ImGui::MenuItem("Node Graph")) {
-          newScriptDir = tabDirs[activeTab];
-          scriptName = "New_Graph";
-          scriptType = 2;
-          wantsNewScript = true;
-        }
-        ImGui::EndMenu();
       }
-      hasAny = true;
     }
-    if (activeTab == TAB_IDX_SCENES) {
-      if (ImGui::MenuItem(ICON_MDI_EARTH_BOX_PLUS " New Scene")) {
-        ctx.project->getScenes().add();
-      }
-      hasAny = true;
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem(ICON_MDI_FILE_IMPORT_OUTLINE " Import Asset…")) {
+      using F = Utils::FilePicker::Options::Filter;
+      runImportTo(assetsCurAbs, {
+        F{"Image",       "png"},
+        F{"GLTF/GLB",    "glb,gltf"},
+        F{"Font (TTF)",  "ttf"},
+        F{"Audio (WAV)", "wav"},
+        F{"Music (XM)",  "xm"},
+        F{"Prefab",      "p64prefab"},
+      });
     }
-    if (!importFiltersForTab(activeTab).empty()) {
-      if (hasAny) ImGui::Separator();
-      if (ImGui::MenuItem(ICON_MDI_FILE_IMPORT_OUTLINE " Import Asset…")) {
-        runImport((basePathAbs / tabDirs[activeTab]).string());
-      }
-      hasAny = true;
+    if (ImGui::MenuItem(ICON_MDI_FILE_IMPORT_OUTLINE " Import Script…")) {
+      using F = Utils::FilePicker::Options::Filter;
+      runImportTo(scriptsCurAbs, { F{"C++ Source", "cpp"} });
     }
-    if (!hasAny) {
-      ImGui::TextDisabled("(nothing to create here)");
-    }
+
     ImGui::EndPopup();
   }
   if (wantsNewScript) ImGui::OpenPopup("NewScript");
-
-  if (activeTab == TAB_IDX_SCRIPTS || activeTab == TAB_IDX_SCENES)
-  {
-    checkLineBreak();
-    // set textsize to larger
-
-    ImGui::PushFont(nullptr, 32_px);
-    if (ImGui::Button(
-      (activeTab == TAB_IDX_SCRIPTS) ? ICON_MDI_FILE_DOCUMENT_PLUS_OUTLINE : ICON_MDI_EARTH_BOX_PLUS,
-      textBtnSize
-    )) {
-      if(activeTab == TAB_IDX_SCRIPTS) {
-        newScriptDir = dirState;
-        scriptName = "New_Script";
-        scriptType = 0;
-        ImGui::OpenPopup("NewScript");
-      } else {
-        ctx.project->getScenes().add();
-      }
-    }
-
-    ImGui::PopFont();
-  }
-
-  if (activeTab == TAB_IDX_SCRIPTS && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-  {
-    ImGui::SetTooltip("Create new Script");
-  }
-  if (activeTab == TAB_IDX_SCENES && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-  {
-    ImGui::SetTooltip("Create new Scene");
-  }
+  if (wantsNewResource) ImGui::OpenPopup("NewResource");
 
   ImGui::Dummy({0, 10_px});
 
   ImGui::SetNextWindowSize(ImVec2(250_px, 0));
-  if(ImGui::BeginPopup("NewScript"))
+  if (ImGui::BeginPopup("NewScript"))
   {
     ImTable::start("SCRIPT");
 
@@ -884,14 +949,13 @@ void Editor::AssetsBrowser::draw() {
     ImGui::InputText("##ScriptName", &scriptName);
 
     ImTable::end();
-    // right align buttons
     ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - 112_px);
     if (ImGui::Button("Create"))
     {
       bool res{false};
-      if(scriptType == 0)res = ctx.project->getAssets().createScript(scriptName, false, newScriptDir);
-      if(scriptType == 1)res = ctx.project->getAssets().createScript(scriptName, true, newScriptDir);
-      if(scriptType == 2)res = ctx.project->getAssets().createNodeGraph(scriptName) != 0;
+      if (scriptType == 0) res = ctx.project->getAssets().createScript(scriptName, false, newScriptDir);
+      if (scriptType == 1) res = ctx.project->getAssets().createScript(scriptName, true,  newScriptDir);
+      if (scriptType == 2) res = ctx.project->getAssets().createNodeGraph(scriptName) != 0;
 
       if (res) {
         ImGui::CloseCurrentPopup();
@@ -899,6 +963,41 @@ void Editor::AssetsBrowser::draw() {
         Editor::Noti::add(
           Editor::Noti::Type::ERROR,
           "Failed to create script. File Name may not contain any of [/, \\, :, *, ?, \", <, >, |]."
+        );
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
+  ImGui::SetNextWindowSize(ImVec2(280_px, 0));
+  if (ImGui::BeginPopup("NewResource"))
+  {
+    auto *typeEntry = ctx.project->getAssets().getEntryByUUID(newResourceTypeUUID);
+
+    ImTable::start("RESOURCE");
+    ImTable::add("Type");
+    ImGui::TextUnformatted(typeEntry ? typeEntry->name.c_str() : "(missing)");
+    ImTable::add("Name");
+    ImGui::InputText("##ResName", &newResourceName);
+    ImTable::end();
+
+    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - 112_px);
+    if (ImGui::Button("Create"))
+    {
+      auto uuid = ctx.project->getAssets().createResourceInstance(
+        newResourceName, newResourceTypeUUID, newResourceDir
+      );
+      if (uuid) {
+        ctx.selAssetUUID = uuid;
+        ImGui::CloseCurrentPopup();
+      } else {
+        Editor::Noti::add(
+          Editor::Noti::Type::ERROR,
+          "Failed to create resource instance. Name may not contain any of [/, \\, :, *, ?, \", <, >, |] and the file must not already exist."
         );
       }
     }
@@ -932,18 +1031,18 @@ void Editor::AssetsBrowser::showContextMenu(const std::string& path) {
       Editor::Noti::add(Editor::Noti::Type::ERROR, "Failed to open File. This may be due to WSL path conversion failure.");
     }
   }
-  
+
   if(ImGui::MenuItem(ICON_MDI_CONTENT_COPY " Copy Path")) {
     SDL_SetClipboardText(path.c_str());
   }
-  
+
   if(ImGui::MenuItem(ICON_MDI_RENAME " Rename")) {
     renamePath = path;
-    std::string stem = fs::path(path).stem().string(); 
+    std::string stem = fs::path(path).stem().string();
     strncpy(renameBuffer, stem.c_str(), sizeof(renameBuffer) - 1);
     renameBuffer[sizeof(renameBuffer) - 1] = '\0';
   }
-  
+
   if(ImGui::MenuItem(ICON_MDI_DELETE " Delete")) {
     deletePath = path;
   }

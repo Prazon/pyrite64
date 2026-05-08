@@ -12,15 +12,51 @@ namespace Editor
 {
   class AssetsBrowser
   {
+    public:
+      // One toggle per file kind shown in the unified Content view. Order
+      // is the display order in the left rail and is also the index into
+      // CHIP_DEFS (assetsBrowser.cpp). All-on by default; reset per session.
+      // Public so the .cpp's CHIP_DEFS table can index by these names.
+      enum ChipKind : int {
+        CHIP_SCENES = 0,
+        CHIP_PREFABS,
+        CHIP_IMAGES,
+        CHIP_MODELS,
+        CHIP_AUDIO,
+        CHIP_MUSIC_XM,
+        CHIP_FONTS,
+        CHIP_CODE_OBJ,
+        CHIP_CODE_GLOBAL,
+        CHIP_NODE_GRAPH,
+        CHIP_RESOURCE_TYPE,
+        CHIP_RESOURCE_INSTANCE,
+        CHIP_COUNT
+      };
+
     private:
-      int activeTab{1};
-      std::array<std::string, 4> tabDirs{};
+      std::array<bool, CHIP_COUNT> chips{};
+      // Width of the left chip rail in pixels. Session-only; not persisted.
+      // Clamped at draw time so it can never starve the grid pane.
+      float chipPanelWidth{110.0f};
+      // Virtual content-browser path; "" = Content/ root. Maps onto both
+      // assets/<currentDir> and src/user/<currentDir> in parallel.
+      std::string currentDir{};
       std::string searchFilter{};
       std::string renamePath{};
       std::string deletePath{};
-      char renameBuffer[256];
+      // Pending folder delete (virtual path under Content/). Populated when the
+      // user clicks Delete on a folder; the modal in draw() resolves it across
+      // both physical roots and any nested scenes.
+      std::string deleteFolderPath{};
+      // Pending move target for a scene drag-drop. Folder cells set both fields
+      // when they accept a SCENE payload; the move is applied after the grid
+      // pass so we don't mutate SceneManager mid-iteration.
+      int pendingSceneMoveId{0};
+      std::string pendingSceneMoveTarget{};
+      char renameBuffer[256]{};
 
     public:
+      AssetsBrowser() { chips.fill(true); }
       void draw();
       void showContextMenu(const std::string& path);
   };

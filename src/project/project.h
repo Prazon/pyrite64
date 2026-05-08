@@ -3,6 +3,7 @@
 * @license MIT
 */
 #pragma once
+#include <cstdint>
 #include <string>
 
 #include "assetManager.h"
@@ -24,6 +25,19 @@ namespace Project
 
   // Map a SaveType enum to the literal string libdragon expects in the Makefile.
   const char *saveTypeToMakefileString(uint32_t saveType);
+
+  // Cart sizes the project can target. Today this is advisory — it colors the
+  // ROM Memory Dashboard's budget bar but does not enforce a build cap.
+  inline constexpr int CART_SIZE_COUNT = 4;
+  inline constexpr uint64_t CART_SIZES[CART_SIZE_COUNT] = {
+     8ull * 1024 * 1024,
+    16ull * 1024 * 1024,
+    32ull * 1024 * 1024,
+    64ull * 1024 * 1024,
+  };
+  inline constexpr const char *CART_LABELS[CART_SIZE_COUNT] = {
+    "8 MB", "16 MB", "32 MB", "64 MB"
+  };
 
   struct ProjectConf
   {
@@ -48,6 +62,10 @@ namespace Project
     uint32_t sceneIdOnBoot{1};
     uint32_t sceneIdOnReset{1};
     uint32_t sceneIdLastOpened{1};
+
+    // Index into CART_SIZES (default 3 = 64 MB). Drives the ROM dashboard's
+    // budget bar; not currently enforced by the build pipeline.
+    uint32_t cartSize{3};
 
     std::array<std::string, 8> collLayerNames{};
 
