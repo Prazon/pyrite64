@@ -10,6 +10,8 @@
 #include "../../../utils/string.h"
 #include "imgui/misc/cpp/imgui_stdlib.h"
 
+namespace Project { class Prefab; }
+
 namespace Project::Graph
 {
   struct BuildCtx
@@ -91,6 +93,8 @@ namespace Project::Graph
   };
 }
 
+namespace Project { class Prefab; }
+
 namespace Project::Graph::Node
 {
   extern std::shared_ptr<ImFlow::PinStyle> PIN_STYLE_LOGIC;
@@ -98,6 +102,20 @@ namespace Project::Graph::Node
 
   struct TypeLogic { };
   struct TypeValue { };
+
+  // Prefab-graph context: the prefab and stem name this graph belongs to.
+  // PrefabEventGraphEditor sets this before each draw frame so prefab-aware
+  // nodes (PrefabEvent / PrefabFunc / PrefabVarGet) can list available
+  // events / functions / variables in their dropdowns. Nullptr means "no
+  // prefab context active" — e.g. the standalone NodeEditor — and prefab
+  // nodes degrade to a free-text fallback.
+  struct PrefabCtx
+  {
+    const ::Project::Prefab* prefab{nullptr};
+    std::string prefabName{};
+    std::string projectPath{};
+  };
+  PrefabCtx& activePrefabCtx();
 
   class Base : public ImFlow::BaseNode
   {

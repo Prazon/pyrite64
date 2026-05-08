@@ -38,16 +38,17 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
     if(prefab)srcObj = &prefab->obj;
   }
 
-  // Prefab-instance objects with class variables get a trailing fixed-size
-  // variable block written after the component terminator. The flag below
-  // marks that block so the runtime reader can skip/consume it without
-  // breaking older scenes that don't have it.
-  const bool hasVars = !savePrefabItself && prefab && !prefab->variables.empty();
+  // Prefab-instance roots get a trailing block written after the component
+  // terminator carrying the prefab UUID and any class-variable values.
+  // Triggered for every prefab-instance root, even when the prefab has no
+  // variables, so the runtime always knows which prefab dispatch to call
+  // when an event fires on this object.
+  const bool hasPrefabData = !savePrefabItself && prefab;
 
   uint16_t objFlags = 0;
   if(obj.enabled)objFlags |= P64::ObjectFlags::ACTIVE;
   if(!obj.children.empty())objFlags |= P64::ObjectFlags::HAS_CHILDREN;
-  if(hasVars)objFlags |= P64::ObjectFlags::HAS_PREFAB_VARS;
+  if(hasPrefabData)objFlags |= P64::ObjectFlags::HAS_PREFAB_VARS;
 
   ctx.fileObj.write<uint16_t>(objFlags); // @TODO type
   ctx.fileObj.write<uint16_t>(obj.id);
@@ -111,16 +112,18 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
 
   ctx.fileObj.write<uint32_t>(0);
 
-  if (hasVars) {
-    // Fixed-size variable record: keeps the runtime reader trivial and lets
-    // the engine fast-path skip the block when prefab actors aren't wired up.
-    //   uuid  : uint64                                 (8B)
-    //   kind  : uint8                                  (1B)
-    //   pad   : uint8[3]                               (3B)
-    //   value : uint8[20] (covers vec3=12B and quat=16B; primitives <= 8B)
-    // -> 32 bytes per variable. varCount fits in a uint16; align to 4 bytes.
+  if (hasPrefabData) {
+    // Block layout — fixed sizes so the runtime reader stays trivial:
+    //   prefabUUID : uint32                             (4B)
+    //   varCount   : uint16                             (2B)
+    //   pad        : uint16                             (2B)
+    //   per-variable record (32B each):
+    //     uuid  : uint64
+    //     kind  : uint8 + 3B pad
+    //     value : uint8[20] (covers vec3=12B and quat=16B; primitives <= 8B)
     constexpr int VAR_RECORD_BYTES = 32;
     const auto &vars = prefab->variables;
+    ctx.fileObj.write<uint32_t>(prefab->uuid.value);
     ctx.fileObj.write<uint16_t>(static_cast<uint16_t>(vars.size()));
     ctx.fileObj.write<uint16_t>(0); // padding to 4-byte align value blocks
 

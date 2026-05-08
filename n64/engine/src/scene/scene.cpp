@@ -358,6 +358,17 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
 #endif
 }
 
+// Forward-declare the generated prefab-event dispatch entry without pulling
+// in the project-side header (which only exists once the editor has run a
+// build). The project's prefabEvents.cpp defines the strong symbol; the
+// weak default below is what n64/tests and n64/examples (which build the
+// engine standalone) link against so they don't fail to link.
+namespace P64::PrefabEvents {
+  void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType);
+}
+__attribute__((weak))
+void P64::PrefabEvents::dispatch(P64::Object*, uint32_t, uint16_t) {}
+
 void P64::Scene::runPendingEvents()
 {
   // events, switch now to prevent infinite loops for objects that push events in response to events
@@ -376,6 +387,15 @@ void P64::Scene::runPendingEvents()
           char* dataPtr = (char*)obj + compRefs[i].offset;
           compDef.onEvent(*obj, dataPtr, entry.event);
         }
+      }
+
+      // Prefab event-graph dispatch. Fires after component handlers so
+      // built-in component behavior (e.g. RigidBody enable/disable bookkeeping)
+      // runs before user graph nodes. No-op when prefabUUID is 0 (object
+      // isn't a prefab instance root or the build didn't generate dispatch
+      // for this prefab).
+      if(obj->prefabUUID != 0) {
+        P64::PrefabEvents::dispatch(obj, obj->prefabUUID, entry.event.type);
       }
     }
   }

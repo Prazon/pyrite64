@@ -9,6 +9,7 @@
 #include "../../../../utils/fs.h"
 #include "../../../../utils/logger.h"
 #include "../../../../project/graph/nodes/baseNode.h"
+#include "../../../../project/graph/nodes/nodePrefabEvent.h"
 
 namespace
 {
@@ -59,13 +60,51 @@ Editor::PrefabEventGraphEditor::PrefabEventGraphEditor(uint64_t prefabAssetUUID)
   auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
   if (!asset || !asset->prefab) return;
 
-  // Load existing graph state if any. An empty eventGraphJSON means this is
-  // the first time the user has opened the graph — start with a blank canvas.
+  // Load existing graph state if any. When the prefab has no graph yet,
+  // seed default event entry nodes — same idea as GameMaker's pre-listed
+  // object events (Create / Step / Draw): users open the graph to a layout
+  // that already shows the common entry points, ready to be wired up.
   const std::string &jsonState = asset->prefab->eventGraphJSON;
   if (!jsonState.empty()) {
     graph.deserialize(jsonState);
+  } else {
+    // Find the registry indices for our PrefabEvent nodes by name. The
+    // alternative — hardcoding the index — is fragile against future
+    // additions to NODE_TABLE.
+    auto &names = Project::Graph::Graph::getNodeNames();
+    auto findIdx = [&](const char* needle) -> int {
+      for (size_t i = 0; i < names.size(); ++i) {
+        if (names[i].find(needle) != std::string::npos) return static_cast<int>(i);
+      }
+      return -1;
+    };
+    int eventIdx = findIdx("Event");
+    if (eventIdx >= 0) {
+      using Kind = Project::Graph::Node::PrefabEvent::Kind;
+      struct Seed { Kind kind; float y; };
+      Seed seeds[] = {
+        {Kind::Ready,   40.0f},
+        {Kind::Enable,  180.0f},
+        {Kind::Disable, 320.0f},
+      };
+      for (const auto &s : seeds) {
+        auto node = graph.addNode(static_cast<uint32_t>(eventIdx), {40.0f, s.y});
+        if (auto evt = dynamic_cast<Project::Graph::Node::PrefabEvent*>(node.get())) {
+          evt->kind = s.kind;
+          evt->updateTitle();
+        }
+      }
+    }
   }
+  // savedState reflects whatever's on screen now — including seeded nodes.
+  // That way the editor doesn't immediately read as dirty on first open;
+  // the seeds become "the saved state" until the user actually edits.
   savedState = graph.serialize();
+  // Persist the seeded layout immediately so a fresh prefab on disk
+  // matches the in-editor state next time it's opened.
+  if (jsonState.empty() && !savedState.empty()) {
+    asset->prefab->eventGraphJSON = savedState;
+  }
 
   graph.graph.droppedLinkPopUpContent([this](ImFlow::Pin* pin) {
     drawCreatePopup(graph, pin);
@@ -120,14 +159,20 @@ bool Editor::PrefabEventGraphEditor::draw()
   // multi-viewport support landed.
   winName = title + "###PrefabEventGraphWin_" + std::to_string(assetUUID);
 
+  // Force own OS window via NoAutoMerge — see PrefabEditor::draw for rationale.
+  ImGuiWindowClass cls{};
+  cls.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+  ImGui::SetNextWindowClass(&cls);
+
   if (!isInit) {
     isInit = true;
-    // Spawn outside the main viewport's right edge so ImGui's multi-viewport
-    // backend gives this editor its own OS window (Unreal-style).
     auto *mvp = ImGui::GetMainViewport();
     ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(
-      {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
+      {
+        mvp->Pos.x + (mvp->Size.x - DEF_WIN_SIZE.x) * 0.5f,
+        mvp->Pos.y + (mvp->Size.y - DEF_WIN_SIZE.y) * 0.5f,
+      },
       ImGuiCond_FirstUseEver
     );
   }
@@ -153,8 +198,20 @@ bool Editor::PrefabEventGraphEditor::draw()
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save();
   }
 
+  // Push prefab context so prefab-aware nodes (PrefabEvent / PrefabFunc /
+  // PrefabVarGet) can populate their dropdowns from this prefab's data.
+  // Reset after to keep the standalone NodeEditor's view of the world clean.
+  auto &pctx = Project::Graph::Node::activePrefabCtx();
+  pctx.prefab      = asset->prefab.get();
+  pctx.prefabName  = asset->name;
+  pctx.projectPath = ctx.project->getPath();
+
   graph.graph.setSize(ImGui::GetContentRegionAvail());
   graph.graph.update();
+
+  pctx.prefab = nullptr;
+  pctx.prefabName.clear();
+  pctx.projectPath.clear();
 
   ImGui::End();
   return isOpen;

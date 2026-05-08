@@ -20,6 +20,20 @@
 #include "nodes/nodeArg.h"
 #include "nodes/nodeSwitchCase.h"
 #include "nodes/nodeNote.h"
+#include "nodes/nodePrefabEvent.h"
+#include "nodes/nodePrefabFunc.h"
+#include "nodes/nodePrefabVarGet.h"
+
+namespace Project::Graph::Node
+{
+  PrefabCtx& activePrefabCtx()
+  {
+    // File-scope context — set by PrefabEventGraphEditor before each frame's
+    // graph.update() and reset after. Single-thread ImGui means no reentry.
+    static PrefabCtx ctx;
+    return ctx;
+  }
+}
 
 namespace
 {
@@ -83,6 +97,11 @@ namespace Project::Graph
     TABLE_ENTRY(Arg),
     TABLE_ENTRY(SwitchCase),
     TABLE_ENTRY(Note),
+    // Prefab-only nodes (Phase 3.2). Indices appended to keep saved graphs
+    // stable; the persisted "type" field is an index into this table.
+    TABLE_ENTRY(PrefabEvent),
+    TABLE_ENTRY(PrefabFunc),
+    TABLE_ENTRY(PrefabVarGet),
   });
 
   const std::vector<std::string> & Graph::getNodeNames()

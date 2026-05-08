@@ -44,6 +44,12 @@ namespace P64
       uint16_t varCount{0};
       uint16_t varDataOffset{0}; // bytes from `this` to the variable buffer
 
+      // Prefab UUID — the asset uuid of the Project::Prefab this object was
+      // instantiated from, or 0 if this object isn't a prefab instance root.
+      // Used by the event dispatch (P64::PrefabEvents::dispatch) to route
+      // event firings to the right per-prefab generated dispatch function.
+      uint32_t prefabUUID{0};
+
       // extra data, is overlapping with component data if unused
       fm_quat_t rot{};
       fm_vec3_t pos{};

@@ -165,13 +165,22 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   // spawn-as-its-own-OS-window default.
   winName = baseTitle + "###PrefabEditorWin_" + std::to_string(assetUUID);
 
-  // Spawn outside the main viewport's right edge so ImGui's multi-viewport
-  // backend gives this editor its own OS window (Unreal-style asset editor).
-  // FirstUseEver lets the user re-dock or move it later and have that stick.
+  // Force ImGui to give this editor its own OS-level platform window
+  // (Unreal-style asset editor) instead of merging it back into the main
+  // viewport. Without NoAutoMerge, an ImGui window placed inside the main
+  // viewport's bounds is rendered as a sub-window and can't be resized or
+  // maximized by the OS — only by ImGui's internal handles.
+  ImGuiWindowClass cls{};
+  cls.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+  ImGui::SetNextWindowClass(&cls);
+
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(
-    {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
+    {
+      mvp->Pos.x + (mvp->Size.x - DEF_WIN_SIZE.x) * 0.5f,
+      mvp->Pos.y + (mvp->Size.y - DEF_WIN_SIZE.y) * 0.5f,
+    },
     ImGuiCond_FirstUseEver
   );
   if (forceFocusNextFrame) {

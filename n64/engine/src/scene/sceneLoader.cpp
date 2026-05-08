@@ -92,15 +92,17 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
     ++compCount;
   }
 
-  // Prefab variable block sits past the components terminator (4 zero bytes)
-  // when the file-format flag HAS_PREFAB_VARS is set. We read the count here
-  // so allocSize includes the variable buffer alongside the component data;
-  // the second pass below memcpys the bytes in.
+  // Prefab data block sits past the components terminator (4 zero bytes)
+  // when the file-format flag HAS_PREFAB_VARS is set. The block carries
+  // the prefab uuid + an optional run of class-variable records:
+  //   uint32 prefabUUID, uint16 varCount, uint16 pad, then varCount * 32B
   uint16_t varCount = 0;
   uint32_t varDataSize = 0;
+  uint32_t prefabUUIDFromFile = 0;
   if(objEntry->flags & ObjectFlags::HAS_PREFAB_VARS) {
-    auto *varHdr = ptrIn + 4; // skip the comp-terminator
-    __builtin_memcpy(&varCount, varHdr, sizeof(varCount));
+    auto *blkHdr = ptrIn + 4; // skip the comp-terminator
+    __builtin_memcpy(&prefabUUIDFromFile, blkHdr,     sizeof(prefabUUIDFromFile));
+    __builtin_memcpy(&varCount,           blkHdr + 4, sizeof(varCount));
     constexpr uint32_t VAR_RECORD_BYTES = 32;
     varDataSize = (uint32_t)varCount * VAR_RECORD_BYTES;
   }
@@ -136,6 +138,7 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
   obj->flags = objEntry->flags;
   obj->compCount = compCount;
   obj->varCount = varCount;
+  obj->prefabUUID = prefabUUIDFromFile;
   // Variable buffer offset gets filled in below once the comp-data extent
   // is known. Leave at 0 here so getPrefabVarBytes returns null if anything
   // bails out before the copy completes.
@@ -189,15 +192,16 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
   objFile = ptrIn + 4;
 
   // Copy the prefab-variable records into the tail of this object's alloc
-  // (right after compData). The allocSize pre-scan above reserved exactly
-  // varCount*32 bytes there. Skip the 4-byte (count + pad) file header and
-  // copy the fixed-size records straight in. We clear the file-format flag
-  // bit so runtime code never sees a marker that only matters at load time.
+  // (right after compData). The pre-scan above reserved exactly
+  // varCount*32 bytes there. Skip the 8-byte block header (uuid + count +
+  // pad — already consumed in the pre-scan) and copy the fixed-size
+  // records straight in. We clear the file-format flag bit so runtime
+  // code never sees a marker that only matters at load time.
   if(obj->flags & ObjectFlags::HAS_PREFAB_VARS) {
     constexpr uint32_t VAR_RECORD_BYTES = 32;
     auto *varDest = (uint8_t*)objCompDataPtr;
     obj->varDataOffset = (uint16_t)(varDest - (uint8_t*)obj);
-    objFile += 4; // skip count(2) + pad(2)
+    objFile += 8; // skip prefabUUID(4) + varCount(2) + pad(2)
     uint32_t varBytes = (uint32_t)obj->varCount * VAR_RECORD_BYTES;
     if(varBytes > 0) __builtin_memcpy(varDest, objFile, varBytes);
     objFile += varBytes;
