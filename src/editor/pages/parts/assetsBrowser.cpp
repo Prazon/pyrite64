@@ -667,6 +667,11 @@ void Editor::AssetsBrowser::draw() {
     }
   };
 
+  // OpenPopup is scoped by the current ID stack, so calling it from inside
+  // BeginPopupContextWindow opens a popup nested under the context menu —
+  // which BeginPopup("NewScript") at the parent scope will never find.
+  // Defer the open until after EndPopup so it lands at the right scope.
+  bool wantsNewScript = false;
   if (ImGui::BeginPopupContextWindow("AssetsBrowserCtx",
         ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
   {
@@ -683,19 +688,19 @@ void Editor::AssetsBrowser::draw() {
           newScriptDir = tabDirs[activeTab];
           scriptName = "New_Script";
           scriptType = 0;
-          ImGui::OpenPopup("NewScript");
+          wantsNewScript = true;
         }
         if (ImGui::MenuItem("Global Script")) {
           newScriptDir = tabDirs[activeTab];
           scriptName = "New_Script";
           scriptType = 1;
-          ImGui::OpenPopup("NewScript");
+          wantsNewScript = true;
         }
         if (ImGui::MenuItem("Node Graph")) {
           newScriptDir = tabDirs[activeTab];
           scriptName = "New_Graph";
           scriptType = 2;
-          ImGui::OpenPopup("NewScript");
+          wantsNewScript = true;
         }
         ImGui::EndMenu();
       }
@@ -719,6 +724,7 @@ void Editor::AssetsBrowser::draw() {
     }
     ImGui::EndPopup();
   }
+  if (wantsNewScript) ImGui::OpenPopup("NewScript");
 
   if (activeTab == TAB_IDX_SCRIPTS || activeTab == TAB_IDX_SCENES)
   {
