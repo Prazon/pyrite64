@@ -197,10 +197,9 @@ Editor::Viewport3D::Viewport3D()
     onRenderPass(cmdBuff, renderScene);
   });
   ctx.scene->addCopyPass(passId, [this](SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPass *copyPass) {
-    // Skip the whole copy-pass when the host window didn't draw this frame.
-    // dummySkeleton.update uploads to a GPU storage buffer; doing that on a
-    // soon-to-be-destroyed viewport leaves an in-flight upload that races
-    // the destructor's buffer release on the next frame.
+    // Gate the lambda on drewThisFrame: dummySkeleton.update uploads to a
+    // GPU storage buffer; running it on a soon-to-be-destroyed viewport
+    // races the destructor's buffer release on the next frame.
     if (!drewThisFrame) return;
     dummySkeleton.update(*copyPass);
     onCopyPass(cmdBuff, copyPass);
@@ -303,9 +302,11 @@ void Editor::Viewport3D::addBillboardQuad(const glm::vec3 &worldPos, uint32_t ob
 }
 
 Editor::Viewport3D::~Viewport3D() {
-  ctx.scene->removeRenderPass(passId);
-  ctx.scene->removeCopyPass(passId);
-  ctx.scene->removePostRenderCallback(passId);
+  if (ctx.scene) {
+    ctx.scene->removeRenderPass(passId);
+    ctx.scene->removeCopyPass(passId);
+    ctx.scene->removePostRenderCallback(passId);
+  }
 
   if(--spritesRefCount == 0) {
     sprites = nullptr;

@@ -3,6 +3,7 @@
 * @license MIT
 */
 #pragma once
+#include <memory>
 #include <SDL3/SDL.h>
 
 #include "vertBuffer.h"
@@ -14,7 +15,11 @@ namespace Renderer
 {
   class Scene;
 
-  class Mesh
+  // enable_shared_from_this so recreate()'s deferred copy-pass lambda can
+  // hold the mesh alive until it runs. Without this, when a Viewport3D
+  // destroys its per-frame meshes the lambda is left holding a dangling
+  // `this` and blows up on the next frame's copy-pass drain.
+  class Mesh : public std::enable_shared_from_this<Mesh>
   {
     private:
       Renderer::VertBuffer *vertBuff{nullptr};

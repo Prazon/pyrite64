@@ -31,7 +31,13 @@ void Renderer::Mesh::recreate(Renderer::Scene &scene, bool clearData) {
     vertBuff->setData(vertices, indices);
   }
 
-  scene.addOneTimeCopyPass([this, clearData](SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPass *copyPass){
+  // Hold a shared_ptr to ourselves in the lambda when we're owned by one,
+  // so the deferred upload can't outlive the Mesh. weak_from_this() returns
+  // an expired weak_ptr if the mesh isn't currently shared_ptr-owned (e.g.
+  // N64Mesh::mesh is a value member); in that case the caller manages
+  // lifetime and the captured `this` is safe.
+  auto selfPtr = weak_from_this().lock();
+  scene.addOneTimeCopyPass([selfPtr, this, clearData](SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPass *copyPass){
     if(!vertBuff)return;
     vertBuff->upload(*copyPass);
     dataReady = true;
