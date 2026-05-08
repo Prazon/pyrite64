@@ -162,6 +162,14 @@ static std::string replaceFunctionToken(
   return out;
 }
 
+void Project::ensurePrefabUserSource(
+  const std::string &projectPath,
+  const std::string &prefabName)
+{
+  if (prefabName.empty()) return;
+  (void)ensureUserSourcePair(projectPath, prefabName);
+}
+
 bool Project::renamePrefabFunction(
   const std::string &projectPath,
   const std::string &prefabName,

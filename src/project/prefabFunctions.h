@@ -31,6 +31,16 @@ namespace Project
   // Replaces non-[A-Za-z0-9_] with '_'; prefixes a leading digit with '_'.
   std::string sanitizePrefabIdent(std::string s);
 
+  // Ensure the per-prefab user source pair exists at
+  // <projectPath>/src/user/<prefabName>.{h,cpp}. Idempotent — creates the
+  // files with the standard scaffold (matching what +Add Function uses) only
+  // when missing. Called at prefab-creation time so the Code panel in the
+  // prefab editor always has files to list.
+  void ensurePrefabUserSource(
+    const std::string &projectPath,
+    const std::string &prefabName
+  );
+
   // Append a new P64_NODE function declaration to the prefab's user header
   // and a matching empty implementation to the .cpp. Creates the file pair
   // if it doesn't exist yet (matches the scaffold AssetsBrowser uses for

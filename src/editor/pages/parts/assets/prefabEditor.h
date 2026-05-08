@@ -118,6 +118,7 @@ namespace Editor
       void loadFromDisk();
       void saveToDisk();
       void drawLeftPane();
+      void drawCodePanel();
       void drawGraphsPanel();
       void drawVariablesPanel();
       void drawFunctionsPanel();

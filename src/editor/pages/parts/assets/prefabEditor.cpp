@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
+#include <string_view>
 
 #include "imgui_internal.h"
 #include "IconsMaterialDesignIcons.h"
@@ -162,8 +164,17 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
   if (!asset || asset->type != Project::FileType::PREFAB) return false;
 
+  // Display name strips a trailing ".prefab" — the icon already conveys the
+  // asset type, and "Player.prefab" reads as redundant in a tab strip.
+  std::string displayName = asset->name;
+  constexpr std::string_view kPrefabExt{".prefab"};
+  if (displayName.size() > kPrefabExt.size()
+      && std::string_view{displayName}.substr(
+           displayName.size() - kPrefabExt.size()) == kPrefabExt) {
+    displayName.resize(displayName.size() - kPrefabExt.size());
+  }
   std::string baseTitle = std::string{ICON_MDI_PACKAGE_VARIANT_CLOSED " "}
-    + asset->name + (isDirty() ? " *" : "");
+    + displayName + (isDirty() ? " *" : "");
   // Stable ImGui ID via ###suffix so renaming the asset doesn't lose
   // saved dock state, and so legacy imgui.ini entries (no ### before this)
   // don't override our default tab placement next to Scene Editor.
@@ -284,6 +295,8 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   ImGui::End();
 
   ImGui::Begin(winMyP.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    if (ImGui::CollapsingHeader(ICON_MDI_LANGUAGE_CPP " Code",
+          ImGuiTreeNodeFlags_DefaultOpen)) drawCodePanel();
     if (ImGui::CollapsingHeader(ICON_MDI_GRAPH " Graphs",
           ImGuiTreeNodeFlags_DefaultOpen)) drawGraphsPanel();
     if (ImGui::CollapsingHeader(ICON_MDI_VARIABLE " Variables",
@@ -468,6 +481,74 @@ void Editor::PrefabEditor::drawVariablesPanel()
     ImGui::PopID();
   }
   ImGui::PopID(); // "vars"
+}
+
+void Editor::PrefabEditor::drawCodePanel()
+{
+  if (!ctx.project) return;
+
+  // Two rows: the .h and the .cpp under <project>/src/user/<prefabName>.
+  // Mirrors the path convention scanPrefabFunctions / addPrefabFunction
+  // already use, so what's listed here is exactly what the function-body
+  // pipeline edits. Click opens (or focuses) the file as a sibling tab of
+  // the viewport / event graph, matching the EventGraph and function-source
+  // dock target.
+  namespace fs = std::filesystem;
+  const std::string prefabName = getName();
+  if (prefabName.empty()) {
+    ImGui::TextDisabled("(no prefab)");
+    return;
+  }
+
+  const std::string base = ctx.project->getPath() + "/src/user/" + prefabName;
+  const std::string headerPath = base + ".h";
+  const std::string sourcePath = base + ".cpp";
+
+  std::error_code ec;
+  const bool hasHeader = fs::exists(headerPath, ec);
+  const bool hasSource = fs::exists(sourcePath, ec);
+
+  auto openIn = [&](const std::string &absPath) {
+    if (!ctx.editorScene) return;
+    ctx.editorScene->openCodeEditorByPath(absPath, viewportDockNodeID);
+    // Track the synthetic UUID so this tab is torn down with the prefab
+    // editor. Same path-hash openCodeEditorByPath uses internally — kept in
+    // sync with editorScene.cpp.
+    uint64_t synth = Utils::Hash::sha256_64bit(absPath);
+    if (std::find(ownedCodeEditorUUIDs.begin(),
+                  ownedCodeEditorUUIDs.end(), synth)
+          == ownedCodeEditorUUIDs.end()) {
+      ownedCodeEditorUUIDs.push_back(synth);
+    }
+  };
+
+  auto drawRow = [&](const char* icon, const std::string &label,
+                     const std::string &absPath, bool exists) {
+    if (!exists) ImGui::BeginDisabled();
+    std::string row = std::string{icon} + " " + label;
+    if (!exists) row += "  (missing)";
+    if (ImGui::Selectable(row.c_str(), false,
+          ImGuiSelectableFlags_AllowDoubleClick)) {
+      if (exists) openIn(absPath);
+    }
+    if (!exists) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered() && exists) {
+      ImGui::SetTooltip("%s", absPath.c_str());
+    }
+  };
+
+  drawRow(ICON_MDI_FILE_CODE_OUTLINE, prefabName + ".h",   headerPath, hasHeader);
+  drawRow(ICON_MDI_LANGUAGE_CPP,      prefabName + ".cpp", sourcePath, hasSource);
+
+  // Fallback for legacy prefabs that pre-date the auto-create-on-creation
+  // behavior — surface a one-click way to scaffold the pair so users don't
+  // have to go through +Add Function just to materialize the files.
+  if (!hasHeader || !hasSource) {
+    ImGui::Spacing();
+    if (ImGui::SmallButton(ICON_MDI_PLUS " Create source files")) {
+      Project::ensurePrefabUserSource(ctx.project->getPath(), prefabName);
+    }
+  }
 }
 
 void Editor::PrefabEditor::drawGraphsPanel()

@@ -22,6 +22,7 @@
 #include "../../../utils/filePicker.h"
 #include "../../../utils/hash.h"
 #include "../../../project/scene/prefab.h"
+#include "../../../project/prefabFunctions.h"
 
 using FileType = Project::FileType;
 namespace fs = std::filesystem;
@@ -950,6 +951,15 @@ void Editor::AssetsBrowser::draw() {
     prefab.obj.rot.value = {0, 0, 0, 1};
 
     Utils::FS::saveTextFile(fullPath.string(), prefab.serialize());
+
+    // Scaffold the per-prefab user source pair alongside the .prefab so the
+    // Code panel in the prefab editor has files to list immediately. Uses the
+    // same naming the existing P64_NODE scanner expects (filename including
+    // the .prefab extension), so addPrefabFunction / scanPrefabFunctions
+    // continue to round-trip cleanly.
+    Project::ensurePrefabUserSource(
+      ctx.project->getPath(), fullPath.filename().string()
+    );
     ctx.project->getAssets().reload();
 
     if (ctx.editorScene) {
