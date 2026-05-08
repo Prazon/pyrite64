@@ -33,6 +33,15 @@ namespace Editor
         CHIP_COUNT
       };
 
+      // Split-mode tab indices. Order matches the TabBar in draw().
+      enum SplitTab : int {
+        TAB_SCENES  = 0,
+        TAB_ASSETS  = 1,
+        TAB_SCRIPTS = 2,
+        TAB_PREFABS = 3,
+        TAB_COUNT   = 4,
+      };
+
     private:
       std::array<bool, CHIP_COUNT> chips{};
       // Width of the left chip rail in pixels. Session-only; not persisted.
@@ -40,7 +49,17 @@ namespace Editor
       float chipPanelWidth{110.0f};
       // Virtual content-browser path; "" = Content/ root. Maps onto both
       // assets/<currentDir> and src/user/<currentDir> in parallel.
+      // In Split mode this aliases tabDirs[activeTab] each frame.
       std::string currentDir{};
+      // Split-mode state: each tab keeps its own nav stack so switching
+      // tabs doesn't clobber where the user was browsing in another.
+      int activeTab{TAB_ASSETS};
+      std::array<std::string, TAB_COUNT> tabDirs{};
+      // Single-click selection for non-asset items. Files use ctx.selAssetUUID;
+      // these mirror that pattern for folders / scenes so single-click only
+      // highlights and double-click is what actually navigates / loads.
+      std::string selectedFolder{};
+      int selectedSceneId{0};
       std::string searchFilter{};
       std::string renamePath{};
       std::string deletePath{};

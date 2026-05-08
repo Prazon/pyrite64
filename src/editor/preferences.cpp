@@ -38,6 +38,7 @@ void Editor::Preferences::load()
     fpsLimit = doc.value("fpsLimit", DEF.fpsLimit);
     showRotAsEuler = doc.value("showRotAsEuler", DEF.showRotAsEuler);
     mouseWheelModifiesSpeed = doc.value("mouseWheelModifiesSpeed", DEF.mouseWheelModifiesSpeed);
+    contentBrowserMode = (ContentBrowserMode)doc.value("contentBrowserMode", (int)DEF.contentBrowserMode);
   } else {
     applyKeymapPreset();
   }
@@ -58,6 +59,7 @@ void Editor::Preferences::save()
     .set("fpsLimit", fpsLimit)
     .set("showRotAsEuler", showRotAsEuler)
     .set("mouseWheelModifiesSpeed", mouseWheelModifiesSpeed)
+    .set("contentBrowserMode", (int)contentBrowserMode)
     .toString();
   auto prefPath = getPrefsPath();
   printf("Saving prefs to %s\n", prefPath.c_str());

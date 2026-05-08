@@ -121,12 +121,18 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
   winName = "Model: " + model->name
     + "###ModelEditorWin_" + std::to_string(assetUUID);
 
-  // Spawn outside the main viewport's right edge so ImGui's multi-viewport
-  // backend gives this editor its own OS window (Unreal-style asset editor).
+  // Force own OS window via NoAutoMerge — see PrefabEditor::draw for rationale.
+  ImGuiWindowClass cls{};
+  cls.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+  ImGui::SetNextWindowClass(&cls);
+
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(
-    {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
+    {
+      mvp->Pos.x + (mvp->Size.x - DEF_WIN_SIZE.x) * 0.5f,
+      mvp->Pos.y + (mvp->Size.y - DEF_WIN_SIZE.y) * 0.5f,
+    },
     ImGuiCond_FirstUseEver
   );
 

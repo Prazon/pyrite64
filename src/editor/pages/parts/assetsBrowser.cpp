@@ -106,7 +106,47 @@ void Editor::AssetsBrowser::draw() {
   auto &scenes   = ctx.project->getScenes().getEntries();
   auto &assetMgr = ctx.project->getAssets();
 
+  const bool splitMode = (ctx.prefs.contentBrowserMode == Editor::ContentBrowserMode::Split);
+
+  // In Split mode each tab keeps its own nav state, so currentDir aliases
+  // tabDirs[activeTab] for the duration of the frame and is written back
+  // before exit. The unified-mode currentDir is preserved across mode flips.
+  if (splitMode) currentDir = tabDirs[activeTab];
   currentDir = normalizeDir(currentDir);
+
+  // Tab-scoped chip mask. In Unified mode we read the user's persistent
+  // chip toggles; in Split mode the active tab implies which chips matter
+  // and chips[] is hidden. Computed locally so toggling between modes
+  // doesn't clobber unified-mode chip state.
+  std::array<bool, ChipKind::CHIP_COUNT> activeChips{};
+  if (splitMode) {
+    activeChips.fill(false);
+    switch (activeTab) {
+      case TAB_SCENES:
+        activeChips[CHIP_SCENES] = true;
+        break;
+      case TAB_ASSETS:
+        activeChips[CHIP_PREFABS]            = true;
+        activeChips[CHIP_IMAGES]             = true;
+        activeChips[CHIP_MODELS]             = true;
+        activeChips[CHIP_AUDIO]              = true;
+        activeChips[CHIP_MUSIC_XM]           = true;
+        activeChips[CHIP_FONTS]              = true;
+        activeChips[CHIP_RESOURCE_INSTANCE]  = true;
+        break;
+      case TAB_SCRIPTS:
+        activeChips[CHIP_CODE_OBJ]      = true;
+        activeChips[CHIP_CODE_GLOBAL]   = true;
+        activeChips[CHIP_NODE_GRAPH]    = true;
+        activeChips[CHIP_RESOURCE_TYPE] = true;
+        break;
+      case TAB_PREFABS:
+        activeChips[CHIP_PREFABS] = true;
+        break;
+    }
+  } else {
+    activeChips = chips;
+  }
 
   fs::path assetsRootAbs  = physicalRoot(false);
   fs::path scriptsRootAbs = physicalRoot(true);
@@ -117,59 +157,89 @@ void Editor::AssetsBrowser::draw() {
   fs::path assetsCurAbs  = assetsRootAbs  / currentDir;
   fs::path scriptsCurAbs = scriptsRootAbs / currentDir;
 
-  // ── LEFT: filter chip rail ────────────────────────────────────────────
+  // ── LEFT: filter chip rail (Unified mode only) ───────────────────────
   // Resizable via the splitter button between LEFT and RIGHT below; the
   // pattern mirrors PrefabEditor's drawSplitter (assets/prefabEditor.cpp).
+  // Hidden entirely in Split mode — the tab strip drives content scoping.
   constexpr float SPLITTER_W   = 4.0f;
   constexpr float CHIP_MIN_W   = 60.0f;
   constexpr float CHIP_MAX_PAD = 200.0f; // leave at least this much for the grid
   float fullAvail = ImGui::GetContentRegionAvail().x;
-  chipPanelWidth = ImClamp(chipPanelWidth, CHIP_MIN_W,
-                           std::max(CHIP_MIN_W, fullAvail - CHIP_MAX_PAD - SPLITTER_W));
+  float availWidth;
 
-  ImGui::BeginChild("LEFT", ImVec2(chipPanelWidth, 0), ImGuiChildFlags_Borders);
-  for (int i = 0; i < ChipKind::CHIP_COUNT; ++i) {
-    const auto &def = CHIP_DEFS[i];
-    bool on = chips[i];
-    std::string label = std::string(def.icon) + "  " + def.name;
-    // Selectable's "selected" state stands in for "filter on". Right-click
-    // pops the solo / show-all menu.
-    if (ImGui::Selectable((label + "##chip").c_str(), on)) {
-      chips[i] = !on;
-    }
-    if (ImGui::BeginPopupContextItem(("chipctx" + std::to_string(i)).c_str())) {
-      if (ImGui::MenuItem("Solo")) {
-        for (int j = 0; j < ChipKind::CHIP_COUNT; ++j) chips[j] = (j == i);
-      }
-      if (ImGui::MenuItem("Show All")) {
-        chips.fill(true);
-      }
-      ImGui::EndPopup();
-    }
-  }
-  ImGui::EndChild();
-
-  // Vertical splitter — drag to resize the chip rail. Styled like
-  // ImGuiCol_Separator so it visually reads as a divider, not a button.
-  ImGui::SameLine();
-  ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetStyleColorVec4(ImGuiCol_Separator));
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
-  ImGui::Button("##chipSplitter", ImVec2(SPLITTER_W, -1));
-  ImGui::PopStyleColor(3);
-  if (ImGui::IsItemActive()) {
-    chipPanelWidth = ImClamp(chipPanelWidth + ImGui::GetIO().MouseDelta.x,
-                             CHIP_MIN_W,
+  if (!splitMode) {
+    chipPanelWidth = ImClamp(chipPanelWidth, CHIP_MIN_W,
                              std::max(CHIP_MIN_W, fullAvail - CHIP_MAX_PAD - SPLITTER_W));
-  }
-  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+    ImGui::BeginChild("LEFT", ImVec2(chipPanelWidth, 0), ImGuiChildFlags_Borders);
+    for (int i = 0; i < ChipKind::CHIP_COUNT; ++i) {
+      const auto &def = CHIP_DEFS[i];
+      bool on = chips[i];
+      std::string label = std::string(def.icon) + "  " + def.name;
+      // Selectable's "selected" state stands in for "filter on". Right-click
+      // pops the solo / show-all menu.
+      if (ImGui::Selectable((label + "##chip").c_str(), on)) {
+        chips[i] = !on;
+      }
+      if (ImGui::BeginPopupContextItem(("chipctx" + std::to_string(i)).c_str())) {
+        if (ImGui::MenuItem("Solo")) {
+          for (int j = 0; j < ChipKind::CHIP_COUNT; ++j) chips[j] = (j == i);
+        }
+        if (ImGui::MenuItem("Show All")) {
+          chips.fill(true);
+        }
+        ImGui::EndPopup();
+      }
+    }
+    ImGui::EndChild();
+
+    // Vertical splitter — drag to resize the chip rail. Styled like
+    // ImGuiCol_Separator so it visually reads as a divider, not a button.
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetStyleColorVec4(ImGuiCol_Separator));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
+    ImGui::Button("##chipSplitter", ImVec2(SPLITTER_W, -1));
+    ImGui::PopStyleColor(3);
+    if (ImGui::IsItemActive()) {
+      chipPanelWidth = ImClamp(chipPanelWidth + ImGui::GetIO().MouseDelta.x,
+                               CHIP_MIN_W,
+                               std::max(CHIP_MIN_W, fullAvail - CHIP_MAX_PAD - SPLITTER_W));
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+
+    availWidth = ImGui::GetContentRegionAvail().x - 24_px - chipPanelWidth - SPLITTER_W;
+    ImGui::SameLine();
+  } else {
+    availWidth = fullAvail - 24_px;
   }
 
-  // ── RIGHT: breadcrumb + grid ──────────────────────────────────────────
-  auto availWidth = ImGui::GetContentRegionAvail().x - 24_px - chipPanelWidth - SPLITTER_W;
-  ImGui::SameLine();
+  // ── RIGHT: optional tab bar + breadcrumb + grid ──────────────────────
   ImGui::BeginChild("RIGHT");
+
+  // Split-mode tab strip. Each tab pulls/pushes its own currentDir from
+  // tabDirs so per-tab navigation is sticky.
+  if (splitMode) {
+    tabDirs[activeTab] = currentDir;
+    if (ImGui::BeginTabBar("##cbTabs", ImGuiTabBarFlags_None)) {
+      auto tabItem = [&](const char* label, int idx) {
+        if (ImGui::BeginTabItem(label)) {
+          if (activeTab != idx) {
+            activeTab = idx;
+            currentDir = normalizeDir(tabDirs[idx]);
+          }
+          ImGui::EndTabItem();
+        }
+      };
+      tabItem(ICON_MDI_EARTH_BOX " Scenes",                 TAB_SCENES);
+      tabItem(ICON_MDI_FILE_IMAGE_OUTLINE " Assets",        TAB_ASSETS);
+      tabItem(ICON_MDI_LANGUAGE_CPP " Scripts",             TAB_SCRIPTS);
+      tabItem(ICON_MDI_PACKAGE_VARIANT_CLOSED " Prefabs",   TAB_PREFABS);
+      ImGui::EndTabBar();
+    }
+  }
 
   // Breadcrumb + search (Content / sub / dir)
   {
@@ -210,9 +280,36 @@ void Editor::AssetsBrowser::draw() {
     ImGui::PopStyleVar(2);
 
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - 160_px - 2_px);
-    ImGui::SetNextItemWidth(160_px);
+    // Reserve trailing space for: search box + gap + kebab button + edge gap.
+    constexpr float SEARCH_W = 160.0f;
+    constexpr float KEBAB_W  = 22.0f;
+    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX()
+                         - SEARCH_W - 4_px - KEBAB_W - 2_px);
+    ImGui::SetNextItemWidth(SEARCH_W);
     ImGui::InputTextWithHint("##search", "Filter...", &searchFilter);
+
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_MDI_DOTS_VERTICAL "##cbSettings", ImVec2(KEBAB_W, 0))) {
+      ImGui::OpenPopup("ContentBrowserSettings");
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("View options");
+
+    if (ImGui::BeginPopup("ContentBrowserSettings")) {
+      ImGui::TextDisabled("View Mode");
+      ImGui::Separator();
+      auto modeRadio = [&](const char* label, Editor::ContentBrowserMode m) {
+        bool selected = (ctx.prefs.contentBrowserMode == m);
+        if (ImGui::MenuItem(label, nullptr, selected)) {
+          if (!selected) {
+            ctx.prefs.contentBrowserMode = m;
+            ctx.prefs.save();
+          }
+        }
+      };
+      modeRadio("Unified",     Editor::ContentBrowserMode::Unified);
+      modeRadio("Split (Tabs)", Editor::ContentBrowserMode::Split);
+      ImGui::EndPopup();
+    }
 
     ImGui::EndChild();
     ImGui::PopStyleColor(3);
@@ -409,7 +506,7 @@ void Editor::AssetsBrowser::draw() {
   // folders that contain matching content so the icon is filled vs outline.
   std::vector<const Project::AssetManagerEntry*> assetItems{};
   for (int chipIdx = 0; chipIdx < ChipKind::CHIP_COUNT; ++chipIdx) {
-    if (!chips[chipIdx]) continue;
+    if (!activeChips[chipIdx]) continue;
     const auto &def = CHIP_DEFS[chipIdx];
     if (def.type == FileType::UNKNOWN) continue; // Scenes handled separately
 
@@ -445,7 +542,7 @@ void Editor::AssetsBrowser::draw() {
   // Scenes at currentDir (chip-gated). ID-keyed flat pool — relPath places
   // them virtually without changing on-disk layout (data/scenes/<id>/).
   std::vector<const Project::SceneEntry*> sceneItems{};
-  if (chips[ChipKind::CHIP_SCENES]) {
+  if (activeChips[ChipKind::CHIP_SCENES]) {
     for (const auto &sc : scenes) {
       if (sc.relPath != currentDir) continue;
       sceneItems.push_back(&sc);
@@ -459,22 +556,24 @@ void Editor::AssetsBrowser::draw() {
   pendingSceneMoveId = 0;
   pendingSceneMoveTarget.clear();
 
-  if (chips[ChipKind::CHIP_SCENES])
+  if (activeChips[ChipKind::CHIP_SCENES])
   {
     for (const auto *scPtr : sceneItems)
     {
       const auto &scene = *scPtr;
       auto activeScene = ctx.project->getScenes().getLoadedScene();
 
-      bool isSelected = activeScene && (activeScene->getId() == scene.id);
-      const auto &liveName = isSelected ? activeScene->getName() : scene.name;
+      bool isLoaded = activeScene && (activeScene->getId() == scene.id);
+      bool isUserSel = (selectedSceneId == scene.id);
+      bool isHighlighted = isLoaded || isUserSel;
+      const auto &liveName = isLoaded ? activeScene->getName() : scene.name;
       const auto &displayName = liveName.empty() ? "(unnamed)" : liveName;
 
       if (!searchFilter.empty() && displayName.find(searchFilter) == std::string::npos) continue;
 
       checkLineBreak();
 
-      if (isSelected) {
+      if (isHighlighted) {
         ImGui::PushStyleColor(ImGuiCol_Button,        {0.5f,0.5f,0.7f,1});
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.5f,0.5f,0.7f,0.8f});
       }
@@ -486,15 +585,23 @@ void Editor::AssetsBrowser::draw() {
       ImGui::PushFont(nullptr, 40_px);
       bool pressed = ImGui::Button(ICON_MDI_EARTH_BOX, textBtnSize);
       ImGui::PopFont();
+      bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
       ImGui::PopID();
 
       if (pressed) {
+        // Single-click: select only. Clears asset/folder selection so the
+        // browser shows one focused item at a time.
+        selectedSceneId = scene.id;
+        selectedFolder.clear();
+        ctx.selAssetUUID = 0;
+      }
+      if (isDblClick) {
         ctx.project->getScenes().loadScene(scene.id);
         ctx.project->conf.sceneIdLastOpened = scene.id;
         ctx.project->saveConfig();
       }
 
-      if (isSelected) ImGui::PopStyleColor(2);
+      if (isHighlighted) ImGui::PopStyleColor(2);
 
       if (ImGui::BeginDragDropSource()) {
         ImGui::SetDragDropPayload("SCENE", &scene.id, sizeof(scene.id));
@@ -551,8 +658,10 @@ void Editor::AssetsBrowser::draw() {
 
     bool filled = folderHasContent[folder];
     const char* folderIcon = filled ? ICON_MDI_FOLDER : ICON_MDI_FOLDER_OUTLINE;
+    bool isFolderSel = (selectedFolder == virtChild);
 
-    bool clicked = drawGridButton(folderId, ImTextureRef(nullptr), folderIcon, folder, false, 1.0f);
+    bool clicked = drawGridButton(folderId, ImTextureRef(nullptr), folderIcon, folder, isFolderSel, 1.0f);
+    bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
 
     // Drag-drop target: a scene dropped here moves to this folder.
     if (ImGui::BeginDragDropTarget()) {
@@ -599,11 +708,18 @@ void Editor::AssetsBrowser::draw() {
     }
 
     if (clicked) {
+      // Single-click: highlight only. Double-click navigates in.
+      selectedFolder = virtChild;
+      selectedSceneId = 0;
+      ctx.selAssetUUID = 0;
+    }
+    if (isDblClick) {
       currentDir = virtChild;
+      selectedFolder.clear();
     }
 
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("Folder: %s", virtChild.c_str());
+      ImGui::SetTooltip("Folder: %s\n(double-click to open)", virtChild.c_str());
     }
   }
 
@@ -646,6 +762,8 @@ void Editor::AssetsBrowser::draw() {
 
     if (clicked) {
       ctx.selAssetUUID = asset.getUUID();
+      selectedFolder.clear();
+      selectedSceneId = 0;
       ImGui::makeTabVisible("Asset");
     }
     if (isDblClick) {
@@ -1010,6 +1128,10 @@ void Editor::AssetsBrowser::draw() {
 
   ImGui::EndChild();
   ImGui::EndChild();
+
+  // Persist any navigation that happened this frame back into the active
+  // tab's dir slot so the next frame and tab switches see it.
+  if (splitMode) tabDirs[activeTab] = currentDir;
 }
 
 void Editor::AssetsBrowser::showContextMenu(const std::string& path) {

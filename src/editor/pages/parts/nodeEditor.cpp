@@ -115,13 +115,19 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
     ImGui::SetNextWindowSize({800,600}, ImGuiCond_Once);
   }
 
-  // Spawn outside the main viewport's right edge so ImGui's multi-viewport
-  // backend gives this editor its own OS window. Stable ###suffix keeps
-  // saved position/dock state across asset renames + invalidates legacy
-  // imgui.ini entries that had no ### at all.
+  // Force own OS window via NoAutoMerge — see PrefabEditor::draw for rationale.
+  // Stable ###suffix keeps saved position/dock state across asset renames
+  // and invalidates legacy imgui.ini entries that had no ### at all.
+  ImGuiWindowClass cls{};
+  cls.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+  ImGui::SetNextWindowClass(&cls);
+
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(
-    {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
+    {
+      mvp->Pos.x + (mvp->Size.x - 800.0f) * 0.5f,
+      mvp->Pos.y + (mvp->Size.y - 600.0f) * 0.5f,
+    },
     ImGuiCond_FirstUseEver
   );
 

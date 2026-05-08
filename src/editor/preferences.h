@@ -7,6 +7,11 @@
 
 namespace Editor
 {
+  enum class ContentBrowserMode : int {
+    Unified = 0,
+    Split   = 1,
+  };
+
   struct Preferences
   {
     Input::KeymapPreset keymapPreset{Input::KeymapPreset::Blender};
@@ -21,6 +26,7 @@ namespace Editor
     int fpsLimit = 60;
     bool showRotAsEuler = false;
     bool mouseWheelModifiesSpeed = false;
+    ContentBrowserMode contentBrowserMode = ContentBrowserMode::Unified;
 
     void load();
     void save();
