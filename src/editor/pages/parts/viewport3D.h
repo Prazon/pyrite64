@@ -121,6 +121,16 @@ namespace Editor
       Project::Scene* boundScene{nullptr};
       Project::Selection* boundSelection{nullptr};
 
+      // Render-pass / copy-pass / post-render callbacks fire from ctx.scene
+      // whether or not the host window's body actually called draw() this
+      // frame. This flag gates them: draw() sets it; the passes skip when
+      // it's false. Without this, closing a docked PrefabEditor (where
+      // Begin() returns false and the body is skipped) still wrote to the
+      // viewport's framebuffer one last time, and the GPU texture release
+      // one frame later raced the in-flight GPU command buffer → crash.
+      // Mirrors AssetPreviewViewport's drewThisFrame.
+      bool drewThisFrame{false};
+
       Project::Scene* getScene() const;
       Project::Selection& getSelection() const;
 

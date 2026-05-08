@@ -383,12 +383,11 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   auto* scene = getScene();
   if (!scene)return;
 
-  // SPBF64 fork: skip the pass entirely until the framebuffer has been
-  // sized by at least one draw() call. This fires on the frame a new
-  // Viewport3D is constructed (e.g. PrefabEditor opened via the assets
-  // browser, which runs after the editor-loop) — the editor hasn't drawn
-  // yet, so fb's GPU textures are still nullptr and SDL_BeginGPURenderPass
-  // would fault.
+  // Skip when the host window didn't draw this frame — fb is either
+  // unsized (Viewport3D just constructed; draw() hasn't run yet) or
+  // about-to-be-destroyed (host editor closed; defer-erase next frame).
+  // Either way, running this pass would write to invalid GPU textures.
+  if (!drewThisFrame) return;
   if (fb.getWidth() == 0 || fb.getHeight() == 0) return;
 
   // Bind this viewport's selection so component draw paths see the right
@@ -615,8 +614,8 @@ void Editor::Viewport3D::onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPa
   auto* scene = getScene();
   if (!scene)return;
 
-  // Skip until first draw() has sized the framebuffer; pairs with the same
-  // guard in onRenderPass.
+  // Pairs with the drewThisFrame guard in onRenderPass.
+  if (!drewThisFrame) return;
   if (fb.getWidth() == 0 || fb.getHeight() == 0) return;
 
   ViewportSelectionScope vpSelScope(getSelection());
@@ -636,14 +635,20 @@ void Editor::Viewport3D::onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPa
 }
 
 void Editor::Viewport3D::onPostRender(Renderer::Scene &renderScene) {
-  // Skip if framebuffer hasn't been sized yet (mirrors onRenderPass guard).
-  if (fb.getWidth() == 0 || fb.getHeight() == 0) return;
-  if (pickedObjID.isRequested()) {
+  // Pairs with the drewThisFrame guard in onRenderPass.
+  if (!drewThisFrame) return;
+
+  if (fb.getWidth() != 0 && fb.getHeight() != 0 && pickedObjID.isRequested()) {
     pickedObjID.setResult(fb.readObjectID(
       mousePosClick.x * ctx.prefs.renderFactorAA,
       mousePosClick.y * ctx.prefs.renderFactorAA
     ));
   }
+
+  // Last callback of the frame for this viewport — consume the flag so
+  // next frame's pre-draw callbacks see it as false unless draw() is
+  // called again to set it true.
+  drewThisFrame = false;
 }
 
 void Editor::Viewport3D::draw()
@@ -1361,4 +1366,9 @@ void Editor::Viewport3D::draw()
     camera.pos = camera.pivot + posOffset;
   }
   overRotGizmo = ImViewGuizmo::IsOver();
+
+  // Tell the deferred render-pass / copy-pass / post-render callbacks they
+  // should run this frame. Reset by onPostRender after the frame's GPU
+  // work is submitted.
+  drewThisFrame = true;
 }
