@@ -165,17 +165,17 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   // spawn-as-its-own-OS-window default.
   winName = baseTitle + "###PrefabEditorWin_" + std::to_string(assetUUID);
 
-  // Force ImGui to give this editor its own OS-level platform window
-  // (Unreal-style asset editor) instead of merging it back into the main
-  // viewport. NoAutoMerge -> always own viewport. Clearing NoDecoration
-  // restores the OS title bar, resize handles, and maximize button —
-  // ImGui defaults secondary viewports to borderless via
-  // ConfigViewportsNoDecoration=true, which is fine for tooltips but wrong
-  // for asset editors the user actually drags around between monitors.
+  // Dock as a sibling tab of "Scene Editor" in the outer top region on
+  // first open — so focusing this editor swaps the upper area instead of
+  // squeezing into the same panel as the 3D-Viewport. NoAutoMerge +
+  // cleared NoDecoration only matter when the user drags the tab out into
+  // its own OS window: full native chrome (title bar / resize / maximize).
   ImGuiWindowClass cls{};
   cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
   cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
   ImGui::SetNextWindowClass(&cls);
+
+  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
@@ -192,99 +192,90 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   }
 
   bool isOpen = true;
-  // Don't gate the body on Begin's return value — matches ModelEditor's
-  // pattern. When Begin returns false (window hidden after X click), ImGui
-  // renders the body widgets to a hidden draw list, but our internal C++
-  // (viewport.draw) still runs every frame the editor is in the map. That
-  // keeps GPU resource lifetime predictable: the framebuffer is written to
-  // every frame up to and including the close frame, matching the
-  // defer-by-one destruction timing that ModelEditor / AssetPreviewViewport
-  // rely on. Gating the body would skip GPU writes on the close frame, which
-  // sounds safer but actually leaves SDL_GPU's in-flight texture
-  // tracking inconsistent with our defer cadence.
+  // Host window: contains a toolbar + a DockSpace. The four dockable panels
+  // (Components / My Prefab / Viewport / Details) live as their own ImGui
+  // windows that target this dockspace — UE-Blueprint behaviour where the
+  // user can rearrange tabs, drag panels into their own OS windows, etc.
   ImGui::Begin(winName.c_str(), &isOpen,
-        isDirty() ? ImGuiWindowFlags_UnsavedDocument : 0);
+        ImGuiWindowFlags_NoCollapse
+        | (isDirty() ? ImGuiWindowFlags_UnsavedDocument : 0));
 
-  // EditScope binds this editor's history+scene+selection so that any
-  // markChanged() call inside the nested SceneGraph / ObjectInspector routes
-  // here, not to the main scene's history.
   Editor::UndoRedo::EditScope scope(history, scene, selection);
 
-  // Toolbar
+  // Toolbar.
   if (ImGui::Button(ICON_MDI_CONTENT_SAVE " Save")) saveToDisk();
   ImGui::SameLine();
   ImGui::TextDisabled("%s", filePath.c_str());
 
-  // Ctrl+S → save (only when this window has focus).
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
     ImGuiIO &io = ImGui::GetIO();
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
-      saveToDisk();
-    }
-    // Undo/Redo route to this editor's history via the active EditScope.
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-      history.undo();
-    }
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) {
-      history.redo();
-    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveToDisk();
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) history.undo();
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) history.redo();
   }
 
-  // Three-pane body, modeled after Unreal's Blueprint Editor:
-  //   [hierarchy + variables + functions] | [3D viewport] | [details]
-  // The left pane stacks hierarchy / variables / functions sections like
-  // Unreal's "My Blueprint" panel. Two horizontal splitters separate the
-  // three columns; pane widths are stored as fractions of avail so window
-  // resizes keep the ratio.
-  float avail = ImGui::GetContentRegionAvail().x;
-  float leftW = ImClamp(avail * leftSplitFrac,
-    MIN_PANE_WIDTH, avail - 2.0f * MIN_PANE_WIDTH - 2.0f * SPLITTER_WIDTH);
-  float rightW = ImClamp(avail * rightSplitFrac,
-    MIN_PANE_WIDTH, avail - leftW - MIN_PANE_WIDTH - 2.0f * SPLITTER_WIDTH);
+  // Per-instance dock-space — keyed by asset UUID so multiple open prefab
+  // editors don't collide on layout state. First-time init builds the
+  // default UE-style layout; afterwards ImGui's own .ini persistence keeps
+  // user rearrangements stuck.
+  const std::string uuidStr = std::to_string(assetUUID);
+  const std::string dockId = "PrefabDock_" + uuidStr;
+  ImGuiID dockspaceID = ImGui::GetID(dockId.c_str());
+  bool firstBuild = (ImGui::DockBuilderGetNode(dockspaceID) == nullptr);
+  ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), 0);
 
-  auto drawSplitter = [](const char* id, float &fracTarget, float currentW, float avail,
-                         float minThisPane, float minOtherPanes) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
-    ImGui::Button(id, ImVec2(SPLITTER_WIDTH, -1));
-    ImGui::PopStyleColor(3);
-    if (ImGui::IsItemActive()) {
-      float delta = ImGui::GetIO().MouseDelta.x;
-      float newW = currentW + delta;
-      float minFrac = minThisPane / avail;
-      float maxFrac = (avail - minOtherPanes) / avail;
-      fracTarget = ImClamp(newW / avail, minFrac, maxFrac);
-    }
-    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    }
-  };
+  // Window names — suffixed with the asset UUID so they're unique across
+  // open editors. ID-string trick lets us change the visible title without
+  // losing dock state.
+  const std::string winComp = std::string{ICON_MDI_FILE_TREE              "  Components##PrefabComp_"} + uuidStr;
+  const std::string winMyP  = std::string{ICON_MDI_PACKAGE_VARIANT_CLOSED "  My Prefab##PrefabMyP_"}  + uuidStr;
+  const std::string winVP   = std::string{ICON_MDI_VIEW_QUILT             "  Viewport##PrefabVP_"}    + uuidStr;
+  const std::string winDet  = std::string{ICON_MDI_INFORMATION            "  Details##PrefabDet_"}    + uuidStr;
 
-  ImGui::BeginChild("##LeftPane", ImVec2(leftW, 0), ImGuiChildFlags_Borders);
-    drawLeftPane();
-  ImGui::EndChild();
+  if (firstBuild) {
+    ImGui::DockBuilderRemoveNode(dockspaceID);
+    ImGui::DockBuilderAddNode(dockspaceID, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspaceID, ImGui::GetContentRegionAvail());
 
-  ImGui::SameLine();
-  drawSplitter("##SplitterL", leftSplitFrac, leftW, avail,
-               MIN_PANE_WIDTH, MIN_PANE_WIDTH + rightW + 2.0f * SPLITTER_WIDTH);
-  ImGui::SameLine();
+    ImGuiID center = dockspaceID;
+    ImGuiID left, right, leftBottom;
+    left  = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left,  0.22f, nullptr, &center);
+    right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.30f, nullptr, &center);
+    leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.50f, nullptr, &left);
 
-  ImGui::BeginChild("##ViewportPane", ImVec2(avail - leftW - rightW - 2.0f * SPLITTER_WIDTH, 0),
-    ImGuiChildFlags_Borders);
-    viewport.draw();
-  ImGui::EndChild();
+    ImGui::DockBuilderDockWindow(winComp.c_str(), left);
+    ImGui::DockBuilderDockWindow(winMyP.c_str(),  leftBottom);
+    ImGui::DockBuilderDockWindow(winVP.c_str(),   center);
+    ImGui::DockBuilderDockWindow(winDet.c_str(),  right);
+    ImGui::DockBuilderFinish(dockspaceID);
+  }
 
-  ImGui::SameLine();
-  drawSplitter("##SplitterR", rightSplitFrac, rightW, avail,
-               MIN_PANE_WIDTH, leftW + 2.0f * SPLITTER_WIDTH + MIN_PANE_WIDTH);
-  ImGui::SameLine();
+  ImGui::End(); // host
 
-  ImGui::BeginChild("##InspectorPane", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    drawDetailsPanel();
-  ImGui::EndChild();
-
+  // Each panel is a standalone ImGui window. Pass nullptr for the open-bool
+  // so they can't be closed individually — they're permanent dock targets
+  // for this editor instance.
+  ImGui::Begin(winComp.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    graph.draw(scene, selection);
   ImGui::End();
+
+  ImGui::Begin(winMyP.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    if (ImGui::CollapsingHeader(ICON_MDI_GRAPH " Graphs",
+          ImGuiTreeNodeFlags_DefaultOpen)) drawGraphsPanel();
+    if (ImGui::CollapsingHeader(ICON_MDI_VARIABLE " Variables",
+          ImGuiTreeNodeFlags_DefaultOpen)) drawVariablesPanel();
+    if (ImGui::CollapsingHeader(ICON_MDI_FUNCTION " Functions",
+          ImGuiTreeNodeFlags_DefaultOpen)) drawFunctionsPanel();
+  ImGui::End();
+
+  ImGui::Begin(winVP.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    viewport.draw();
+  ImGui::End();
+
+  ImGui::Begin(winDet.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    drawDetailsPanel();
+  ImGui::End();
+
   return isOpen;
 }
 
@@ -318,6 +309,10 @@ void Editor::PrefabEditor::drawDetailsPanel()
   }
 }
 
+// drawLeftPane is unused after the dockspace restructure (the panels live
+// as standalone ImGui windows now). Definition kept compiled-out so the
+// header declaration doesn't generate a linker stub at -Os; no callers.
+#if 0
 void Editor::PrefabEditor::drawLeftPane()
 {
   // Mirrors UE5's Blueprint editor: the left side is split vertically into
@@ -372,6 +367,7 @@ void Editor::PrefabEditor::drawLeftPane()
     }
   ImGui::EndChild();
 }
+#endif // drawLeftPane (unused)
 
 void Editor::PrefabEditor::drawVariablesPanel()
 {
