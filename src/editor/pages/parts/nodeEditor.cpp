@@ -138,10 +138,65 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   uint64_t uuid = currentAsset ? currentAsset->getUUID() : 0;
   std::string winName = name + "###NodeEditorWin_" + std::to_string(uuid);
 
+  if(forceFocusNextFrame) {
+    ImGui::SetNextWindowFocus();
+    forceFocusNextFrame = false;
+  }
+
   bool isOpen = true;
   ImGui::Begin(winName.c_str(), &isOpen, ImGuiWindowFlags_NoCollapse);
-  graph.graph.setSize(ImGui::GetContentRegionAvail());
+
+  ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
+  ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+  graph.graph.setSize(canvasSize);
+
+  // Reveal-from-Compile-Errors: pan canvas to center the requested node and
+  // arm a brief highlight overlay. See the parallel block in
+  // prefabEventGraphEditor.cpp for the full rationale.
+  if(pendingFocusNodeUUID != 0) {
+    Project::Graph::Node::Base* focusNode = nullptr;
+    for(const auto &kv : graph.graph.getNodes()) {
+      auto *n = (Project::Graph::Node::Base*)kv.second.get();
+      if(n && n->uuid == pendingFocusNodeUUID) { focusNode = n; break; }
+    }
+    if(focusNode) {
+      ImVec2 nodePos  = focusNode->getPos();
+      ImVec2 nodeSize = focusNode->getSize();
+      ImVec2 target{
+        canvasSize.x * 0.5f - (nodePos.x + nodeSize.x * 0.5f),
+        canvasSize.y * 0.5f - (nodePos.y + nodeSize.y * 0.5f),
+      };
+      graph.graph.getGrid().setScroll(target);
+      highlightNodeUUID    = pendingFocusNodeUUID;
+      highlightSecondsLeft = 2.0f;
+    }
+    pendingFocusNodeUUID = 0;
+  }
+
   graph.graph.update();
+
+  if(highlightSecondsLeft > 0.0f && highlightNodeUUID != 0) {
+    Project::Graph::Node::Base* hn = nullptr;
+    for(const auto &kv : graph.graph.getNodes()) {
+      auto *n = (Project::Graph::Node::Base*)kv.second.get();
+      if(n && n->uuid == highlightNodeUUID) { hn = n; break; }
+    }
+    if(hn) {
+      ImVec2 g = hn->getPos();
+      ImVec2 sz = hn->getSize();
+      ImVec2 scroll = graph.graph.getGrid().scroll();
+      ImVec2 mn{canvasMin.x + scroll.x + g.x - 4.0f,
+                canvasMin.y + scroll.y + g.y - 4.0f};
+      ImVec2 mx{mn.x + sz.x + 8.0f, mn.y + sz.y + 8.0f};
+      float a = highlightSecondsLeft > 1.0f ? 1.0f : highlightSecondsLeft;
+      ImU32 col = IM_COL32(255, 80, 80, (int)(255.0f * a));
+      ImGui::GetForegroundDrawList()->AddRect(mn, mx, col, 4.0f, 0, 3.0f);
+      highlightSecondsLeft -= ImGui::GetIO().DeltaTime;
+    } else {
+      highlightSecondsLeft = 0.0f;
+    }
+  }
+
   ImGui::End();
 
   auto currentState = graph.serialize();

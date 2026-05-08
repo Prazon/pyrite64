@@ -8,6 +8,7 @@
 
 #include "project/project.h"
 #include "project/selection.h"
+#include "project/compile/compileErrors.h"
 #include "utils/json.h"
 #include "utils/jsonBuilder.h"
 #include "utils/proc.h"
@@ -64,6 +65,12 @@ struct Context
   Project::Selection mainSelection{};
 
   Editor::Preferences prefs{};
+
+  // Structured node-graph compile errors. Cleared at the start of each build by
+  // the build driver, populated during graph compilation, and rendered by the
+  // Compile Errors panel. Logger remains a superset stream — this list is the
+  // structured slice the panel can navigate from.
+  Project::Compile::ErrorList compileErrors{};
 
   std::future<void> futureBuildRun{};
 

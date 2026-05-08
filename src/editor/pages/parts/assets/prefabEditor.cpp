@@ -14,6 +14,7 @@
 #include "../../../../utils/hash.h"
 #include "../../../../utils/logger.h"
 #include "../../../imgui/helper.h"
+#include "../../../dragDropPayloads.h"
 #include "../../editorScene.h"
 
 namespace
@@ -454,31 +455,157 @@ void Editor::PrefabEditor::drawVariablesPanel()
     return;
   }
 
-  // Selectable rows — single-line "icon + name + type-tag". Clicking the
-  // row selects the variable for the details panel; no inline editing in
-  // the panel itself (kept minimal, like UE5 My Blueprint).
+  // Selectable rows — single-line "pill + name + type-tag". Clicking the
+  // row selects the variable for the details panel; right-click brings up
+  // rename / duplicate / delete. No inline editing in the panel itself
+  // (kept minimal, like UE5 My Blueprint).
   static const char* kindShort[] = {
     "int", "float", "bool", "vec3", "quat", "obj", "prefab", "asset",
   };
+  // UE-style "wire colour by pin type". Pills sit at the row's leading edge
+  // so the user can scan kinds without reading the right-aligned label.
+  static const ImU32 kindCol[] = {
+    IM_COL32( 77, 204, 217, 255), // INT        — cyan
+    IM_COL32(115, 217,  77, 255), // FLOAT      — green
+    IM_COL32(217,  51,  51, 255), // BOOL       — red
+    IM_COL32(242, 217,  64, 255), // VEC3       — yellow
+    IM_COL32(242, 140,  51, 255), // QUAT       — orange
+    IM_COL32( 77, 140, 242, 255), // OBJECT_REF — blue
+    IM_COL32(217,  77, 217, 255), // PREFAB_REF — magenta
+    IM_COL32(166, 166, 166, 255), // ASSET_REF  — grey
+  };
+  // Mutations deferred until after the row loop so vector iterators stay valid.
+  // Non-static so multiple PrefabEditor instances don't share state.
+  int pendingDelete    = -1;
+  int pendingDuplicate = -1;
   for (size_t i = 0; i < variables.size(); ++i) {
-    const auto &v = variables[i];
+    auto &v = variables[i];
     ImGui::PushID(static_cast<int>(i));
     bool sel = (detailsKind == DetailsKind::VARIABLE
                 && detailsVarIdx == static_cast<int>(i));
-    std::string label = std::string{ICON_MDI_VARIABLE " "} + v.name;
-    if (ImGui::Selectable(label.c_str(), sel,
+
+    // Manual layout: empty Selectable for the hit/highlight rect, then we
+    // overlay the pill and the variable name via ImDrawList. The leading-
+    // -spaces trick fought Selectable's text centering and ended up with the
+    // pill visually off-center against the name; this gives pixel-exact
+    // control over both the pill and the label baseline.
+    constexpr float PILL_W   = 16.0f;
+    constexpr float PILL_H   = 10.0f;
+    constexpr float PILL_X   =  6.0f;  // left margin
+    constexpr float TEXT_GAP =  8.0f;  // gap between pill and var name
+    const float rowH = ImGui::GetFrameHeight();
+    const float lineH = ImGui::GetTextLineHeight();
+    ImVec2 rowPos = ImGui::GetCursorScreenPos();
+
+    // Selectable carries only the ID — the visible text comes from AddText
+    // below, which we can position independently of the highlight rect.
+    if (ImGui::Selectable("##varRow", sel,
           ImGuiSelectableFlags_AllowOverlap)) {
       detailsKind = DetailsKind::VARIABLE;
       detailsVarIdx = static_cast<int>(i);
       detailsFuncName.clear();
     }
+
+    // Drag-drop source — drop onto an event graph canvas to spawn a
+    // PrefabVarGet node prefilled for this variable.
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+      Editor::DragDrop::PrefabVarPayload payload{};
+      payload.uuid = v.uuid;
+      payload.kind = static_cast<uint8_t>(v.kind);
+      Editor::DragDrop::copyName(payload.name, sizeof(payload.name), v.name);
+      ImGui::SetDragDropPayload(Editor::DragDrop::TYPE_PREFAB_VAR,
+                                &payload, sizeof(payload));
+      // Tooltip: tiny pill + name, mirroring the row look.
+      ImGui::TextUnformatted(v.name.c_str());
+      ImGui::SameLine();
+      ImGui::TextDisabled("(drop on graph)");
+      ImGui::EndDragDropSource();
+    }
+
+    // Pill swatch + var name — drawn AFTER Selectable so they sit on top of
+    // the hover/active highlight rect. Pill is vertically centered on the
+    // row's text line; name baseline aligns with the same line.
+    int k = static_cast<int>(v.kind);
+    if (k < 0 || k >= IM_ARRAYSIZE(kindCol)) k = 0;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const float midY  = rowPos.y + rowH * 0.5f;
+    const float pillY = midY - PILL_H * 0.5f;
+    ImVec2 pmin{rowPos.x + PILL_X,       pillY};
+    ImVec2 pmax{pmin.x   + PILL_W,       pillY + PILL_H};
+    dl->AddRectFilled(pmin, pmax, kindCol[k], PILL_H * 0.5f);
+    dl->AddRect      (pmin, pmax, IM_COL32(0, 0, 0, 160), PILL_H * 0.5f);
+
+    ImVec2 textPos{pmax.x + TEXT_GAP, midY - lineH * 0.5f};
+    dl->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), v.name.c_str());
+
+    // Right-click menu.
+    if (ImGui::BeginPopupContextItem("##varCtx")) {
+      if (ImGui::MenuItem(ICON_MDI_RENAME_BOX " Rename")) {
+        renameBuffer = v.name;
+        ImGui::CloseCurrentPopup();
+        ImGui::OpenPopup("##varRenamePopup");
+      }
+      if (ImGui::MenuItem(ICON_MDI_CONTENT_DUPLICATE " Duplicate")) {
+        pendingDuplicate = static_cast<int>(i);
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem(ICON_MDI_DELETE " Delete")) {
+        pendingDelete = static_cast<int>(i);
+      }
+      ImGui::EndPopup();
+    }
+
+    // Inline rename popup. Stays open until Enter / Esc / focus loss.
+    if (ImGui::BeginPopup("##varRenamePopup")) {
+      ImGui::TextUnformatted("Rename Variable");
+      ImGui::SetKeyboardFocusHere();
+      char buf[128];
+      std::snprintf(buf, sizeof(buf), "%s", renameBuffer.c_str());
+      if (ImGui::InputText("##varRenameInput", buf, sizeof(buf),
+            ImGuiInputTextFlags_EnterReturnsTrue)) {
+        renameBuffer = buf;
+        if (!renameBuffer.empty() && renameBuffer != v.name) {
+          UndoRedo::getHistory().markChanged("Rename Variable");
+          v.name = renameBuffer;
+        }
+        ImGui::CloseCurrentPopup();
+      } else {
+        renameBuffer = buf;
+      }
+      ImGui::EndPopup();
+    }
+
     // Right-aligned type tag.
     ImGui::SameLine(ImGui::GetContentRegionAvail().x
                     + ImGui::GetCursorPosX() - 60.0f);
-    int k = static_cast<int>(v.kind);
-    if (k < 0 || k >= IM_ARRAYSIZE(kindShort)) k = 0;
     ImGui::TextDisabled("%s", kindShort[k]);
     ImGui::PopID();
+  }
+
+  // Defer mutation until after the row loop so iterators stay valid.
+  if (pendingDuplicate >= 0 && pendingDuplicate < (int)variables.size()) {
+    Project::PrefabVarDef copy = variables[pendingDuplicate];
+    copy.uuid = Utils::Hash::sha256_64bit(
+      std::to_string(rand()) + std::to_string(variables.size()) + "_dup"
+    );
+    copy.name = copy.name + "_Copy";
+    UndoRedo::getHistory().markChanged("Duplicate Variable");
+    variables.insert(variables.begin() + pendingDuplicate + 1, std::move(copy));
+    detailsKind = DetailsKind::VARIABLE;
+    detailsVarIdx = pendingDuplicate + 1;
+    detailsFuncName.clear();
+    pendingDuplicate = -1;
+  }
+  if (pendingDelete >= 0 && pendingDelete < (int)variables.size()) {
+    UndoRedo::getHistory().markChanged("Delete Variable");
+    variables.erase(variables.begin() + pendingDelete);
+    if (detailsKind == DetailsKind::VARIABLE && detailsVarIdx == pendingDelete) {
+      clearMyPrefabSelection();
+    } else if (detailsKind == DetailsKind::VARIABLE
+               && detailsVarIdx > pendingDelete) {
+      --detailsVarIdx;
+    }
+    pendingDelete = -1;
   }
   ImGui::PopID(); // "vars"
 }
@@ -615,6 +742,29 @@ void Editor::PrefabEditor::drawFunctionsPanel()
   // Selectable row per function — UE-Blueprint style. Single click selects
   // (details panel populates), double click opens the .cpp body in the
   // editor's CodeEditor, right click brings up rename / delete / open.
+  auto openFnSource = [&](const std::string &fnName) {
+    if (!ctx.project || !ctx.editorScene) return;
+    // Per-function slice editor — shows ONLY this function's source from
+    // the per-prefab .cpp. Splices back on save and auto-syncs the .h
+    // declaration if the user changes the signature inline. Docks next to
+    // the prefab editor's viewport via viewportDockNodeID.
+    uint64_t synth = ctx.editorScene->openPrefabFunctionCodeEditor(
+      prefabName, fnName, viewportDockNodeID
+    );
+    if (std::find(ownedCodeEditorUUIDs.begin(),
+                  ownedCodeEditorUUIDs.end(), synth)
+          == ownedCodeEditorUUIDs.end()) {
+      ownedCodeEditorUUIDs.push_back(synth);
+    }
+  };
+
+  // Mutations that touch the .h/.cpp must run AFTER the row loop so the next
+  // scanPrefabFunctions call picks up the change without a torn vector.
+  std::string pendingRenameOld;
+  std::string pendingRenameNew;
+  std::string pendingDeleteName;
+  std::string openRenamePopupFor; // function name whose rename popup to open
+
   for (const auto &f : functions) {
     ImGui::PushID(f.name.c_str());
     bool sel = (detailsKind == DetailsKind::FUNCTION
@@ -626,28 +776,107 @@ void Editor::PrefabEditor::drawFunctionsPanel()
       detailsFuncName = f.name;
       detailsVarIdx = -1;
       renameBuffer = f.name;
-      if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
-          && ctx.project && ctx.editorScene) {
+      if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         // Open the prefab's .cpp source via path-based opener — these files
         // live at <project>/src/user/<name>.cpp and use `namespace User::`,
         // which AssetManager::buildCodeEntry doesn't dispatch on, so they
         // never appear as AssetManagerEntries. Pass viewportDockNodeID so
         // the new tab lands as a sibling of this prefab editor's viewport.
-        std::string cppPath = ctx.project->getPath() + "/src/user/"
-                            + prefabName + ".cpp";
-        ctx.editorScene->openCodeEditorByPath(cppPath, viewportDockNodeID);
-        // Track ownership so EditorScene can close this tab when the
-        // prefab editor itself is dismissed. Same hash openCodeEditorByPath
-        // uses to key its codeEditors map.
-        uint64_t synth = Utils::Hash::sha256_64bit(cppPath);
-        if (std::find(ownedCodeEditorUUIDs.begin(),
-                      ownedCodeEditorUUIDs.end(), synth)
-              == ownedCodeEditorUUIDs.end()) {
-          ownedCodeEditorUUIDs.push_back(synth);
-        }
+        openFnSource(f.name);
       }
     }
+
+    // Drag-drop source — drop onto an event graph canvas to spawn a
+    // PrefabFunc call node prefilled with this function's name.
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+      Editor::DragDrop::PrefabFuncPayload payload{};
+      Editor::DragDrop::copyName(payload.name, sizeof(payload.name), f.name);
+      ImGui::SetDragDropPayload(Editor::DragDrop::TYPE_PREFAB_FUNC,
+                                &payload, sizeof(payload));
+      ImGui::TextUnformatted(f.name.c_str());
+      ImGui::SameLine();
+      ImGui::TextDisabled("(drop on graph)");
+      ImGui::EndDragDropSource();
+    }
+
+    if (ImGui::BeginPopupContextItem("##fnCtx")) {
+      // Selecting a function via right-click also populates the details
+      // panel — matches UE behaviour where right-click implicitly selects.
+      detailsKind = DetailsKind::FUNCTION;
+      detailsFuncName = f.name;
+      detailsVarIdx = -1;
+      renameBuffer = f.name;
+
+      if (ImGui::MenuItem(ICON_MDI_FILE_DOCUMENT_EDIT_OUTLINE " Open Source")) {
+        openFnSource(f.name);
+      }
+      if (ImGui::MenuItem(ICON_MDI_RENAME_BOX " Rename")) {
+        renameBuffer = f.name;
+        openRenamePopupFor = f.name;
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem(ICON_MDI_DELETE " Delete")) {
+        pendingDeleteName = f.name;
+      }
+      ImGui::EndPopup();
+    }
+
+    // Rename popup — bound to this row's PushID scope so the popup ID is
+    // unique per function. Opened from the context menu handler above.
+    if (openRenamePopupFor == f.name) {
+      ImGui::OpenPopup("##fnRenamePopup");
+      openRenamePopupFor.clear();
+    }
+    if (ImGui::BeginPopup("##fnRenamePopup")) {
+      ImGui::TextUnformatted("Rename Function");
+      ImGui::SetKeyboardFocusHere();
+      char buf[128];
+      std::snprintf(buf, sizeof(buf), "%s", renameBuffer.c_str());
+      if (ImGui::InputText("##fnRenameInput", buf, sizeof(buf),
+            ImGuiInputTextFlags_EnterReturnsTrue)) {
+        renameBuffer = buf;
+        if (!renameBuffer.empty() && renameBuffer != f.name) {
+          pendingRenameOld = f.name;
+          pendingRenameNew = renameBuffer;
+        }
+        ImGui::CloseCurrentPopup();
+      } else {
+        renameBuffer = buf;
+      }
+      ImGui::EndPopup();
+    }
     ImGui::PopID();
+  }
+
+  // Apply deferred mutations. Both rename and remove rewrite .h/.cpp on
+  // disk; the next frame's scanPrefabFunctions call refreshes `functions`.
+  if (!pendingRenameOld.empty()) {
+    if (Project::renamePrefabFunction(ctx.project->getPath(), prefabName,
+          pendingRenameOld, pendingRenameNew)) {
+      if (detailsKind == DetailsKind::FUNCTION
+          && detailsFuncName == pendingRenameOld) {
+        detailsFuncName = pendingRenameNew;
+      }
+    } else {
+      Utils::Logger::log(
+        "Failed to rename function " + pendingRenameOld + " -> " + pendingRenameNew,
+        Utils::Logger::LEVEL_ERROR
+      );
+    }
+  }
+  if (!pendingDeleteName.empty()) {
+    if (Project::removePrefabFunction(ctx.project->getPath(), prefabName,
+          pendingDeleteName)) {
+      if (detailsKind == DetailsKind::FUNCTION
+          && detailsFuncName == pendingDeleteName) {
+        clearMyPrefabSelection();
+      }
+    } else {
+      Utils::Logger::log(
+        "Failed to delete function " + pendingDeleteName,
+        Utils::Logger::LEVEL_ERROR
+      );
+    }
   }
   ImGui::PopID(); // "funcs"
 }

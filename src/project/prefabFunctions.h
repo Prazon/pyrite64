@@ -77,4 +77,63 @@ namespace Project
     const std::string &prefabName,
     const std::string &functionName
   );
+
+  // Locate the named function in cppSource and return its byte range in
+  // [outBegin, outEnd) covering the entire function — from the start of
+  // the line containing `P64_NODE ... <name>(` through the closing brace
+  // (and the trailing newline if present). Token-bound on the left so
+  // partial matches don't fire. Returns false if the function isn't found
+  // or the body isn't well-bracketed.
+  bool findPrefabFunctionRange(
+    const std::string &cppSource,
+    const std::string &functionName,
+    size_t &outBegin,
+    size_t &outEnd
+  );
+
+  // Read <project>/src/user/<prefabName>.cpp and return the function's
+  // slice (signature line through closing brace + trailing newline). Used
+  // by the per-function code editor on load. Empty string if file or
+  // function isn't found.
+  std::string extractPrefabFunctionSource(
+    const std::string &projectPath,
+    const std::string &prefabName,
+    const std::string &functionName
+  );
+
+  // Re-read the .cpp, locate the function by `oldName`, and replace its
+  // slice with `newSlice`. Used by the per-function code editor's save
+  // path so the rest of the file is preserved verbatim.
+  bool replacePrefabFunctionSource(
+    const std::string &projectPath,
+    const std::string &prefabName,
+    const std::string &oldName,
+    const std::string &newSlice
+  );
+
+  // Parse the leading signature out of a function source slice
+  // ("P64_NODE void Foo(P64::Object* self) { ... }"). On success, fills
+  // outName / outReturnType (everything between P64_NODE and the name)
+  // and outParams (text inside the parens). Returns false if the slice
+  // doesn't start with a recognizable signature.
+  bool parsePrefabFunctionSignatureFromSlice(
+    const std::string &slice,
+    std::string &outName,
+    std::string &outReturnType,
+    std::string &outParams
+  );
+
+  // Sync the .h's declaration line for `oldName` to a new signature. The
+  // declaration is identified by the (P64_NODE + oldName + `(`) line and
+  // replaced with `<returnType> <newName>(<params>);`. If no matching
+  // line exists and `newName` is non-empty, the declaration is inserted
+  // before the namespace's closing brace. Returns true on a write.
+  bool updatePrefabFunctionHeader(
+    const std::string &projectPath,
+    const std::string &prefabName,
+    const std::string &oldName,
+    const std::string &newName,
+    const std::string &returnType,
+    const std::string &params
+  );
 }

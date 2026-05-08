@@ -11,6 +11,7 @@
 #include "../utils/proc.h"
 #include "../utils/string.h"
 #include "../utils/textureFormats.h"
+#include "../context.h"
 
 namespace fs = std::filesystem;
 using AT = Project::FileType;
@@ -54,6 +55,10 @@ bool Build::buildProject(const std::string &configPath)
 {
   Project::Project project{configPath};
   auto path = project.getPath();
+  // Reset structured graph diagnostics. The Compile Errors panel reads this
+  // list and auto-focuses when its revision counter changes, so clearing here
+  // also closes the panel from any previous build.
+  ctx.compileErrors.clear();
   Utils::Logger::log("Building project...");
 
   if(project.conf.pathN64Inst.empty())
@@ -265,6 +270,18 @@ bool Build::buildProject(const std::string &configPath)
 
   // Build
   bool success = sceneCtx.toolchain.runCmdSyncLogged("make -C \"" + path + "\" -j8");
+
+  // Surface a one-line summary if the graph validator collected anything —
+  // the Compile Errors panel has the structured details, this is just the
+  // glanceable count for the Log stream.
+  size_t graphErrs  = ctx.compileErrors.errorCount();
+  size_t graphWarns = ctx.compileErrors.warningCount();
+  if(graphErrs || graphWarns) {
+    Utils::Logger::log(
+      "Graph validation: " + std::to_string(graphErrs) + " error(s), " +
+      std::to_string(graphWarns) + " warning(s) — see Compile Errors panel.",
+      graphErrs ? Utils::Logger::LEVEL_ERROR : Utils::Logger::LEVEL_WARN);
+  }
 
   if(success) {
     Utils::Logger::log("Build done!");

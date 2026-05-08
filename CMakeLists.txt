@@ -194,6 +194,10 @@ add_executable(pyrite64 src/main.cpp
         src/utils/logger.cpp
         src/editor/pages/parts/logWindow.cpp
         src/editor/pages/parts/logWindow.h
+        src/editor/pages/parts/compileErrorsWindow.cpp
+        src/editor/pages/parts/compileErrorsWindow.h
+        src/project/compile/compileErrors.h
+        src/project/compile/compileErrors.cpp
         src/editor/pages/parts/memoryDashboard.h
         src/editor/pages/parts/memoryDashboard.cpp
         src/editor/pages/parts/projectSettings.h
@@ -271,6 +275,8 @@ add_executable(pyrite64 src/main.cpp
         src/project/graph/nodes/nodeWait.h
         src/project/graph/graph.h
         src/project/graph/graph.cpp
+        src/project/compile/compileErrors.h
+        src/project/compile/compileErrors.cpp
         src/build/nodeGraphBuilder.cpp
         src/build/resourceBuilder.cpp
         src/project/component/types/compNodeGraph.cpp
@@ -302,6 +308,8 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/prefabEditor.cpp
         src/editor/pages/parts/assets/prefabEventGraphEditor.h
         src/editor/pages/parts/assets/prefabEventGraphEditor.cpp
+        src/editor/pages/parts/assets/prefabFunctionCodeEditor.h
+        src/editor/pages/parts/assets/prefabFunctionCodeEditor.cpp
         src/editor/pages/parts/assets/assetPreviewViewport.h
         src/editor/pages/parts/assets/assetPreviewViewport.cpp
         src/project/assets/material.h

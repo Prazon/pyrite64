@@ -26,21 +26,88 @@ namespace Project::Graph::Node
 
       constexpr static const char* NAME = ICON_MDI_VARIABLE " Get Variable";
 
+      // Title bar colour by variable kind. Matches the pill palette in
+      // PrefabEditor's My-Prefab Variables panel so the node visually
+      // identifies which kind it carries at a glance (UE-Blueprint style).
+      static ImU32 kindToColor(uint8_t k) {
+        switch (k) {
+          case 0: return IM_COL32( 77, 204, 217, 255); // INT        — cyan
+          case 1: return IM_COL32(115, 217,  77, 255); // FLOAT      — green
+          case 2: return IM_COL32(217,  51,  51, 255); // BOOL       — red
+          case 3: return IM_COL32(242, 217,  64, 255); // VEC3       — yellow
+          case 4: return IM_COL32(242, 140,  51, 255); // QUAT       — orange
+          case 5: return IM_COL32( 77, 140, 242, 255); // OBJECT_REF — blue
+          case 6: return IM_COL32(217,  77, 217, 255); // PREFAB_REF — magenta
+          case 7: return IM_COL32(166, 166, 166, 255); // ASSET_REF  — grey
+        }
+        // Unset / empty: keep the original brown so an unbound node is
+        // visually distinct from any kind-coloured one.
+        return IM_COL32(0xCC, 0x88, 0x55, 255);
+      }
+
+      // Per-instance pin style so the output socket + the wires drawn from
+      // it can be tinted by the variable's kind (Unreal-Blueprint behavior:
+      // wires inherit the source pin's colour). Falls back to the global
+      // brown when no variable is bound yet.
+      std::shared_ptr<ImFlow::PinStyle> pinStyle{};
+
+      void applyKindStyle() {
+        const bool bound = !varName.empty();
+        const ImU32 kindCol = bound ? kindToColor(varKind)
+                                    : IM_COL32(0xCC, 0x88, 0x55, 255);
+
+        // Unreal "Get" node aesthetic: a saturated kind-coloured header bar
+        // over a darker body. Going uniform-kind-colour for the whole node
+        // makes the output socket disappear against the body — the socket
+        // sits on the right edge so half the circle overlaps the body fill.
+        // Darkening the body restores the contrast while keeping the pill
+        // shape and kind-colour identity. Body tint = kindCol * 0.30 so the
+        // hue still reads but the brightness drops well below the pin.
+        auto darken = [](ImU32 col, float k) -> ImU32 {
+          int r = (int)((col >>  0) & 0xFF);
+          int g = (int)((col >>  8) & 0xFF);
+          int b = (int)((col >> 16) & 0xFF);
+          r = (int)(r * k); g = (int)(g * k); b = (int)(b * k);
+          return IM_COL32(r, g, b, 255);
+        };
+        const ImU32 bodyCol = darken(kindCol, 0.30f);
+
+        auto ns = std::make_shared<ImFlow::NodeStyle>(
+          kindCol, ImColor(0, 0, 0, 255), 8.0f
+        );
+        ns->bg            = bodyCol;
+        ns->border_color  = IM_COL32(0, 0, 0, 200);
+        ns->padding       = ImVec4(10.0f, 4.0f, 10.0f, 4.0f);
+        setStyle(std::move(ns));
+
+        // Mutate the pin style in place so the existing OutPin (created in
+        // the ctor) and every link drawn from it pick up the new colour
+        // without rebuilding the pin. Pin keeps full saturation so it pops
+        // against the darker body half it overlaps.
+        if (pinStyle) pinStyle->color = kindCol;
+      }
+
       void updateTitle() {
         if (varName.empty()) {
           setTitle(NAME);
         } else {
-          setTitle(std::string{ICON_MDI_VARIABLE " Get "} + varName);
+          setTitle(varName);
         }
+        // Restyle on every title refresh — covers ctor, dropdown selection,
+        // drag-drop drop, and deserialize without a separate hook.
+        applyKindStyle();
       }
 
       PrefabVarGet()
       {
         uuid = Utils::Hash::randomU64();
+        // Seed the per-instance pin style from the global brown so the
+        // socket renders correctly even before any kind is selected.
+        pinStyle = std::make_shared<ImFlow::PinStyle>(
+          IM_COL32(0xCC, 0x88, 0x55, 255), 0, 4.f, 4.67f, 3.7f, 1.f
+        );
         updateTitle();
-        // Brown to match the value pin colour.
-        setStyle(std::make_shared<ImFlow::NodeStyle>(IM_COL32(0xCC, 0x88, 0x55, 0xFF), ImColor(0,0,0,255), 3.5f));
-        addOUT<TypeValue>("", PIN_STYLE_VALUE);
+        addOUT<TypeValue>("", pinStyle);
       }
 
       void draw() override

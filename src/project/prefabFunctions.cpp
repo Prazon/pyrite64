@@ -348,3 +348,179 @@ Project::scanPrefabFunctions(const std::string &projectPath, const std::string &
   }
   return out;
 }
+
+bool Project::findPrefabFunctionRange(
+  const std::string &c,
+  const std::string &functionName,
+  size_t &outBegin,
+  size_t &outEnd)
+{
+  if (functionName.empty()) return false;
+  std::string token = functionName + "(";
+  size_t pos = 0;
+  while ((pos = c.find(token, pos)) != std::string::npos) {
+    char prev = pos == 0 ? ' ' : c[pos - 1];
+    bool prevIsIdent = (prev >= 'A' && prev <= 'Z')
+                    || (prev >= 'a' && prev <= 'z')
+                    || (prev >= '0' && prev <= '9')
+                    || prev == '_';
+    if (prevIsIdent) { ++pos; continue; }
+
+    // Walk back to the start of the line so we capture the signature
+    // including any return type / P64_NODE prefix.
+    size_t lineStart = c.rfind('\n', pos);
+    lineStart = (lineStart == std::string::npos) ? 0 : lineStart + 1;
+
+    size_t openBrace = c.find('{', pos);
+    if (openBrace == std::string::npos) return false;
+    int depth = 0;
+    size_t scan = openBrace;
+    bool ok = false;
+    for (; scan < c.size(); ++scan) {
+      if (c[scan] == '{') ++depth;
+      else if (c[scan] == '}') {
+        if (--depth == 0) { ok = true; break; }
+      }
+    }
+    if (!ok) return false;
+    size_t endPos = scan + 1;
+    if (endPos < c.size() && c[endPos] == '\n') ++endPos;
+
+    outBegin = lineStart;
+    outEnd   = endPos;
+    return true;
+  }
+  return false;
+}
+
+std::string Project::extractPrefabFunctionSource(
+  const std::string &projectPath,
+  const std::string &prefabName,
+  const std::string &functionName)
+{
+  fs::path sourcePath = fs::path{projectPath} / "src" / "user" / (prefabName + ".cpp");
+  std::error_code ec;
+  if (!fs::exists(sourcePath, ec)) return {};
+  std::string c = Utils::FS::loadTextFile(sourcePath.string());
+  size_t b = 0, e = 0;
+  if (!findPrefabFunctionRange(c, functionName, b, e)) return {};
+  return c.substr(b, e - b);
+}
+
+bool Project::replacePrefabFunctionSource(
+  const std::string &projectPath,
+  const std::string &prefabName,
+  const std::string &oldName,
+  const std::string &newSlice)
+{
+  if (oldName.empty()) return false;
+  fs::path sourcePath = fs::path{projectPath} / "src" / "user" / (prefabName + ".cpp");
+  std::error_code ec;
+  if (!fs::exists(sourcePath, ec)) return false;
+  std::string c = Utils::FS::loadTextFile(sourcePath.string());
+  size_t b = 0, e = 0;
+  if (!findPrefabFunctionRange(c, oldName, b, e)) return false;
+
+  // Splice the new slice in. Make sure we leave a trailing newline so the
+  // file's tail isn't joined onto the function's closing brace.
+  std::string toInsert = newSlice;
+  if (toInsert.empty() || toInsert.back() != '\n') toInsert.push_back('\n');
+
+  std::string out;
+  out.reserve(c.size() - (e - b) + toInsert.size());
+  out.append(c, 0, b);
+  out += toInsert;
+  out.append(c, e, std::string::npos);
+  Utils::FS::saveTextFile(sourcePath.string(), out);
+  return true;
+}
+
+bool Project::parsePrefabFunctionSignatureFromSlice(
+  const std::string &slice,
+  std::string &outName,
+  std::string &outReturnType,
+  std::string &outParams)
+{
+  // Pull the signature out of the first non-comment text up to the first
+  // `{`. Same regex shape scanPrefabFunctions uses but rooted at the head
+  // of the slice.
+  std::string clean = stripComments(slice);
+  size_t brace = clean.find('{');
+  if (brace == std::string::npos) return false;
+  std::string head = clean.substr(0, brace);
+
+  // Strip a leading P64_NODE token if present so the regex can focus on
+  // the C++ shape. Whitespace is otherwise preserved.
+  static const std::regex reMacro{R"(^\s*P64_NODE\s+)", std::regex::ECMAScript};
+  head = std::regex_replace(head, reMacro, "");
+
+  static const std::regex reSig{
+    R"(^\s*([\w:&*<>\s,]+?)\s+([A-Za-z_][\w]*)\s*\(([^)]*)\)\s*$)",
+    std::regex::ECMAScript
+  };
+  std::smatch m;
+  if (!std::regex_search(head, m, reSig)) return false;
+  outReturnType = m[1].str();
+  outName       = m[2].str();
+  outParams     = m[3].str();
+  while (!outReturnType.empty()
+         && std::isspace((unsigned char)outReturnType.back())) {
+    outReturnType.pop_back();
+  }
+  return true;
+}
+
+bool Project::updatePrefabFunctionHeader(
+  const std::string &projectPath,
+  const std::string &prefabName,
+  const std::string &oldName,
+  const std::string &newName,
+  const std::string &returnType,
+  const std::string &params)
+{
+  if (newName.empty()) return false;
+  fs::path headerPath = fs::path{projectPath} / "src" / "user" / (prefabName + ".h");
+  std::error_code ec;
+  if (!fs::exists(headerPath, ec)) {
+    // Header is missing — recreate the scaffold so we have something to
+    // write a declaration into.
+    ensureUserSourcePair(projectPath, prefabName);
+  }
+  std::string h = Utils::FS::loadTextFile(headerPath.string());
+  std::string declLine = "P64_NODE " + returnType + " " + newName
+                       + "(" + params + ");";
+
+  // Walk lines; replace the matching one if found, otherwise insert.
+  bool replaced = false;
+  std::string out;
+  size_t lineStart = 0;
+  while (lineStart < h.size()) {
+    size_t lineEnd = h.find('\n', lineStart);
+    if (lineEnd == std::string::npos) lineEnd = h.size();
+    std::string line = h.substr(lineStart, lineEnd - lineStart);
+    bool match = !replaced
+              && (line.find("P64_NODE") != std::string::npos)
+              && (line.find(oldName + "(") != std::string::npos);
+    if (match) {
+      // Preserve the line's leading whitespace so indentation matches
+      // surrounding declarations.
+      size_t lead = 0;
+      while (lead < line.size()
+             && (line[lead] == ' ' || line[lead] == '\t')) ++lead;
+      out += line.substr(0, lead);
+      out += declLine;
+      replaced = true;
+    } else {
+      out += line;
+    }
+    if (lineEnd < h.size()) out.push_back('\n');
+    lineStart = (lineEnd < h.size()) ? lineEnd + 1 : lineEnd;
+  }
+
+  if (!replaced) {
+    out = insertBeforeLastBrace(out, "  " + declLine);
+  }
+  if (out == h) return false;
+  Utils::FS::saveTextFile(headerPath.string(), out);
+  return true;
+}

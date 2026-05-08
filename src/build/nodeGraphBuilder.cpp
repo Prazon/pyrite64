@@ -5,6 +5,7 @@
 #include "projectBuilder.h"
 #include "../utils/string.h"
 #include "../utils/fs.h"
+#include "../context.h"
 #include <filesystem>
 
 #include "../project/graph/graph.h"
@@ -42,7 +43,7 @@ bool Build::buildNodeGraphAssets(Project::Project &project, SceneCtx &sceneCtx)
     sourceCode += "// AUTO-GENERATED FILE\n";
     sourceCode += "// File: " + asset.getName() + "\n\n";
 
-    graph.build(binFile, sourceCode, asset.getUUID());
+    graph.build(binFile, sourceCode, asset.getUUID(), &ctx.compileErrors, asset.getUUID());
     binFile.writeToFile(outPath);
 
     Utils::FS::saveTextFile(sourceOutPath, sourceCode);

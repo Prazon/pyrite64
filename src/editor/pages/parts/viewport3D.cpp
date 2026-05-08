@@ -893,7 +893,12 @@ void Editor::Viewport3D::draw()
       obj = nullptr;
     }
 
-    isCameraFlying = mouseHeldRight;
+    // Right-click only counts as "flying" for THIS viewport when the cursor
+    // is actually over it (or a drag is already active from this one). Without
+    // this gate, right-clicking a panel elsewhere (e.g. a function row in the
+    // PrefabEditor) makes every Viewport3D in the frame enter the wheel-input
+    // block below and steal scroll/keyboard input intended for the row.
+    isCameraFlying = mouseHeldRight && (isMouseHover || cameraDragActive);
 
     if (deletedSelection) {
       hasSelection = false;

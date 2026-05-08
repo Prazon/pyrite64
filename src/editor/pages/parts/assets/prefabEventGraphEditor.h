@@ -33,6 +33,14 @@ namespace Editor
       ImGuiID firstDockTarget{0};
       bool   firstDockApplied{false};
 
+      // Reveal-from-Compile-Errors state. Set by requestFocusNode(); the next
+      // draw frame consumes pendingFocusNodeUUID — it pans the canvas to
+      // center the node and arms a brief overlay rect that decays over a few
+      // hundred ms so the user can see *which* node was opened.
+      uint64_t pendingFocusNodeUUID{0};
+      uint64_t highlightNodeUUID{0};
+      float    highlightSecondsLeft{0.0f};
+
     public:
       explicit PrefabEventGraphEditor(uint64_t prefabAssetUUID);
 
@@ -40,6 +48,14 @@ namespace Editor
       void focus() const;
       void save();
       void discardUnsavedChanges();
+
+      // Queue a node-focus request. The next draw frame pans the canvas to
+      // center the node (using ImNodeFlow's setScroll) and starts a brief
+      // colored-outline overlay so the user can spot the node visually.
+      void requestFocusNode(uint64_t nodeUUID) {
+        pendingFocusNodeUUID = nodeUUID;
+        forceFocusNextFrame  = true;
+      }
       // Re-arm the first-frame dock override on a re-open call so a new
       // host can land the window where it wants even if the editor was
       // already alive. See codeEditor.h for matching rationale.

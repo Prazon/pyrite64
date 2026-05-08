@@ -5,6 +5,7 @@
 #pragma once
 #include "parts/assetInspector.h"
 #include "parts/assetsBrowser.h"
+#include "parts/compileErrorsWindow.h"
 #include "parts/layerInspector.h"
 #include "parts/logWindow.h"
 #include "parts/memoryDashboard.h"
@@ -17,6 +18,8 @@
 #include "parts/viewport2D.h"
 #include "parts/viewport3D.h"
 
+namespace Project::Compile { struct Error; }
+
 namespace Editor
 {
   class ModelEditor;
@@ -24,6 +27,7 @@ namespace Editor
   class CodeEditor;
   class PrefabEditor;
   class PrefabEventGraphEditor;
+  class PrefabFunctionCodeEditor;
 
   class Scene
   {
@@ -42,6 +46,10 @@ namespace Editor
       // Per-prefab event graph editors. Keyed by the parent prefab's asset
       // UUID — only one event graph window per prefab can be open at a time.
       std::map<uint64_t, std::shared_ptr<PrefabEventGraphEditor>> prefabEventGraphEditors{};
+      // Per-function code editors (slice editors that show only one
+      // P64_NODE function from a prefab's user .cpp). Keyed by a synthetic
+      // UUID derived from (prefabName, functionName) so re-opens dedupe.
+      std::map<uint64_t, std::shared_ptr<PrefabFunctionCodeEditor>> prefabFunctionCodeEditors{};
 
       // Defer-destroy list: PrefabEditor owns a Viewport3D whose framebuffer
       // GPU texture is referenced by ImGui's draw list for the current frame.
@@ -68,6 +76,7 @@ namespace Editor
       LayerInspector layerInspector{};
       ObjectInspector objectInspector{};
       LogWindow logWindow{};
+      CompileErrorsWindow compileErrorsWindow{};
       MemoryDashboard memoryDashboard{};
       SceneGraph sceneGraph{};
 
@@ -120,6 +129,22 @@ namespace Editor
       // new one. dockTarget, when nonzero, becomes the editor's first-frame
       // dock override (used by PrefabEditor to land it next to its viewport).
       void openPrefabEventGraphEditor(uint64_t prefabAssetUUID, ImGuiID dockTarget = 0);
+      // Open a slice editor showing only the named P64_NODE function from
+      // <project>/src/user/<prefabName>.cpp. Idempotent — re-opens focus
+      // the existing window. dockTarget, when nonzero, becomes the
+      // editor's first-frame dock override (used by PrefabEditor to land
+      // it next to its viewport). Returns the synthetic UUID so the
+      // PrefabEditor can track ownership for cleanup on close.
+      uint64_t openPrefabFunctionCodeEditor(
+        const std::string &prefabName,
+        const std::string &functionName,
+        ImGuiID dockTarget = 0
+      );
+
+      // Open the asset that owns the offending node, focus the graph window,
+      // and pan its viewport so the offending node is centered (with a brief
+      // highlight). Used by the Compile Errors panel on double-click.
+      void revealCompileError(const ::Project::Compile::Error &e);
 
       void draw();
       void save();

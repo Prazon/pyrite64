@@ -25,6 +25,7 @@
 #include "parts/assets/codeEditor.h"
 #include "parts/assets/prefabEditor.h"
 #include "parts/assets/prefabEventGraphEditor.h"
+#include "parts/assets/prefabFunctionCodeEditor.h"
 #include "../../project/compile/compileErrors.h"
 
 namespace
@@ -168,8 +169,96 @@ void Editor::Scene::openPrefabEventGraphEditor(uint64_t prefabAssetUUID, ImGuiID
   prefabEventGraphEditors[prefabAssetUUID] = std::move(editor);
 }
 
+uint64_t Editor::Scene::openPrefabFunctionCodeEditor(
+  const std::string &prefabName,
+  const std::string &functionName,
+  ImGuiID dockTarget)
+{
+  // Synthetic UUID keys de-dupe re-opens of the same (prefab, function)
+  // pair across right-click / double-click / drag-from-graph paths.
+  uint64_t synthUUID = Utils::Hash::sha256_64bit(
+    prefabName + "::" + functionName
+  );
+  auto it = prefabFunctionCodeEditors.find(synthUUID);
+  if (it != prefabFunctionCodeEditors.end()) {
+    if (dockTarget) it->second->setFirstDockTarget(dockTarget);
+    it->second->focus();
+    return synthUUID;
+  }
+  auto editor = std::make_shared<PrefabFunctionCodeEditor>(
+    synthUUID, prefabName, functionName
+  );
+  if (dockTarget) editor->setFirstDockTarget(dockTarget);
+  prefabFunctionCodeEditors[synthUUID] = std::move(editor);
+  return synthUUID;
+}
+
+void Editor::Scene::revealCompileError(const ::Project::Compile::Error &e)
+{
+  if(!ctx.project || e.assetUUID == 0) return;
+
+  auto *asset = ctx.project->getAssets().getEntryByUUID(e.assetUUID);
+  if(!asset) return;
+
+  if(asset->type == Project::FileType::PREFAB) {
+    openPrefabEventGraphEditor(e.assetUUID, 0);
+    auto it = prefabEventGraphEditors.find(e.assetUUID);
+    if(it != prefabEventGraphEditors.end() && e.nodeUUID != 0) {
+      it->second->requestFocusNode(e.nodeUUID);
+    }
+    return;
+  }
+
+  if(asset->type == Project::FileType::NODE_GRAPH) {
+    // Reuse the standard OPEN_NODE_GRAPH action to spawn a NodeEditor if one
+    // doesn't yet exist for this asset (mirrors how the asset browser opens
+    // these). Then walk nodeEditors to find the just-created instance and
+    // forward the focus request.
+    auto matches = [&](const std::shared_ptr<NodeEditor> &ed) {
+      return ed && ed->getAssetUUID() == e.assetUUID;
+    };
+    auto it = std::find_if(nodeEditors.begin(), nodeEditors.end(), matches);
+    if(it == nodeEditors.end()) {
+      Editor::Actions::call(Editor::Actions::Type::OPEN_NODE_GRAPH,
+        std::to_string(e.assetUUID));
+      it = std::find_if(nodeEditors.begin(), nodeEditors.end(), matches);
+    }
+    if(it != nodeEditors.end()) {
+      (*it)->focus();
+      if(e.nodeUUID != 0) (*it)->requestFocusNode(e.nodeUUID);
+    }
+    return;
+  }
+}
+
+void Editor::Scene::processPendingRestores()
+{
+  // No project yet — wait. Restoration is non-destructive; the lists stay put
+  // until they can be replayed against a real asset table.
+  if (!ctx.project) return;
+
+  // Drop UUIDs the current project doesn't recognise (saved from a different
+  // project, or assets deleted since last session) so we don't spawn zombie
+  // editors. Each open* helper is idempotent and handles re-focus on its own.
+  auto &assets = ctx.project->getAssets();
+  auto resolve = [&](std::vector<uint64_t> &list, auto opener) {
+    for (uint64_t uuid : list) {
+      if (assets.getEntryByUUID(uuid)) opener(uuid);
+    }
+    list.clear();
+  };
+  resolve(pendingRestoreModels,  [&](uint64_t u){ openModelEditor(u);  });
+  resolve(pendingRestoreImages,  [&](uint64_t u){ openImageEditor(u);  });
+  resolve(pendingRestoreCode,    [&](uint64_t u){ openCodeEditor(u);   });
+  resolve(pendingRestorePrefabs, [&](uint64_t u){ openPrefabEditor(u); });
+}
+
 void Editor::Scene::draw()
 {
+  // Replay any persisted-open editors now that a project is loaded. Cheap
+  // no-op once the lists are drained; cheap no-op while ctx.project is null.
+  processPendingRestores();
+
   float HEIGHT_TOP_BAR = 28_px;
   float HEIGHT_STATUS_BAR = 24_px;
 
@@ -222,10 +311,11 @@ void Editor::Scene::draw()
     // Top is the tab strip area: Scene Editor + every open asset editor.
     dockTopID = outerDockID;
 
-    ImGui::DockBuilderDockWindow("Scene Editor", dockTopID);
-    ImGui::DockBuilderDockWindow("Files",        dockBottomID);
-    ImGui::DockBuilderDockWindow("Log",          dockBottomID);
-    ImGui::DockBuilderDockWindow("ROM",          dockBottomID);
+    ImGui::DockBuilderDockWindow("Scene Editor",   dockTopID);
+    ImGui::DockBuilderDockWindow("Files",          dockBottomID);
+    ImGui::DockBuilderDockWindow("Log",            dockBottomID);
+    ImGui::DockBuilderDockWindow("Compile Errors", dockBottomID);
+    ImGui::DockBuilderDockWindow("ROM",            dockBottomID);
     ImGui::DockBuilderFinish(outerDockID);
   }
   else
@@ -438,6 +528,11 @@ void Editor::Scene::draw()
     prefabEventGraphEditors.erase(editor.getAssetUUID());
     for (uint64_t synth : editor.getOwnedCodeEditorUUIDs()) {
       codeEditors.erase(synth);
+      // Same synth-UUID space is also used for per-function slice editors
+      // when PrefabEditor opens them — the parent tracks both kinds in the
+      // same vector. Erasing both maps is harmless when the UUID isn't
+      // present in one of them.
+      prefabFunctionCodeEditors.erase(synth);
     }
   };
 
@@ -504,6 +599,16 @@ void Editor::Scene::draw()
   }
   for(auto &uuid : delEventGraphUUIDs) prefabEventGraphEditors.erase(uuid);
 
+  // Per-function code-editor windows. Same lifecycle as codeEditors above:
+  // each instance returns false when its 'X' button is hit; we drop it.
+  std::vector<uint64_t> delFnCodeUUIDs{};
+  for(auto &[uuid, editor] : prefabFunctionCodeEditors) {
+    if (!editor->draw(dockSpaceID)) {
+      delFnCodeUUIDs.push_back(uuid);
+    }
+  }
+  for(auto &uuid : delFnCodeUUIDs) prefabFunctionCodeEditors.erase(uuid);
+
   // SPBF64 fork: graph + inspector now take an explicit scene + selection.
   // Here we drive them with the project's active scene and the main selection.
   // PrefabEditor windows below set up their own EditScope and call these
@@ -544,6 +649,23 @@ void Editor::Scene::draw()
   ImGui::Begin("Log");
   ImGui::PopStyleVar();;
     logWindow.draw();
+  ImGui::End();
+
+  // Auto-focus the Compile Errors tab on each new build cycle (revision bump
+  // means clear() or push() ran). Cheap one-shot — doesn't fight the user
+  // when they tab away to Log between builds.
+  {
+    uint32_t curRev = ctx.compileErrors.getRevision();
+    if(curRev != compileErrorsWindow.lastSeenRevision
+       && ctx.compileErrors.errorCount() + ctx.compileErrors.warningCount() > 0) {
+      ImGui::SetNextWindowFocus();
+    }
+    compileErrorsWindow.lastSeenRevision = curRev;
+  }
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2_px, 2_px));
+  ImGui::Begin("Compile Errors");
+  ImGui::PopStyleVar();
+    compileErrorsWindow.draw();
   ImGui::End();
 
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4_px, 4_px));

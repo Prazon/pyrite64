@@ -4,8 +4,12 @@
 */
 #include "graph.h"
 
+#include <unordered_set>
+
 #include "json.hpp"
 #include "../../utils/string.h"
+#include "../../utils/logger.h"
+#include "../compile/compileErrors.h"
 
 #include "nodes/nodeWait.h"
 #include "nodes/nodeObjDel.h"
@@ -98,10 +102,12 @@ namespace Project::Graph
     TABLE_ENTRY(SwitchCase),
     TABLE_ENTRY(Note),
     // Prefab-only nodes (Phase 3.2). Indices appended to keep saved graphs
-    // stable; the persisted "type" field is an index into this table.
-    TABLE_ENTRY(PrefabEvent),
-    TABLE_ENTRY(PrefabFunc),
-    TABLE_ENTRY(PrefabVarGet),
+    // stable; the persisted "type" field is an index into this table. The
+    // TYPE_PREFAB_* constants in graph.h reference these indices — bump the
+    // constants if you reorder anything here.
+    TABLE_ENTRY(PrefabEvent),     // 13
+    TABLE_ENTRY(PrefabFunc),      // 14 — TYPE_PREFAB_FUNC
+    TABLE_ENTRY(PrefabVarGet),    // 15 — TYPE_PREFAB_VAR_GET
   });
 
   const std::vector<std::string> & Graph::getNodeNames()
@@ -131,7 +137,16 @@ namespace Project::Graph
     std::unordered_map<uint64_t, std::shared_ptr<Node::Base>> newNodes{};
     for(auto &savedNode : nodeData["nodes"]) {
       uint32_t type = savedNode["type"];
-      assert(type < NODE_TABLE.size() && "Unknown node type in graph load");
+      if(type >= NODE_TABLE.size()) {
+        // Future / corrupted graph file. Drop the node and keep loading so
+        // the user sees the rest of the graph instead of an empty editor.
+        // build() will additionally re-emit a structured ERROR per asset.
+        Utils::Logger::log(
+          "Unknown node type " + std::to_string(type) + " in graph; skipping node.",
+          Utils::Logger::LEVEL_ERROR
+        );
+        continue;
+      }
       auto newNode = NODE_TABLE[type].create(graph, {});
       newNode->deserialize(savedNode);
       newNode->setPos({savedNode["pos"][0], savedNode["pos"][1]});
@@ -207,12 +222,108 @@ namespace Project::Graph
     return data.dump(2);
   }
 
+  void Graph::validate(
+    ::Project::Compile::ErrorList *errs,
+    uint64_t assetUUID
+  )
+  {
+    if(!errs) return;
+    auto &nodes = graph.getNodes();
+    if(nodes.empty()) return;
+
+    auto pushErr = [&](::Project::Compile::Severity sev, uint64_t nodeUUID, std::string msg) {
+      errs->push(::Project::Compile::Error{sev, assetUUID, nodeUUID, msg});
+      // Mirror to the Logger stream so the existing Log window remains a
+      // superset view; the structured panel is the navigable slice.
+      Utils::Logger::log(msg,
+        sev == ::Project::Compile::Severity::ERROR
+          ? Utils::Logger::LEVEL_ERROR
+          : Utils::Logger::LEVEL_WARN);
+    };
+
+    // Pin-style identity check: graph nodes share the two singleton style
+    // shared_ptrs PIN_STYLE_LOGIC / PIN_STYLE_VALUE, so pointer equality
+    // separates logic edges from value edges without inspecting fields.
+    auto isLogicPin = [](ImFlow::Pin *p) {
+      return p && p->getStyle().get() == ::Project::Graph::Node::PIN_STYLE_LOGIC.get();
+    };
+
+    std::unordered_set<uint64_t> hasIncomingLogic{};
+    for(const auto &weakLink : graph.getLinks()) {
+      if(auto link = weakLink.lock()) {
+        auto leftPin  = link->left();
+        auto rightPin = link->right();
+        if(leftPin && rightPin && isLogicPin(leftPin) && isLogicPin(rightPin)) {
+          auto rightNode = (Node::Base*)rightPin->getParent();
+          if(rightNode) hasIncomingLogic.insert(rightNode->uuid);
+        }
+      }
+    }
+
+    // Entry-point detection. Type 0 is Start (canonical entry). Type 13 is
+    // PrefabEvent — also an entry point used by prefab event graphs (Ready
+    // / Enable / Disable etc.). Either is sufficient for the graph to have
+    // an entry. The constants below mirror NODE_TABLE order in this file.
+    constexpr uint32_t TYPE_START        = 0;
+    constexpr uint32_t TYPE_PREFAB_EVENT = 13;
+
+    uint32_t startCount = 0;
+    uint64_t firstExtraStart = 0;
+    bool hasAnyEntry = false;
+    for(const auto &node : nodes | std::views::values) {
+      auto p64Node = (Node::Base*)node.get();
+      if(p64Node->type == TYPE_START) {
+        ++startCount;
+        if(startCount == 2) firstExtraStart = p64Node->uuid;
+        hasAnyEntry = true;
+      } else if(p64Node->type == TYPE_PREFAB_EVENT) {
+        hasAnyEntry = true;
+      }
+    }
+
+    if(!hasAnyEntry) {
+      pushErr(::Project::Compile::Severity::ERROR, 0,
+        "Graph has no entry node (Start or PrefabEvent).");
+    }
+
+    if(startCount > 1) {
+      pushErr(::Project::Compile::Severity::WARNING, firstExtraStart,
+        "Graph has " + std::to_string(startCount) +
+        " Start nodes; only the first one is reachable.");
+    }
+
+    // Per-node reachability: any node whose first input pin is logic-styled
+    // but has no incoming logic edge can never run. Entry-point types are
+    // skipped (they have no logic-in pin and the loop check naturally
+    // excludes them, but we still guard against future schema changes).
+    for(const auto &node : nodes | std::views::values) {
+      auto p64Node = (Node::Base*)node.get();
+      if(p64Node->type == TYPE_START)        continue;
+      if(p64Node->type == TYPE_PREFAB_EVENT) continue;
+
+      auto &ins = p64Node->getIns();
+      if(ins.empty()) continue;
+      if(!isLogicPin(ins[0].get())) continue;
+
+      if(!hasIncomingLogic.contains(p64Node->uuid)) {
+        pushErr(::Project::Compile::Severity::ERROR, p64Node->uuid,
+          "Node '" + p64Node->getName() + "' is unreachable (no incoming logic edge).");
+      }
+    }
+  }
+
   void Graph::build(
     Utils::BinaryFile &f,
     std::string &source,
-    uint64_t uuid
+    uint64_t uuid,
+    ::Project::Compile::ErrorList *errs,
+    uint64_t assetUUID
   )
   {
+    // Run validation up front. Code emission still proceeds afterwards — the
+    // build driver is the policy point that decides whether errorCount() > 0
+    // turns into a project-build failure.
+    validate(errs, assetUUID);
     auto &nodes = graph.getNodes();
 
     uint16_t stackSize = 4096;

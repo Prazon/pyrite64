@@ -1,6 +1,7 @@
 #include "prefabEventGraphEditor.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "ImNodeFlow.h"
 #include "json.hpp"
 #include "IconsMaterialDesignIcons.h"
@@ -10,6 +11,9 @@
 #include "../../../../utils/logger.h"
 #include "../../../../project/graph/nodes/baseNode.h"
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
+#include "../../../../project/graph/nodes/nodePrefabFunc.h"
+#include "../../../../project/graph/nodes/nodePrefabVarGet.h"
+#include "../../../dragDropPayloads.h"
 
 namespace
 {
@@ -170,10 +174,17 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
 
   // First-frame dock override wins over the loop-passed default. Lets the
   // PrefabEditor host its event graph as a sibling tab of its viewport.
-  ImGuiID openDockId = (firstDockTarget && !firstDockApplied)
-                        ? firstDockTarget : defDockId;
-  if (openDockId) ImGui::SetNextWindowDockID(openDockId, ImGuiCond_FirstUseEver);
-  if (firstDockTarget && !firstDockApplied) firstDockApplied = true;
+  // DockBuilderDockWindow + SetNextWindowDockID(Always) together beat any
+  // stale imgui.ini layout from a prior session that placed this window in
+  // the outer Scene Editor strip — the loaded Window record otherwise wins
+  // on the very first frame.
+  if (firstDockTarget && !firstDockApplied) {
+    ImGui::DockBuilderDockWindow(winName.c_str(), firstDockTarget);
+    ImGui::SetNextWindowDockID(firstDockTarget, ImGuiCond_Always);
+    firstDockApplied = true;
+  } else if (defDockId) {
+    ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  }
 
   if (!isInit) {
     isInit = true;
@@ -217,8 +228,102 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
   pctx.prefabName  = asset->name;
   pctx.projectPath = ctx.project->getPath();
 
-  graph.graph.setSize(ImGui::GetContentRegionAvail());
+  // Capture the canvas rect *before* update() so the drop target below covers
+  // exactly what ImNodeFlow just rendered into.
+  ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
+  ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+  graph.graph.setSize(canvasSize);
+
+  // Reveal-from-Compile-Errors: if a node UUID is pending, pan the canvas so
+  // its center matches the canvas center, and arm the highlight overlay. We
+  // do this *before* update() so the panned scroll value is what ImNodeFlow
+  // renders this frame — no one-frame flicker.
+  Project::Graph::Node::Base* focusNode = nullptr;
+  if(pendingFocusNodeUUID != 0) {
+    for(const auto &kv : graph.graph.getNodes()) {
+      auto *n = (Project::Graph::Node::Base*)kv.second.get();
+      if(n && n->uuid == pendingFocusNodeUUID) { focusNode = n; break; }
+    }
+    if(focusNode) {
+      ImVec2 nodePos  = focusNode->getPos();
+      ImVec2 nodeSize = focusNode->getSize();
+      // ImNodeFlow scroll is the grid-space offset of the canvas origin; to
+      // center a node at grid-pos P with size S inside a canvas of size C,
+      // the scroll should be (C/2 - (P + S/2)).
+      ImVec2 target{
+        canvasSize.x * 0.5f - (nodePos.x + nodeSize.x * 0.5f),
+        canvasSize.y * 0.5f - (nodePos.y + nodeSize.y * 0.5f),
+      };
+      graph.graph.getGrid().setScroll(target);
+      highlightNodeUUID    = pendingFocusNodeUUID;
+      highlightSecondsLeft = 2.0f;
+    }
+    pendingFocusNodeUUID = 0;
+  }
+
   graph.graph.update();
+
+  // Highlight overlay: draw a colored rect on top of the node for a couple
+  // seconds after a focus request. Uses the foreground draw list so the
+  // outline sits over ImNodeFlow's rendering.
+  if(highlightSecondsLeft > 0.0f && highlightNodeUUID != 0) {
+    Project::Graph::Node::Base* hn = nullptr;
+    for(const auto &kv : graph.graph.getNodes()) {
+      auto *n = (Project::Graph::Node::Base*)kv.second.get();
+      if(n && n->uuid == highlightNodeUUID) { hn = n; break; }
+    }
+    if(hn) {
+      ImVec2 g = hn->getPos();
+      ImVec2 sz = hn->getSize();
+      ImVec2 scroll = graph.graph.getGrid().scroll();
+      ImVec2 mn{canvasMin.x + scroll.x + g.x - 4.0f,
+                canvasMin.y + scroll.y + g.y - 4.0f};
+      ImVec2 mx{mn.x + sz.x + 8.0f, mn.y + sz.y + 8.0f};
+      float a = highlightSecondsLeft > 1.0f ? 1.0f : highlightSecondsLeft;
+      ImU32 col = IM_COL32(255, 80, 80, (int)(255.0f * a));
+      ImGui::GetForegroundDrawList()->AddRect(mn, mx, col, 4.0f, 0, 3.0f);
+      highlightSecondsLeft -= ImGui::GetIO().DeltaTime;
+    } else {
+      highlightSecondsLeft = 0.0f;
+    }
+  }
+
+  // Drag-drop drop target over the canvas — accepts payloads emitted by
+  // PrefabEditor's My-Prefab variables / functions panels. Spawns a
+  // pre-filled PrefabVarGet / PrefabFunc node at the drop location so the
+  // user doesn't have to find it in the right-click create palette.
+  {
+    ImRect canvasRect{canvasMin, ImVec2{canvasMin.x + canvasSize.x,
+                                        canvasMin.y + canvasSize.y}};
+    ImGuiID dropID = ImGui::GetID("##prefabGraphDrop");
+    if (ImGui::BeginDragDropTargetCustom(canvasRect, dropID)) {
+      // PrefabVarGet drop.
+      if (const ImGuiPayload *p = ImGui::AcceptDragDropPayload(
+            Editor::DragDrop::TYPE_PREFAB_VAR)) {
+        const auto *vp = static_cast<const Editor::DragDrop::PrefabVarPayload*>(p->Data);
+        ImVec2 pos = graph.graph.screen2grid(ImGui::GetMousePos());
+        auto node = graph.addNode(Project::Graph::TYPE_PREFAB_VAR_GET, pos);
+        if (auto *vn = dynamic_cast<Project::Graph::Node::PrefabVarGet*>(node.get())) {
+          vn->varUUID = vp->uuid;
+          vn->varName = vp->name;
+          vn->varKind = vp->kind;
+          vn->updateTitle();
+        }
+      }
+      // PrefabFunc drop.
+      if (const ImGuiPayload *p = ImGui::AcceptDragDropPayload(
+            Editor::DragDrop::TYPE_PREFAB_FUNC)) {
+        const auto *fp = static_cast<const Editor::DragDrop::PrefabFuncPayload*>(p->Data);
+        ImVec2 pos = graph.graph.screen2grid(ImGui::GetMousePos());
+        auto node = graph.addNode(Project::Graph::TYPE_PREFAB_FUNC, pos);
+        if (auto *fn = dynamic_cast<Project::Graph::Node::PrefabFunc*>(node.get())) {
+          fn->funcName = fp->name;
+          fn->updateTitle();
+        }
+      }
+      ImGui::EndDragDropTarget();
+    }
+  }
 
   pctx.prefab = nullptr;
   pctx.prefabName.clear();

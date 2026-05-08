@@ -7,6 +7,7 @@
 #include "../utils/fs.h"
 #include "../utils/logger.h"
 #include "../utils/proc.h"
+#include "../context.h"
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -271,6 +272,12 @@ namespace
       // pass (which can run in CLI mode without UI).
       Project::Graph::Graph live;
       if (!live.deserialize(asset.prefab->eventGraphJSON)) continue;
+
+      // Run the same structural validator the standalone NODE_GRAPH path uses
+      // so prefab event graphs surface errors in the Compile Errors panel
+      // identically. The asset UUID is the prefab's so double-click opens
+      // the prefab event graph editor.
+      live.validate(&ctx.compileErrors, asset.getUUID());
 
       const std::string ident = toIdent(asset.name);
       const uint32_t prefabUUID = asset.prefab->uuid.value;
