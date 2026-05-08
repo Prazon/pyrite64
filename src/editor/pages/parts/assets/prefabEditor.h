@@ -10,6 +10,7 @@
 #include "../../../undoRedo.h"
 #include "../sceneGraph.h"
 #include "../objectInspector.h"
+#include "../viewport3D.h"
 
 namespace Editor
 {
@@ -43,12 +44,19 @@ namespace Editor
       SceneGraph graph{};
       ObjectInspector inspector{};
 
+      // 3D preview of the prefab — same Viewport3D class that drives the main
+      // editor's 3D viewport, but bound to this editor's in-memory scene +
+      // selection so picking, gizmos, drag-drop, and component highlights all
+      // operate on the prefab subtree.
+      Viewport3D viewport{scene, selection};
+
       bool dockOnFirstAppearance{true};
       bool forceFocusNextFrame{true};
       // Last-saved JSON of the prefab subtree; used for dirty detection.
       std::string savedJSON{};
-      // Splitter fraction between graph (left) and inspector (right).
-      float splitFrac{0.4f};
+      // Splitter fractions for the 3-pane body: hierarchy | viewport | inspector.
+      float leftSplitFrac{0.22f};
+      float rightSplitFrac{0.30f};
 
       void loadFromDisk();
       void saveToDisk();

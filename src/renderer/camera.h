@@ -8,7 +8,7 @@
 #include "uniforms.h"
 #include "glm/vec3.hpp"
 #include "glm/gtc/quaternion.hpp"
-#include "../context.h"
+namespace Project { class Scene; class Selection; }
 
 namespace Renderer
 {
@@ -53,6 +53,8 @@ namespace Renderer
       }
 
       void focus(glm::vec3 position, float distance);
-      void focusSelection(Context &ctx);
+      // SPBF64 fork: take scene + selection explicitly so this works for any
+      // viewport's selection, not only ctx.mainSelection / the active scene.
+      void focusSelection(Project::Scene &scene, const Project::Selection &selection);
   };
 }

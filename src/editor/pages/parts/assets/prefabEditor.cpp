@@ -39,6 +39,13 @@ void Editor::PrefabEditor::loadFromDisk()
   std::string objJson = asset->prefab->obj.serialize().dump();
   scene.loadFromObjectJSON(objJson);
   savedJSON = scene.serializeRootChild();
+
+  // Pre-select the prefab root so the inspector shows something on open and
+  // pressing the camera-focus shortcut frames the prefab subtree.
+  auto &root = scene.getRootObject();
+  if (!root.children.empty()) {
+    selection.set(root.children.front()->uuid);
+  }
 }
 
 void Editor::PrefabEditor::saveToDisk()
@@ -135,35 +142,64 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
     }
   }
 
-  // Two-pane body: scene graph on the left, object inspector on the right,
-  // with a draggable splitter between them.
+  // Three-pane body, modeled after Unreal's Blueprint Editor:
+  //   [hierarchy] | [3D viewport] | [details inspector]
+  // Two draggable splitters between them. We compute pane widths from
+  // fractions of the current avail width so resizing the window keeps the
+  // ratio consistent.
   float avail = ImGui::GetContentRegionAvail().x;
-  float leftW = ImClamp(avail * splitFrac, MIN_PANE_WIDTH, avail - MIN_PANE_WIDTH - SPLITTER_WIDTH);
+  float leftW = ImClamp(avail * leftSplitFrac,
+    MIN_PANE_WIDTH, avail - 2.0f * MIN_PANE_WIDTH - 2.0f * SPLITTER_WIDTH);
+  float rightW = ImClamp(avail * rightSplitFrac,
+    MIN_PANE_WIDTH, avail - leftW - MIN_PANE_WIDTH - 2.0f * SPLITTER_WIDTH);
 
+  auto drawSplitter = [](const char* id, float &fracTarget, float currentW, float avail,
+                         float minThisPane, float minOtherPanes) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
+    ImGui::Button(id, ImVec2(SPLITTER_WIDTH, -1));
+    ImGui::PopStyleColor(3);
+    if (ImGui::IsItemActive()) {
+      float delta = ImGui::GetIO().MouseDelta.x;
+      float newW = currentW + delta;
+      float minFrac = minThisPane / avail;
+      float maxFrac = (avail - minOtherPanes) / avail;
+      fracTarget = ImClamp(newW / avail, minFrac, maxFrac);
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+  };
+
+  // Left: scene graph.
   ImGui::BeginChild("##GraphPane", ImVec2(leftW, 0), ImGuiChildFlags_Borders);
     graph.draw(scene, selection);
   ImGui::EndChild();
 
   ImGui::SameLine();
-
-  // Splitter: an invisible button that the user can drag horizontally to
-  // resize the panes. Cursor and visual feedback come from the surrounding
-  // style; ImGuiCol_Separator gets drawn as a thin vertical strip.
-  ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
-  ImGui::Button("##Splitter", ImVec2(SPLITTER_WIDTH, -1));
-  ImGui::PopStyleColor(3);
-  if (ImGui::IsItemActive()) {
-    float delta = ImGui::GetIO().MouseDelta.x;
-    splitFrac = ImClamp((leftW + delta) / avail, 0.1f, 0.9f);
-  }
-  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-  }
-
+  // Left splitter: dragging changes left pane width; center pane absorbs.
+  // Other-panes minimum = center min + right (current) + right-splitter.
+  drawSplitter("##SplitterL", leftSplitFrac, leftW, avail,
+               MIN_PANE_WIDTH, MIN_PANE_WIDTH + rightW + 2.0f * SPLITTER_WIDTH);
   ImGui::SameLine();
 
+  // Center: 3D viewport bound to this editor's scene + selection. Same
+  // Viewport3D class as the main viewport — picking, gizmos, drag-drop, and
+  // component selection highlights all work against the prefab.
+  ImGui::BeginChild("##ViewportPane", ImVec2(avail - leftW - rightW - 2.0f * SPLITTER_WIDTH, 0),
+    ImGuiChildFlags_Borders);
+    viewport.draw();
+  ImGui::EndChild();
+
+  ImGui::SameLine();
+  // Right splitter: dragging changes right pane width; center pane absorbs.
+  // Other-panes minimum = left (current) + left-splitter + center min.
+  drawSplitter("##SplitterR", rightSplitFrac, rightW, avail,
+               MIN_PANE_WIDTH, leftW + 2.0f * SPLITTER_WIDTH + MIN_PANE_WIDTH);
+  ImGui::SameLine();
+
+  // Right: object inspector.
   ImGui::BeginChild("##InspectorPane", ImVec2(0, 0), ImGuiChildFlags_Borders);
     inspector.draw(scene, selection);
   ImGui::EndChild();

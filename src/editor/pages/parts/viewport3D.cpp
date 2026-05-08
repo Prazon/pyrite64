@@ -16,6 +16,8 @@
 #include "../../../utils/meshGen.h"
 #include "../../../utils/colors.h"
 #include "../../../project/component/components.h"
+#include "../../../project/scene/scene.h"
+#include "../../../project/selection.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/matrix_decompose.hpp"
 #include "SDL3/SDL_gpu.h"
@@ -31,6 +33,13 @@ extern SDL_GPUSampler *texSamplerRepeat;
 
 namespace
 {
+  // SPBF64 fork: thread-local pointer to the Selection that applies to the
+  // currently-rendering Viewport3D. Set by ViewportSelectionScope; read by
+  // Editor::activeViewportSelection() (which components call when drawing
+  // selection highlights). Per-thread so background submission threads don't
+  // race with the editor thread. nullptr => fall back to ctx.mainSelection.
+  thread_local Project::Selection* activeVPSel{nullptr};
+
   constinit uint32_t nextPassId{0};
 
   constexpr ImGuizmo::OPERATION GIZMO_OPS[3] {
@@ -149,7 +158,10 @@ namespace
     for(auto& child : obj.children)
     {
       // if child itself is selected, skip (already transformed with it)
-      if(ctx.mainSelection.isSelected(child->uuid))continue;
+      // SPBF64 fork: route through the active viewport's selection so that
+      // gizmo-drag of a selection in the prefab editor doesn't drag children
+      // by the main scene's selection.
+      if(Editor::activeViewportSelection().isSelected(child->uuid))continue;
 
       auto it = relPosMap.find(child->uuid);
       if(it == relPosMap.end())continue;
@@ -210,6 +222,44 @@ Editor::Viewport3D::Viewport3D()
   objPrimitives.setMesh(meshPrimitives);
 }
 
+// SPBF64 fork: bound-scene ctor used by PrefabEditor (and any future per-asset
+// editor that wants a 3D preview of its own scene). Behaves identically to
+// the default ctor except getScene()/getSelection() resolve to the bound
+// instances instead of falling back to the project's loaded scene.
+Editor::Viewport3D::Viewport3D(Project::Scene& scene, Project::Selection& selection)
+  : Viewport3D{}
+{
+  boundScene = &scene;
+  boundSelection = &selection;
+}
+
+Project::Scene* Editor::Viewport3D::getScene() const
+{
+  if (boundScene) return boundScene;
+  return ctx.project ? ctx.project->getScenes().getLoadedScene() : nullptr;
+}
+
+Project::Selection& Editor::Viewport3D::getSelection() const
+{
+  return boundSelection ? *boundSelection : ctx.mainSelection;
+}
+
+Editor::ViewportSelectionScope::ViewportSelectionScope(Project::Selection& sel)
+{
+  prev = activeVPSel;
+  activeVPSel = &sel;
+}
+
+Editor::ViewportSelectionScope::~ViewportSelectionScope()
+{
+  activeVPSel = prev;
+}
+
+Project::Selection& Editor::activeViewportSelection()
+{
+  return activeVPSel ? *activeVPSel : ctx.mainSelection;
+}
+
 void Editor::Viewport3D::addBillboardQuad(const glm::vec3 &worldPos, uint32_t objectId,
                                           SDL_GPUTexture *texture,
                                           const glm::vec4 &sizeAndPivot,
@@ -259,11 +309,11 @@ Editor::Viewport3D::~Viewport3D() {
 
 bool Editor::Viewport3D::alignFocusedObjectToCamera()
 {
-  auto scene = ctx.project ? ctx.project->getScenes().getLoadedScene() : nullptr;
+  auto* scene = getScene();
   // No scene loaded or no object selected --> Abort
-  if (!scene || ctx.mainSelection.primary() == 0)return false;
+  if (!scene || getSelection().primary() == 0)return false;
 
-  auto obj = scene->getObjectByUUID(ctx.mainSelection.primary());
+  auto obj = scene->getObjectByUUID(getSelection().primary());
   // Cannot get selected object --> Abort
   if (!obj)return false;
 
@@ -330,10 +380,14 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   meshPrimitives->vertLines.clear();
   meshPrimitives->indices.clear();
 
-  auto scene = ctx.project->getScenes().getLoadedScene();
+  auto* scene = getScene();
   if (!scene)return;
 
-  ctx.mainSelection.sanitize(scene);
+  // SPBF64 fork: bind this viewport's selection so component draw paths see
+  // the right selection (e.g. compModel's selection-tint highlight).
+  ViewportSelectionScope vpSelScope(getSelection());
+
+  getSelection().sanitize(scene);
 
   SDL_GPURenderPass* renderPass3D = SDL_BeginGPURenderPass(
     cmdBuff, fb.getTargetInfo(), fb.getTargetInfoCount(), &fb.getDepthTargetInfo()
@@ -355,7 +409,7 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
     {
       if(!hadDraw) {
         glm::u8vec4 spriteCol{0xFF, 0xFF, 0xFF, 0xFF};
-        if (ctx.mainSelection.isSelected(obj.uuid)) {
+        if (getSelection().isSelected(obj.uuid)) {
           spriteCol = Utils::Colors::kSelectionTint;
         }
         Utils::Mesh::addSprite(*getSprites(), obj.pos.resolve(obj.propOverrides), obj.uuid, 2, spriteCol);
@@ -550,8 +604,10 @@ void Editor::Viewport3D::onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPa
   //vertBuff->upload(*copyPass);
 
   if(!ctx.project)return;
-  auto scene = ctx.project->getScenes().getLoadedScene();
+  auto* scene = getScene();
   if (!scene)return;
+
+  ViewportSelectionScope vpSelScope(getSelection());
 
   if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "Object Copy-Pass");
 
@@ -586,8 +642,13 @@ void Editor::Viewport3D::draw()
 
   camera.update();
 
-  auto scene = ctx.project->getScenes().getLoadedScene();
+  auto* scene = getScene();
   if (!scene)return;
+
+  // SPBF64 fork: bind this viewport's selection for the duration of draw so
+  // gizmo / picking / selection-marquee interactions all read+write the
+  // bound Selection rather than ctx.mainSelection.
+  ViewportSelectionScope vpSelScope(getSelection());
 
   ctx.scene->clearLights();
   auto &rootObj = scene->getRootObject();
@@ -603,7 +664,7 @@ void Editor::Viewport3D::draw()
   // SPBF64 fork: detect a selected Comp::Camera and capture its projection
   // params for the Picture-in-Picture preview pass. First selected camera wins.
   previewSpec.active = false;
-  for (uint32_t selUUID : ctx.mainSelection.all()) {
+  for (uint32_t selUUID : getSelection().all()) {
     auto selObj = scene->getObjectByUUID(selUUID);
     if (!selObj) continue;
     auto srcObj = selObj.get();
@@ -639,17 +700,17 @@ void Editor::Viewport3D::draw()
 
     if (newUUID == 0) {
       if (!pickAdditive) {
-        ctx.mainSelection.clear();
+        getSelection().clear();
       }
     } else {
       if (pickAdditive) {
-        ctx.mainSelection.toggle(newUUID);
+        getSelection().toggle(newUUID);
       } else {
-        ctx.mainSelection.set(newUUID);
+        getSelection().set(newUUID);
       }
     }
   }
-  auto obj = scene->getObjectByUUID(ctx.mainSelection.primary());
+  auto obj = scene->getObjectByUUID(getSelection().primary());
 
   float BAR_HEIGHT = 26_px;
 
@@ -709,7 +770,7 @@ void Editor::Viewport3D::draw()
   bool isShiftDown = ImGui::GetIO().KeyShift;
   if(isShiftDown)moveSpeed *= 4.0f;
 
-  bool hasSelection = !ctx.mainSelection.all().empty();
+  bool hasSelection = !getSelection().all().empty();
   bool overGizmo = hasSelection && ImGuizmo::IsOver();
 
   bool leftClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -744,7 +805,7 @@ void Editor::Viewport3D::draw()
       rectMax = glm::clamp(rectMax, glm::vec2{0,0}, viewportSize);
 
       if (!additiveSelect) {
-        ctx.mainSelection.clear();
+        getSelection().clear();
       }
 
       auto &rootObj = scene->getRootObject();
@@ -760,7 +821,7 @@ void Editor::Viewport3D::draw()
         glm::vec2 screenPos{proj.x, currSize.y - proj.y};
         if (screenPos.x >= rectMin.x && screenPos.x <= rectMax.x
             && screenPos.y >= rectMin.y && screenPos.y <= rectMax.y) {
-          ctx.mainSelection.add(objIter.uuid);
+          getSelection().add(objIter.uuid);
         }
       });
     } else {
@@ -790,7 +851,7 @@ void Editor::Viewport3D::draw()
     bool deletedSelection = false;
     if (ImGui::IsWindowFocused() && obj && ImGui::IsKeyPressed(ctx.prefs.keymap.deleteObject)) {
       UndoRedo::getHistory().markChanged("Delete Object");
-      if (Editor::SelectionUtils::deleteSelectedObjects(*scene, ctx.mainSelection)) {
+      if (Editor::SelectionUtils::deleteSelectedObjects(*scene, getSelection())) {
         deletedSelection = true;
       }
       obj = nullptr;
@@ -820,7 +881,7 @@ void Editor::Viewport3D::draw()
         if (ImGui::IsKeyDown(ctx.prefs.keymap.gizmoTranslate))gizmoOp = 0;
         if (ImGui::IsKeyDown(ctx.prefs.keymap.gizmoRotate))gizmoOp = 1;
         if (ImGui::IsKeyDown(ctx.prefs.keymap.gizmoScale))gizmoOp = 2;
-        if (ImGui::IsKeyPressed(ctx.prefs.keymap.focusObject))camera.focusSelection(ctx);
+        if (ImGui::IsKeyPressed(ctx.prefs.keymap.focusObject))camera.focusSelection(*scene, getSelection());
       }
     }
   }
@@ -1010,7 +1071,7 @@ void Editor::Viewport3D::draw()
           glm::vec3 camPos = camera.pos;
           newObj->pos.resolve(newObj->propOverrides) = camPos + camForward * 150.0f;
 
-          ctx.mainSelection.set(newObj->uuid);
+          getSelection().set(newObj->uuid);
         }
       }
     }
@@ -1042,7 +1103,7 @@ void Editor::Viewport3D::draw()
   ImGuizmo::SetRect(currPos.x, currPos.y, currSize.x, currSize.y);
 
   if (hasSelection) {
-    auto selectedObjects = Editor::SelectionUtils::collectSelectedObjects(*scene, ctx.mainSelection);
+    auto selectedObjects = Editor::SelectionUtils::collectSelectedObjects(*scene, getSelection());
     if (!selectedObjects.empty()) {
       obj = scene->getObjectByUUID(selectedObjects.back()->uuid);
 

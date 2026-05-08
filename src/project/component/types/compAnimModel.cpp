@@ -208,7 +208,7 @@ namespace Project::Component::AnimModel
       .obj = obj
     });
 
-    bool isSelected = ctx.mainSelection.isSelected(obj.uuid);
+    bool isSelected = Editor::activeViewportSelection().isSelected(obj.uuid);
     if (isSelected)
     {
       Utils::AABB aabb = data.aabb;

@@ -119,7 +119,7 @@ namespace Project::Component::Camera
 
     auto pos = obj.pos.resolve(obj);
 
-    bool isSelected = ctx.mainSelection.isSelected(obj.uuid);
+    bool isSelected = Editor::activeViewportSelection().isSelected(obj.uuid);
 
     // calculate frustum corners in world space
     float fovY = glm::radians(data.fov.resolve(obj));

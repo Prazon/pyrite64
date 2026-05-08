@@ -14,8 +14,28 @@
 #include "../../../renderer/skeleton.h"
 #include "../../../utils/container.h"
 
+namespace Project { class Scene; class Selection; }
+
 namespace Editor
 {
+  // SPBF64 fork: returns the Selection that applies to whichever Viewport3D
+  // is currently rendering its content. Set by ViewportSelectionScope inside
+  // Viewport3D's draw / render-pass paths; read by component draw functions
+  // (compModel, compSpriteBillboard, etc.) when they want to draw selection
+  // highlights. Falls back to ctx.mainSelection when no viewport is active,
+  // so non-viewport call sites get the main scene's selection.
+  Project::Selection& activeViewportSelection();
+
+  class ViewportSelectionScope
+  {
+    Project::Selection* prev{nullptr};
+    public:
+      explicit ViewportSelectionScope(Project::Selection& sel);
+      ~ViewportSelectionScope();
+      ViewportSelectionScope(const ViewportSelectionScope&) = delete;
+      ViewportSelectionScope& operator=(const ViewportSelectionScope&) = delete;
+  };
+
   class Viewport3D
   {
     private:
@@ -92,12 +112,23 @@ namespace Editor
       int gizmoOp{0};
       bool gizmoTransformActive{false};
 
+      // SPBF64 fork: scene + selection this viewport drives. nullptr means
+      // "use the project's currently-loaded scene + ctx.mainSelection" — that
+      // path keeps the main editor's 3D viewport behaving as before. Set by
+      // the (Scene&, Selection&) ctor for the prefab editor's viewport.
+      Project::Scene* boundScene{nullptr};
+      Project::Selection* boundSelection{nullptr};
+
+      Project::Scene* getScene() const;
+      Project::Selection& getSelection() const;
+
       void onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::Scene& renderScene);
       void onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPass *copyPass);
       void onPostRender(Renderer::Scene& renderScene);
 
     public:
       Viewport3D();
+      Viewport3D(Project::Scene& scene, Project::Selection& selection);
       ~Viewport3D();
 
       std::shared_ptr<Renderer::Mesh> getLines() {

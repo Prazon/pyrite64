@@ -4,6 +4,9 @@
 */
 #include "camera.h"
 
+#include "../context.h"
+#include "../project/scene/scene.h"
+#include "../project/selection.h"
 #include "glm/ext/matrix_clip_space.hpp"
 #include "glm/ext/matrix_transform.hpp"
 #include "glm/geometric.hpp"
@@ -153,16 +156,13 @@ void Renderer::Camera::focus(glm::vec3 position, float distance) {
   pos = pivot + posOffset;
 }
 
-void Renderer::Camera::focusSelection(Context &ctx) {
-  const auto& selectedUUIDs = ctx.mainSelection.all();
+void Renderer::Camera::focusSelection(Project::Scene &scene, const Project::Selection &selection) {
+  const auto& selectedUUIDs = selection.all();
   if (selectedUUIDs.empty()) return;
-  
-  auto scene = ctx.project->getScenes().getLoadedScene();
-  if (!scene) return;
 
   Utils::AABB aabb{};
   for (uint32_t uuid : selectedUUIDs) {
-    auto obj = scene->getObjectByUUID(uuid);
+    auto obj = scene.getObjectByUUID(uuid);
     if (!obj) continue;
 
     Utils::AABB objAABB = obj->getWorldAABB();

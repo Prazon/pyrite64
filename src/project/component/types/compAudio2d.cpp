@@ -99,7 +99,7 @@ namespace Project::Component::Audio2D
   {
     Data &data = *static_cast<Data*>(entry.data.get());
     glm::u8vec4 col{0xFF};
-    bool isSelected = ctx.mainSelection.isSelected(obj.uuid);
+    bool isSelected = Editor::activeViewportSelection().isSelected(obj.uuid);
     if (isSelected) {
       col = Utils::Colors::kSelectionTint;
     }

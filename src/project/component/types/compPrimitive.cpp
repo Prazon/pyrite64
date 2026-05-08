@@ -526,7 +526,7 @@ namespace Project::Component::Primitive
     }
 
     // Selection outline (drawn after solids on top via the lines pipeline).
-    if (ctx.mainSelection.isSelected(obj.uuid)) {
+    if (Editor::activeViewportSelection().isSelected(obj.uuid)) {
       glm::u8vec4 outline = Utils::Colors::kSelectionTint;
       switch(type) {
         case TYPE_BOX:
