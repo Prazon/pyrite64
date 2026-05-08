@@ -30,8 +30,6 @@ namespace Editor::Actions
          if(ctx.project && !ctx.project->getScenes().getEntries().empty()) {
            ctx.project->getScenes().loadScene(ctx.project->conf.sceneIdLastOpened);
          }
-         // Track this in the launcher's recent-projects list (move-to-front).
-         ctx.prefs.pushRecentProject(path);
        } catch (const std::exception &e) {
          auto error = "Failed to open project:\n" + std::string(e.what());
          //error += "\n" + std::to_string(std::stacktrace::current());
