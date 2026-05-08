@@ -92,6 +92,19 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
     ++compCount;
   }
 
+  // Prefab variable block sits past the components terminator (4 zero bytes)
+  // when the file-format flag HAS_PREFAB_VARS is set. We read the count here
+  // so allocSize includes the variable buffer alongside the component data;
+  // the second pass below memcpys the bytes in.
+  uint16_t varCount = 0;
+  uint32_t varDataSize = 0;
+  if(objEntry->flags & ObjectFlags::HAS_PREFAB_VARS) {
+    auto *varHdr = ptrIn + 4; // skip the comp-terminator
+    __builtin_memcpy(&varCount, varHdr, sizeof(varCount));
+    constexpr uint32_t VAR_RECORD_BYTES = 32;
+    varDataSize = (uint32_t)varCount * VAR_RECORD_BYTES;
+  }
+
   // component data must be 8-byte aligned, GCC tries to be smart
   // and some structs cuse 64-bit writes to members.
   // if it is misaligned, add spacing after the comp table
@@ -101,7 +114,7 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
     offsetData += 4;
   }
 
-  allocSize += compDataSize;
+  allocSize += compDataSize + varDataSize;
 
   //debugf("Allocating object %d | comps: %d | size: %lu bytes\n", objEntry->id, compCount, allocSize);
 
@@ -122,6 +135,11 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
   obj->group = objEntry->group;
   obj->flags = objEntry->flags;
   obj->compCount = compCount;
+  obj->varCount = varCount;
+  // Variable buffer offset gets filled in below once the comp-data extent
+  // is known. Leave at 0 here so getPrefabVarBytes returns null if anything
+  // bails out before the copy completes.
+  obj->varDataOffset = 0;
   obj->pos = objEntry->pos;
   obj->scale = objEntry->scale;
   obj->rot = Math::unpackQuat(objEntry->packedRot);
@@ -170,16 +188,19 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
 
   objFile = ptrIn + 4;
 
-  // If the writer emitted a prefab-variable block, advance past it. Each
-  // record is fixed-size (32 bytes — see sceneBuilder.cpp). The actor system
-  // reads these bytes into a typed view; loadObject only walks them so the
-  // next object starts at the right offset. The flag bit is purely a
-  // file-format marker; the runtime clears it before storing flags on Object.
-  if (obj->flags & ObjectFlags::HAS_PREFAB_VARS) {
+  // Copy the prefab-variable records into the tail of this object's alloc
+  // (right after compData). The allocSize pre-scan above reserved exactly
+  // varCount*32 bytes there. Skip the 4-byte (count + pad) file header and
+  // copy the fixed-size records straight in. We clear the file-format flag
+  // bit so runtime code never sees a marker that only matters at load time.
+  if(obj->flags & ObjectFlags::HAS_PREFAB_VARS) {
     constexpr uint32_t VAR_RECORD_BYTES = 32;
-    uint16_t varCount = *reinterpret_cast<uint16_t*>(objFile);
-    // 2 bytes count + 2 bytes pad header, then N fixed-size records.
-    objFile += 4 + (uint32_t)varCount * VAR_RECORD_BYTES;
+    auto *varDest = (uint8_t*)objCompDataPtr;
+    obj->varDataOffset = (uint16_t)(varDest - (uint8_t*)obj);
+    objFile += 4; // skip count(2) + pad(2)
+    uint32_t varBytes = (uint32_t)obj->varCount * VAR_RECORD_BYTES;
+    if(varBytes > 0) __builtin_memcpy(varDest, objFile, varBytes);
+    objFile += varBytes;
     obj->flags &= ~ObjectFlags::HAS_PREFAB_VARS;
   }
 

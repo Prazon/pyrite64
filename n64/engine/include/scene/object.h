@@ -38,6 +38,12 @@ namespace P64
       uint16_t flags{};
       uint16_t compCount{0};
 
+      // Prefab class-variable block. Lives at the very end of this object's
+      // memory allocation, after compData. Zero on objects that aren't
+      // prefab instances or whose prefab declares no class variables.
+      uint16_t varCount{0};
+      uint16_t varDataOffset{0}; // bytes from `this` to the variable buffer
+
       // extra data, is overlapping with component data if unused
       fm_quat_t rot{};
       fm_vec3_t pos{};
@@ -48,6 +54,7 @@ namespace P64
 
       //CompRef compRefs[];
       //uint8_t compData[];
+      //uint8_t prefabVars[]; // present iff varCount > 0
 
       void setFlag(uint16_t flag, bool enabled) {
         if(enabled) {
@@ -73,6 +80,46 @@ namespace P64
        */
       [[nodiscard]] char* getCompData() const {
         return (char*)getCompRefs() + sizeof(CompRef) * compCount;
+      }
+
+      /**
+       * Locate a prefab class-variable record by its stable uuid (the uuid
+       * the editor assigned to the PrefabVarDef). Returns a pointer to the
+       * 20-byte value buffer for the variable, or nullptr if the object has
+       * no variables or the uuid isn't found.
+       *
+       * The 20 bytes are laid out the same way as the editor wrote them
+       * (sceneBuilder.cpp): primitive types occupy the leading bytes, vec3
+       * is 12 contiguous floats, quat is 16 contiguous floats. Use the
+       * template overload below for typed access.
+       */
+      [[nodiscard]] uint8_t* getPrefabVarBytes(uint64_t uuid) const {
+        if(varCount == 0 || varDataOffset == 0) return nullptr;
+        constexpr uint32_t VAR_RECORD_BYTES = 32;
+        constexpr uint32_t VALUE_OFFSET = 12; // 8B uuid + 1B kind + 3B pad
+        auto *base = (uint8_t*)this + varDataOffset;
+        for(uint32_t i = 0; i < varCount; ++i) {
+          auto *rec = base + i * VAR_RECORD_BYTES;
+          uint64_t recUUID;
+          // Use memcpy to avoid alignment surprises on MIPS.
+          __builtin_memcpy(&recUUID, rec, sizeof(recUUID));
+          if(recUUID == uuid) return rec + VALUE_OFFSET;
+        }
+        return nullptr;
+      }
+
+      /**
+       * Typed read of a prefab class-variable. Returns the variable's value
+       * cast to T, or a default-constructed T if the variable is missing or
+       * the object has no variable block. Caller is responsible for matching
+       * T to the variable's declared kind in the editor.
+       */
+      template<typename T>
+      [[nodiscard]] T getPrefabVar(uint64_t uuid) const {
+        T out{};
+        auto *bytes = getPrefabVarBytes(uuid);
+        if(bytes) __builtin_memcpy(&out, bytes, sizeof(T));
+        return out;
       }
 
       /**
