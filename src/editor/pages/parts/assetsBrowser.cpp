@@ -514,9 +514,44 @@ void Editor::AssetsBrowser::draw() {
     }
 
     if(ImGui::BeginPopupContextItem(asset.path.c_str())) {
+      // Prefab-only: spawn a variant. The new .prefab is empty-patched and
+      // sits next to the parent on disk; opening it in PrefabEditor and
+      // saving captures whatever overrides the user makes as a JSON Patch
+      // against the parent. Mirrors Godot's "New Inherited Scene" / Unity's
+      // "Variant" workflow.
+      if (asset.type == FileType::PREFAB && asset.prefab) {
+        if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " Create Variant")) {
+          fs::path srcPath{asset.path};
+          fs::path dir = srcPath.parent_path();
+          std::string baseStem = srcPath.stem().string() + "_Variant";
+          fs::path outPath;
+          for (int i = 0; i < 1000; ++i) {
+            std::string stem = (i == 0) ? baseStem : (baseStem + "_" + std::to_string(i + 1));
+            fs::path candidate = dir / (stem + ".prefab");
+            std::error_code ec;
+            if (!fs::exists(candidate, ec)) { outPath = candidate; break; }
+          }
+          if (outPath.empty()) outPath = dir / (baseStem + ".prefab");
+
+          Project::Prefab variant{};
+          variant.uuid.value = Utils::Hash::randomU64();
+          variant.uuidParentPrefab.value = asset.prefab->uuid.value;
+          variant.obj = Project::Object{};
+          variant.obj.name = outPath.stem().string();
+          variant.patchOps = nlohmann::json::array();
+
+          Utils::FS::saveTextFile(outPath.string(), variant.serialize());
+          ctx.project->getAssets().reload();
+
+          if (ctx.editorScene) {
+            auto* entry = ctx.project->getAssets().getByPath(outPath.string());
+            if (entry) ctx.editorScene->openPrefabEditor(entry->getUUID());
+          }
+        }
+      }
       showContextMenu(asset.path);
       ImGui::EndPopup();
-    } 
+    }
   }
 
   if (!deletePath.empty()) {
@@ -656,6 +691,51 @@ void Editor::AssetsBrowser::draw() {
     prefab.obj.rot.value = {0, 0, 0, 1};
 
     Utils::FS::saveTextFile(fullPath.string(), prefab.serialize());
+
+    // Scaffold a paired user-source stub at <project>/src/user/<stem>.{h,cpp}
+    // so the prefab has a well-known place to declare P64_NODE functions for
+    // its event graph. Existing files are never overwritten — this is a
+    // first-time-only convenience, not a sync.
+    fs::path userDir = fs::path{ctx.project->getPath()} / "src" / "user";
+    fs::create_directories(userDir);
+    fs::path userHeader = userDir / (stem + ".h");
+    fs::path userSource = userDir / (stem + ".cpp");
+
+    auto sanitizeIdent = [](std::string s) {
+      for (auto &c : s) {
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+              || (c >= '0' && c <= '9') || c == '_';
+        if (!ok) c = '_';
+      }
+      if (s.empty() || (s[0] >= '0' && s[0] <= '9')) s.insert(s.begin(), '_');
+      return s;
+    };
+    std::string ident = sanitizeIdent(stem);
+
+    std::error_code _ec;
+    if (!fs::exists(userHeader, _ec)) {
+      std::string headerStub =
+        "// Per-prefab user code for \"" + stem + "\".\n"
+        "// Functions tagged with P64_NODE are surfaced as nodes in the\n"
+        "// prefab's event graph and dispatched from the runtime.\n"
+        "#pragma once\n"
+        "#include \"script/prefabNode.h\"\n"
+        "#include \"p64/prefabVars.h\"\n\n"
+        "namespace User::" + ident + " {\n"
+        "  // P64_NODE void OnReady(P64::Object* self);\n"
+        "  // P64_NODE void OnTick(P64::Object* self, float dt);\n"
+        "}\n";
+      Utils::FS::saveTextFile(userHeader.string(), headerStub);
+    }
+    if (!fs::exists(userSource, _ec)) {
+      std::string sourceStub =
+        "#include \"" + stem + ".h\"\n\n"
+        "namespace User::" + ident + " {\n"
+        "  // implementations go here\n"
+        "}\n";
+      Utils::FS::saveTextFile(userSource.string(), sourceStub);
+    }
+
     ctx.project->getAssets().reload();
 
     // Find the freshly-created entry by path and open it.
@@ -676,6 +756,37 @@ void Editor::AssetsBrowser::draw() {
         ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
   {
     bool hasAny = false;
+
+    // "New Folder" — available on every tab that uses on-disk folders. Skipped
+    // for the Scenes tab because scenes are managed by SceneManager rather than
+    // a directory tree. Picks the first free `NewFolder`/`NewFolder_N` slot in
+    // the current dirState so multiple invocations don't collide.
+    if (activeTab != TAB_IDX_SCENES) {
+      if (ImGui::MenuItem(ICON_MDI_FOLDER_PLUS " New Folder")) {
+        fs::path parent = basePathAbs;
+        if (!dirState.empty()) parent /= dirState;
+        std::error_code ec;
+        fs::create_directories(parent, ec);
+
+        fs::path target;
+        for (int i = 0; i < 1000; ++i) {
+          std::string name = (i == 0) ? "NewFolder" : ("NewFolder_" + std::to_string(i + 1));
+          fs::path candidate = parent / name;
+          std::error_code existsEc;
+          if (!fs::exists(candidate, existsEc)) { target = candidate; break; }
+        }
+        if (!target.empty()) {
+          std::error_code mkEc;
+          fs::create_directory(target, mkEc);
+          if (mkEc) {
+            Editor::Noti::add(Editor::Noti::Type::ERROR,
+              "Failed to create folder: " + mkEc.message());
+          }
+        }
+      }
+      hasAny = true;
+    }
+
     if (activeTab == TAB_IDX_PREFABS) {
       if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " New Prefab")) {
         createBlankPrefab(basePathAbs / tabDirs[activeTab]);

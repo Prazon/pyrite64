@@ -10,6 +10,7 @@
 #include "../../../../project/scene/scene.h"
 #include "../../../../project/scene/prefab.h"
 #include "../../../../project/selection.h"
+#include "../../../../project/prefabFunctions.h"
 #include "../../../undoRedo.h"
 #include "../sceneGraph.h"
 #include "../objectInspector.h"
@@ -68,13 +69,19 @@ namespace Editor
       float leftSplitFrac{0.22f};
       float rightSplitFrac{0.30f};
 
-      enum class Tab : int { Components = 0, Variables = 1 };
+      enum class Tab : int { Components = 0, Variables = 1, Functions = 2 };
       Tab activeTab{Tab::Components};
+
+      // Cached list of P64_NODE-tagged user functions for this prefab.
+      // Refreshed each time the Functions tab is drawn — file scans are
+      // cheap and per-tab activation makes the cost-of-stale near zero.
+      std::vector<Project::PrefabFunctionDesc> functions{};
 
       void loadFromDisk();
       void saveToDisk();
       void drawComponentsTab();
       void drawVariablesTab();
+      void drawFunctionsTab();
 
     public:
       explicit PrefabEditor(uint64_t assetUUID);

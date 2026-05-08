@@ -226,6 +226,11 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
       drawVariablesTab();
       ImGui::EndTabItem();
     }
+    if (ImGui::BeginTabItem(ICON_MDI_FUNCTION " Functions")) {
+      activeTab = Tab::Functions;
+      drawFunctionsTab();
+      ImGui::EndTabItem();
+    }
     ImGui::EndTabBar();
   }
 
@@ -450,6 +455,52 @@ void Editor::PrefabEditor::drawVariablesTab()
 
   if (delIdx >= 0) {
     variables.erase(variables.begin() + delIdx);
+  }
+}
+
+void Editor::PrefabEditor::drawFunctionsTab()
+{
+  if (!ctx.project) return;
+
+  // Re-scan on each draw — the user could be editing the .h in another
+  // editor and we want the panel to reflect that without an explicit
+  // refresh button. Scans are I/O-light (one regex over a small file).
+  const std::string prefabName = getName();
+  functions = Project::scanPrefabFunctions(ctx.project->getPath(), prefabName);
+
+  ImGui::TextWrapped(
+    "Functions tagged with P64_NODE in src/user/%s.h are surfaced here. "
+    "They become callable nodes in the prefab's event graph.",
+    prefabName.c_str()
+  );
+  ImGui::Separator();
+
+  if (functions.empty()) {
+    ImGui::TextDisabled(
+      "No P64_NODE functions found. Add a declaration to "
+      "src/user/%s.h, e.g. P64_NODE void OnReady(P64::Object* self);",
+      prefabName.c_str()
+    );
+    return;
+  }
+
+  if (ImGui::BeginTable("##Funcs", 3,
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
+    ImGui::TableSetupColumn("Name",       ImGuiTableColumnFlags_WidthStretch, 0.30f);
+    ImGui::TableSetupColumn("Returns",    ImGuiTableColumnFlags_WidthStretch, 0.20f);
+    ImGui::TableSetupColumn("Parameters", ImGuiTableColumnFlags_WidthStretch, 0.50f);
+    ImGui::TableHeadersRow();
+
+    for (const auto &f : functions) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(f.name.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextDisabled("%s", f.returnType.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextWrapped("%s", f.params.empty() ? "(none)" : f.params.c_str());
+    }
+    ImGui::EndTable();
   }
 }
 

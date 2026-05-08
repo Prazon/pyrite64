@@ -247,6 +247,10 @@ add_executable(pyrite64 src/main.cpp
         src/utils/prop.h
         src/project/scene/prefab.h
         src/project/scene/prefab.cpp
+        src/project/prefabFunctions.h
+        src/project/prefabFunctions.cpp
+        src/project/assets/resourceInstance.h
+        src/project/assets/resourceInstance.cpp
         src/utils/hash.cpp
         src/utils/prop.cpp
         src/build/textureBuilder.cpp
