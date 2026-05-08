@@ -112,12 +112,24 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   if(!isInit)
   {
     isInit = true;
-    //ImGui::SetNextWindowDockID(defDockId, ImGuiCond_Once);
     ImGui::SetNextWindowSize({800,600}, ImGuiCond_Once);
   }
 
+  // Spawn outside the main viewport's right edge so ImGui's multi-viewport
+  // backend gives this editor its own OS window. Stable ###suffix keeps
+  // saved position/dock state across asset renames + invalidates legacy
+  // imgui.ini entries that had no ### at all.
+  auto *mvp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(
+    {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
+    ImGuiCond_FirstUseEver
+  );
+
+  uint64_t uuid = currentAsset ? currentAsset->getUUID() : 0;
+  std::string winName = name + "###NodeEditorWin_" + std::to_string(uuid);
+
   bool isOpen = true;
-  ImGui::Begin(name.c_str(), &isOpen, ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin(winName.c_str(), &isOpen, ImGuiWindowFlags_NoCollapse);
   graph.graph.setSize(ImGui::GetContentRegionAvail());
   graph.graph.update();
   ImGui::End();
@@ -168,5 +180,6 @@ void Editor::NodeEditor::discardUnsavedChanges()
 
 void Editor::NodeEditor::focus() const
 {
-  ImGui::SetWindowFocus(name.c_str());
+  uint64_t uuid = currentAsset ? currentAsset->getUUID() : 0;
+  ImGui::SetWindowFocus(("###NodeEditorWin_" + std::to_string(uuid)).c_str());
 }

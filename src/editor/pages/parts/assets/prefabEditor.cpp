@@ -160,16 +160,18 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
 
   std::string baseTitle = std::string{ICON_MDI_PACKAGE_VARIANT_CLOSED " "}
     + asset->name + (isDirty() ? " *" : "");
-  winName = baseTitle + "###PrefabEditor_" + std::to_string(assetUUID);
+  // ID suffix bumped (was ###PrefabEditor_) so stale imgui.ini entries from
+  // the old auto-dock-into-3D-Viewport behavior don't override our new
+  // spawn-as-its-own-OS-window default.
+  winName = baseTitle + "###PrefabEditorWin_" + std::to_string(assetUUID);
 
-  // Open as a floating window — user can dock or drag it to its own OS window
-  // (Unreal-style asset editor). imgui.ini restores position/dock state on
-  // subsequent sessions; FirstUseEver lets the user override our default once
-  // they've moved the window.
-  auto screenSize = ImGui::GetMainViewport()->WorkSize;
+  // Spawn outside the main viewport's right edge so ImGui's multi-viewport
+  // backend gives this editor its own OS window (Unreal-style asset editor).
+  // FirstUseEver lets the user re-dock or move it later and have that stick.
+  auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(
-    {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+    {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
     ImGuiCond_FirstUseEver
   );
   if (forceFocusNextFrame) {
@@ -556,5 +558,5 @@ void Editor::PrefabEditor::drawFunctionsPanel()
 
 void Editor::PrefabEditor::focus() const
 {
-  ImGui::SetWindowFocus(("###PrefabEditor_" + std::to_string(assetUUID)).c_str());
+  ImGui::SetWindowFocus(("###PrefabEditorWin_" + std::to_string(assetUUID)).c_str());
 }

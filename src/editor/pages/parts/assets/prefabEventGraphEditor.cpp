@@ -116,14 +116,18 @@ bool Editor::PrefabEventGraphEditor::draw()
 
   std::string title = std::string{ICON_MDI_GRAPH " "} + getName()
     + (isDirty() ? " *" : "");
-  winName = title + "###PrefabEventGraph_" + std::to_string(assetUUID);
+  // ID suffix bumped to invalidate stale imgui.ini entries from before
+  // multi-viewport support landed.
+  winName = title + "###PrefabEventGraphWin_" + std::to_string(assetUUID);
 
   if (!isInit) {
     isInit = true;
-    auto screenSize = ImGui::GetMainViewport()->WorkSize;
+    // Spawn outside the main viewport's right edge so ImGui's multi-viewport
+    // backend gives this editor its own OS window (Unreal-style).
+    auto *mvp = ImGui::GetMainViewport();
     ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(
-      {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+      {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
       ImGuiCond_FirstUseEver
     );
   }
@@ -179,5 +183,5 @@ void Editor::PrefabEventGraphEditor::discardUnsavedChanges()
 
 void Editor::PrefabEventGraphEditor::focus() const
 {
-  ImGui::SetWindowFocus(("###PrefabEventGraph_" + std::to_string(assetUUID)).c_str());
+  ImGui::SetWindowFocus(("###PrefabEventGraphWin_" + std::to_string(assetUUID)).c_str());
 }

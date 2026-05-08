@@ -576,10 +576,11 @@ void Editor::Scene::draw()
           }
           any = true;
         };
-        section(ICON_MDI_PACKAGE_VARIANT_CLOSED, "Prefabs", prefabEditors);
-        section(ICON_MDI_CUBE_OUTLINE,           "Models",  modelEditors);
-        section(ICON_MDI_IMAGE_OUTLINE,          "Images",  imageEditors);
-        section(ICON_MDI_CODE_BRACES,            "Code",    codeEditors);
+        section(ICON_MDI_PACKAGE_VARIANT_CLOSED, "Prefabs",            prefabEditors);
+        section(ICON_MDI_GRAPH,                  "Prefab Event Graphs", prefabEventGraphEditors);
+        section(ICON_MDI_CUBE_OUTLINE,           "Models",             modelEditors);
+        section(ICON_MDI_IMAGE_OUTLINE,          "Images",             imageEditors);
+        section(ICON_MDI_CODE_BRACES,            "Code",               codeEditors);
         if (!nodeEditors.empty()) {
           if (any) ImGui::Separator();
           ImGui::TextDisabled("Node Graphs");

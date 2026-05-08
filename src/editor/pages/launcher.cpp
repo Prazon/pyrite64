@@ -85,39 +85,43 @@ void Editor::Launcher::draw()
 {
   float BTN_SPACING = 160_px;
   const auto &toolState = ctx.toolchain.getState();
-  auto &io = ImGui::GetIO();
 
-  ImGui::SetNextWindowPos({0,0}, ImGuiCond_Appearing, {0.0f, 0.0f});
-  ImGui::SetNextWindowSize({io.DisplaySize.x, io.DisplaySize.y}, ImGuiCond_Always);
+  // Multi-viewport: anchor to the main viewport's position/size rather than
+  // (0,0)+vp->Size, which under ViewportsEnable refer to the global
+  // virtual desktop instead of the main SDL window.
+  auto *vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos({vp->Pos.x, vp->Pos.y}, ImGuiCond_Always, {0.0f, 0.0f});
+  ImGui::SetNextWindowSize({vp->Size.x, vp->Size.y}, ImGuiCond_Always);
+  ImGui::SetNextWindowViewport(vp->ID);
   ImGui::Begin("WIN_MAIN", 0,
     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar
     | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar
     | ImGuiWindowFlags_NoScrollWithMouse
   );
 
-  ImVec2 centerPos = {io.DisplaySize.x / 2, io.DisplaySize.y / 2};
+  ImVec2 centerPos = {vp->Size.x / 2, vp->Size.y / 2};
 
   // BG
   ImGui::GetWindowDrawList()->AddCallback(ImDrawCallback_ImplSDLGPU3_SetSamplerRepeat, nullptr);
 
   float topBgHeight = 4.5_px;
   float bottomBgHeight = 2.5_px;
-  float bgRepeatsX = io.DisplaySize.x / texBG.getWidth();
+  float bgRepeatsX = vp->Size.x / texBG.getWidth();
   ImGui::SetCursorPos({0,0});
   ImGui::Image(ImTextureID(texBG.getGPUTex()),
-    {io.DisplaySize.x, (float)texBG.getHeight() * topBgHeight},
+    {vp->Size.x, (float)texBG.getHeight() * topBgHeight},
     {0,topBgHeight}, {bgRepeatsX,0}
   );
   // bottom
 
-  ImGui::SetCursorPos({0, io.DisplaySize.y - ((float)texBG.getHeight() * bottomBgHeight)});
+  ImGui::SetCursorPos({0, vp->Size.y - ((float)texBG.getHeight() * bottomBgHeight)});
   ImGui::Image(ImTextureID(texBG.getGPUTex()),
-    {io.DisplaySize.x, (float)texBG.getHeight() * bottomBgHeight},
+    {vp->Size.x, (float)texBG.getHeight() * bottomBgHeight},
     {0,0}, {bgRepeatsX,bottomBgHeight}
   );
 
   float midBgPointY = (float)texBG.getHeight() * topBgHeight;
-  midBgPointY += io.DisplaySize.y - ((float)texBG.getHeight() * bottomBgHeight);
+  midBgPointY += vp->Size.y - ((float)texBG.getHeight() * bottomBgHeight);
   midBgPointY /= 2.0f;
 
   ImGui::GetWindowDrawList()->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
@@ -168,7 +172,7 @@ void Editor::Launcher::draw()
   bool validToolchain = toolState.hasToolchain && toolState.hasLibdragon && toolState.hasTiny3d;
   int buttonCount = (validToolchain && toolState.upToDateLibs) ? 3 : 1;
 
-  int posX = (int)io.DisplaySize.x - BTN_SPACING + 48_px;
+  int posX = (int)vp->Size.x - BTN_SPACING + 48_px;
   if(buttonCount == 3) {
     posX -= (BTN_SPACING * 2);
   }
@@ -267,7 +271,7 @@ void Editor::Launcher::draw()
     ImGui::SetCursorPosY(y);
     ImGui::GetWindowDrawList()->AddLine(
       ImVec2(8_px, y), 
-      ImVec2(io.DisplaySize.x - 8_px, y), 
+      ImVec2(vp->Size.x - 8_px, y), 
       ImGui::GetColorU32(ImGuiCol_Separator), 
       1_px
     );
@@ -340,13 +344,13 @@ void Editor::Launcher::draw()
     float FONT_SIZE = 18_px;
 
     ImGui::PushFont(nullptr, FONT_SIZE);
-    ImGui::SetCursorPos({PADDING, io.DisplaySize.y - FONT_SIZE - PADDING});
+    ImGui::SetCursorPos({PADDING, vp->Size.y - FONT_SIZE - PADDING});
     ImGui::Text("v" PYRITE_VERSION);
 
     constexpr const char* creditsStr = "©2025-2026 - Max Bebök (HailToDodongo)";
     ImGui::SetCursorPos({
-      io.DisplaySize.x - PADDING - ImGui::CalcTextSize(creditsStr).x,
-      io.DisplaySize.y - FONT_SIZE - PADDING
+      vp->Size.x - PADDING - ImGui::CalcTextSize(creditsStr).x,
+      vp->Size.y - FONT_SIZE - PADDING
     });
     ImGui::Text(creditsStr);
     ImGui::PopFont();

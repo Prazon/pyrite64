@@ -60,19 +60,21 @@ bool Editor::ImageEditor::draw(ImGuiID defDockId)
   if (!asset) return false;
   if (asset->type != Project::FileType::IMAGE) return false;
 
-  winName = "Image: " + asset->name;
-  auto screenSize = ImGui::GetMainViewport()->WorkSize;
+  // Stable ImGui ID via ###suffix so renaming the asset (display title) doesn't
+  // throw away the window's saved position/dock state. The Win suffix also
+  // invalidates pre-multi-viewport imgui.ini entries that had no ### at all.
+  winName = "Image: " + asset->name
+    + "###ImageEditorWin_" + std::to_string(assetUUID);
 
-  // Floating fallback position/size for when the window is undocked.
+  // Spawn outside the main viewport's right edge so ImGui's multi-viewport
+  // backend gives this editor its own OS window (Unreal-style asset editor).
+  auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(
-    {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+    {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
     ImGuiCond_FirstUseEver
   );
 
-  // Open as a floating window — user can dock or drag it to its own OS window
-  // (Unreal-style asset editor). imgui.ini restores position/dock state on
-  // subsequent sessions.
   if (forceFocusNextFrame) {
     ImGui::SetNextWindowFocus();
     forceFocusNextFrame = false;

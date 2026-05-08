@@ -77,15 +77,17 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
   // tied to the UUID so multiple files can be open simultaneously without
   // ImGui ID collisions.
   std::string baseTitle = "Code: " + asset->name + (isDirty() ? " *" : "");
-  winName = baseTitle + "###CodeEditor_" + std::to_string(assetUUID);
+  // ID suffix bumped (was ###CodeEditor_) so stale imgui.ini entries from
+  // the old auto-dock-into-3D-Viewport behavior don't override our new
+  // spawn-as-its-own-OS-window default.
+  winName = baseTitle + "###CodeEditorWin_" + std::to_string(assetUUID);
 
-  // Open as a floating window — user can dock or drag it to its own OS window
-  // (Unreal-style asset editor). imgui.ini restores position/dock state on
-  // subsequent sessions.
-  auto screenSize = ImGui::GetMainViewport()->WorkSize;
+  // Spawn outside the main viewport's right edge so ImGui's multi-viewport
+  // backend gives this editor its own OS window (Unreal-style asset editor).
+  auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(
-    {(screenSize.x - DEF_WIN_SIZE.x) / 2, (screenSize.y - DEF_WIN_SIZE.y) / 2},
+    {mvp->Pos.x + mvp->Size.x + 20.0f, mvp->Pos.y + 60.0f},
     ImGuiCond_FirstUseEver
   );
   if (forceFocusNextFrame) {
@@ -168,5 +170,5 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
 void Editor::CodeEditor::focus() const
 {
   // Resolve the unique window ID and bring it to the front next frame.
-  ImGui::SetWindowFocus(("###CodeEditor_" + std::to_string(assetUUID)).c_str());
+  ImGui::SetWindowFocus(("###CodeEditorWin_" + std::to_string(assetUUID)).c_str());
 }
