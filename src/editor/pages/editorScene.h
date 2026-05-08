@@ -22,6 +22,7 @@ namespace Editor
   class ImageEditor;
   class CodeEditor;
   class PrefabEditor;
+  class PrefabEventGraphEditor;
 
   class Scene
   {
@@ -36,6 +37,9 @@ namespace Editor
       // SPBF64 fork: per-asset prefab editors. Same lifecycle pattern as the
       // other asset editors above.
       std::map<uint64_t, std::shared_ptr<PrefabEditor>> prefabEditors{};
+      // Per-prefab event graph editors. Keyed by the parent prefab's asset
+      // UUID — only one event graph window per prefab can be open at a time.
+      std::map<uint64_t, std::shared_ptr<PrefabEventGraphEditor>> prefabEventGraphEditors{};
 
       // Defer-destroy list: PrefabEditor owns a Viewport3D whose framebuffer
       // GPU texture is referenced by ImGui's draw list for the current frame.
@@ -82,6 +86,10 @@ namespace Editor
       void openCodeEditor(uint64_t assetUUID);
       // SPBF64 fork: open the dedicated prefab editor for the given .prefab asset.
       void openPrefabEditor(uint64_t assetUUID);
+      // Open the event graph window for the given prefab. Idempotent — if a
+      // window is already open, brings it to the front instead of creating a
+      // new one.
+      void openPrefabEventGraphEditor(uint64_t prefabAssetUUID);
 
       void draw();
       void save();

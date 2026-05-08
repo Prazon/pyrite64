@@ -295,6 +295,8 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/codeEditor.cpp
         src/editor/pages/parts/assets/prefabEditor.h
         src/editor/pages/parts/assets/prefabEditor.cpp
+        src/editor/pages/parts/assets/prefabEventGraphEditor.h
+        src/editor/pages/parts/assets/prefabEventGraphEditor.cpp
         src/editor/pages/parts/assets/assetPreviewViewport.h
         src/editor/pages/parts/assets/assetPreviewViewport.cpp
         src/project/assets/material.h

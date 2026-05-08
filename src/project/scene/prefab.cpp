@@ -57,6 +57,15 @@ std::string Project::Prefab::serialize(const Object &obj) const
   if (!variables.empty()) {
     builder.doc["variables"] = serializeVariables(variables);
   }
+  // Embed the Event Graph as a parsed JSON sub-object so the .prefab stays
+  // human-readable. Empty string → omit the field entirely so unmodified
+  // prefabs keep their existing on-disk byte-for-byte shape.
+  if (!eventGraphJSON.empty()) {
+    auto parsed = nlohmann::json::parse(eventGraphJSON, nullptr, false);
+    if (!parsed.is_discarded()) {
+      builder.doc["eventGraph"] = parsed;
+    }
+  }
   if (uuidParentPrefab.value != 0) {
     // Variant: persist only the parent link + the diff against parent's tree.
     // `obj` is recomputed at load time by resolveAgainstParent.
@@ -79,6 +88,11 @@ void Project::Prefab::deserialize(const std::string &str)
   variables.clear();
   if (doc.contains("variables")) {
     variables = deserializeVariables(doc["variables"]);
+  }
+
+  eventGraphJSON.clear();
+  if (doc.contains("eventGraph") && doc["eventGraph"].is_object()) {
+    eventGraphJSON = doc["eventGraph"].dump();
   }
 
   if (uuidParentPrefab.value != 0) {

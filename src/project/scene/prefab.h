@@ -51,6 +51,13 @@ namespace Project
       // Per-instance overrides live on Object::varOverrides keyed by varDef uuid.
       std::vector<PrefabVarDef> variables{};
 
+      // Default Event Graph for the prefab — serialized as JSON in the
+      // ImNodeFlow / Project::Graph::Graph format. The editor instantiates a
+      // live ImNodeFlow Graph from this string when the user opens the
+      // event graph window, and serializes back here on save. Empty string
+      // means "no graph yet" (the editor renders a blank canvas).
+      std::string eventGraphJSON{};
+
       // Variant inheritance: when uuidParentPrefab is non-zero, this prefab's
       // effective tree is derived by deserializing the parent prefab's
       // serialized obj, applying `patchOps` (RFC 6902 JSON Patch) on top,

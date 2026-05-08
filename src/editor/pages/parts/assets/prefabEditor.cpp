@@ -11,6 +11,7 @@
 #include "../../../../utils/hash.h"
 #include "../../../../utils/logger.h"
 #include "../../../imgui/helper.h"
+#include "../../editorScene.h"
 
 namespace
 {
@@ -488,13 +489,15 @@ void Editor::PrefabEditor::drawVariablesPanel()
 
 void Editor::PrefabEditor::drawGraphsPanel()
 {
-  // Every prefab carries a default EventGraph — this is the canvas where
-  // events (OnReady, OnTick, OnHurt…) wire up to user functions in the
-  // event-graph editor. The actual graph asset + editor land in Phase 3;
-  // listing it here keeps the panel visually honest with UE5's layout.
-  ImGui::Bullet();
-  ImGui::SameLine();
-  ImGui::TextUnformatted("EventGraph");
+  // Every prefab carries a default EventGraph — the canvas where events
+  // (OnReady, OnTick, OnHurt…) wire up to user functions. Double-click
+  // (or single-click — Selectable handles both) opens the event graph
+  // window for this prefab; the window persists its state back into the
+  // prefab on save.
+  if (ImGui::Selectable(ICON_MDI_GRAPH " EventGraph", false,
+        ImGuiSelectableFlags_AllowDoubleClick)) {
+    if (ctx.editorScene) ctx.editorScene->openPrefabEventGraphEditor(assetUUID);
+  }
 }
 
 void Editor::PrefabEditor::drawFunctionsPanel()

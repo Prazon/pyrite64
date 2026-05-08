@@ -23,6 +23,7 @@
 #include "parts/assets/imageEditor.h"
 #include "parts/assets/codeEditor.h"
 #include "parts/assets/prefabEditor.h"
+#include "parts/assets/prefabEventGraphEditor.h"
 
 namespace
 {
@@ -138,6 +139,17 @@ void Editor::Scene::openPrefabEditor(uint64_t assetUUID)
   }
 }
 
+void Editor::Scene::openPrefabEventGraphEditor(uint64_t prefabAssetUUID)
+{
+  auto it = prefabEventGraphEditors.find(prefabAssetUUID);
+  if(it != prefabEventGraphEditors.end()) {
+    it->second->focus();
+  } else {
+    prefabEventGraphEditors[prefabAssetUUID]
+      = std::make_shared<PrefabEventGraphEditor>(prefabAssetUUID);
+  }
+}
+
 void Editor::Scene::draw()
 {
   float HEIGHT_TOP_BAR = 28_px;
@@ -151,10 +163,14 @@ void Editor::Scene::draw()
 
   bool isRunning = ctx.isBuildOrRunning();
 
-  ImGui::SetNextWindowPos({0, HEIGHT_TOP_BAR});
+  // Multi-viewport: positions are in global virtual-desktop coords, so anchor
+  // to the main viewport's Pos rather than (0,0). Without this the host
+  // dockspace, top bar, and status bar end up offscreen relative to the main
+  // SDL window when ViewportsEnable is on.
+  ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + HEIGHT_TOP_BAR});
   ImGui::SetNextWindowSize({
-    viewport->WorkSize.x,
-    viewport->WorkSize.y - HEIGHT_TOP_BAR - HEIGHT_STATUS_BAR,
+    viewport->Size.x,
+    viewport->Size.y - HEIGHT_TOP_BAR - HEIGHT_STATUS_BAR,
   });
   ImGui::SetNextWindowViewport(viewport->ID);
 
@@ -368,6 +384,19 @@ void Editor::Scene::draw()
     ImGui::EndPopup();
   }
 
+  // Prefab event-graph windows. Independent of the parent PrefabEditor —
+  // closing the prefab tab doesn't auto-close its graph, and edits go
+  // through their own Save button. Dirty graphs are dropped silently for
+  // now (the user has explicit Save and the .prefab still has the prior
+  // state); a confirm-modal is the natural follow-up.
+  std::vector<uint64_t> delEventGraphUUIDs{};
+  for(auto &[uuid, editor] : prefabEventGraphEditors) {
+    if (!editor->draw()) {
+      delEventGraphUUIDs.push_back(uuid);
+    }
+  }
+  for(auto &uuid : delEventGraphUUIDs) prefabEventGraphEditors.erase(uuid);
+
   // SPBF64 fork: graph + inspector now take an explicit scene + selection.
   // Here we drive them with the project's active scene and the main selection.
   // PrefabEditor windows below set up their own EditScope and call these
@@ -457,9 +486,11 @@ void Editor::Scene::draw()
     ImGui::PopStyleVar(1);
   }
 
-  // Top bar
-  ImGui::SetNextWindowPos({0,0}, ImGuiCond_Always);
-  ImGui::SetNextWindowSize({io.DisplaySize.x, 4}, ImGuiCond_Always);
+  // Top bar — anchor to the main viewport (global desktop coords with
+  // ViewportsEnable) and pin to it so it doesn't spawn its own OS window.
+  ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y}, ImGuiCond_Always);
+  ImGui::SetNextWindowSize({viewport->Size.x, 4}, ImGuiCond_Always);
+  ImGui::SetNextWindowViewport(viewport->ID);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{8_px,6_px});
   if(ImGui::Begin("TOP_BAR", 0,
     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoTitleBar
@@ -589,9 +620,13 @@ void Editor::Scene::draw()
   }
   ImGui::PopStyleVar();
 
-  // Bottom Status bar
-  ImGui::SetNextWindowPos({0, io.DisplaySize.y - HEIGHT_STATUS_BAR}, ImGuiCond_Always, {0.0f, 0.0f});
-  ImGui::SetNextWindowSize({io.DisplaySize.x, HEIGHT_STATUS_BAR}, ImGuiCond_Always);
+  // Bottom Status bar — anchor to main viewport (see TOP_BAR comment).
+  ImGui::SetNextWindowPos(
+    {viewport->Pos.x, viewport->Pos.y + viewport->Size.y - HEIGHT_STATUS_BAR},
+    ImGuiCond_Always, {0.0f, 0.0f}
+  );
+  ImGui::SetNextWindowSize({viewport->Size.x, HEIGHT_STATUS_BAR}, ImGuiCond_Always);
+  ImGui::SetNextWindowViewport(viewport->ID);
   ImGui::Begin("STATUS_BAR", 0,
     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar
     | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
