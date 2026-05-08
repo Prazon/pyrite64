@@ -7,6 +7,7 @@
 #include <memory>
 #include <SDL3/SDL_gpu.h>
 
+#include "imgui.h"
 #include "json.hpp"
 #include "IconsMaterialDesignIcons.h"
 #include "../../build/sceneContext.h"

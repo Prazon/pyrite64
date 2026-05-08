@@ -247,7 +247,10 @@ void Editor::Scene::draw()
   ImGui::Begin("Scene Editor", nullptr, ImGuiWindowFlags_NoCollapse);
   ImGui::PopStyleVar();
   {
-    auto sceneDockID = ImGui::GetID("SceneEditorDockV2");
+    // Layout id bumped to V3 when the 2D-Viewport sibling tab was added so
+    // returning users with a cached imgui.ini don't end up with the new
+    // window floating outside the scene editor's central node.
+    auto sceneDockID = ImGui::GetID("SceneEditorDockV3");
     auto sceneNode = ImGui::DockBuilderGetNode(sceneDockID);
     sceneDockID = ImGui::DockSpace(sceneDockID, ImVec2(0.0f, 0.0f), 0, 0);
 
@@ -302,6 +305,17 @@ void Editor::Scene::draw()
     viewport3d.draw();
   ImGui::End();
 
+  // Returning users already have an imgui.ini that predates this window, so
+  // DockBuilderDockWindow inside the first-time-setup branch never runs for
+  // them and sceneDockCenterID stays 0. Resolve the central node from the
+  // 3D-Viewport's current DockId (we just drew it above), then dock 2D-
+  // Viewport into the same node with FirstUseEver — ImGui's .ini takes over
+  // afterwards so user rearrangements stick.
+  ImGuiID centerNode = sceneDockCenterID;
+  if (auto *w = ImGui::FindWindowByName("3D-Viewport")) {
+    if (w->DockId) centerNode = w->DockId;
+  }
+  if (centerNode) ImGui::SetNextWindowDockID(centerNode, ImGuiCond_FirstUseEver);
   ImGui::Begin("2D-Viewport");
     viewport2d.draw();
   ImGui::End();
