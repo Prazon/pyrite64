@@ -40,6 +40,10 @@ namespace
 
 Editor::PrefabEditor::PrefabEditor(uint64_t uuid) : assetUUID(uuid)
 {
+  // Prefab editor leans on the UE5 Components panel convention: each Object
+  // shows its attached components as leaf children, so the user can scan
+  // what's on every node without having to click through them.
+  graph.showComponentsInline = true;
   loadFromDisk();
 }
 
@@ -212,39 +216,12 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
     }
   }
 
-  // Tabs: Components (the 3-pane Blueprint-style editor) and Variables
-  // (Blueprint class-variable list). Each tab's body is rendered against the
-  // same EditScope so undo/redo + dirty tracking still route here.
-  if (ImGui::BeginTabBar("##PrefabEditorTabs")) {
-    if (ImGui::BeginTabItem(ICON_MDI_VIEW_QUILT " Components")) {
-      activeTab = Tab::Components;
-      drawComponentsTab();
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem(ICON_MDI_VARIABLE " Variables")) {
-      activeTab = Tab::Variables;
-      drawVariablesTab();
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem(ICON_MDI_FUNCTION " Functions")) {
-      activeTab = Tab::Functions;
-      drawFunctionsTab();
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
-  }
-
-  ImGui::End();
-  return isOpen;
-}
-
-void Editor::PrefabEditor::drawComponentsTab()
-{
   // Three-pane body, modeled after Unreal's Blueprint Editor:
-  //   [hierarchy] | [3D viewport] | [details inspector]
-  // Two draggable splitters between them. We compute pane widths from
-  // fractions of the current avail width so resizing the window keeps the
-  // ratio consistent.
+  //   [hierarchy + variables + functions] | [3D viewport] | [details]
+  // The left pane stacks hierarchy / variables / functions sections like
+  // Unreal's "My Blueprint" panel. Two horizontal splitters separate the
+  // three columns; pane widths are stored as fractions of avail so window
+  // resizes keep the ratio.
   float avail = ImGui::GetContentRegionAvail().x;
   float leftW = ImClamp(avail * leftSplitFrac,
     MIN_PANE_WIDTH, avail - 2.0f * MIN_PANE_WIDTH - 2.0f * SPLITTER_WIDTH);
@@ -270,9 +247,8 @@ void Editor::PrefabEditor::drawComponentsTab()
     }
   };
 
-  // Left: scene graph.
-  ImGui::BeginChild("##GraphPane", ImVec2(leftW, 0), ImGuiChildFlags_Borders);
-    graph.draw(scene, selection);
+  ImGui::BeginChild("##LeftPane", ImVec2(leftW, 0), ImGuiChildFlags_Borders);
+    drawLeftPane();
   ImGui::EndChild();
 
   ImGui::SameLine();
@@ -280,7 +256,6 @@ void Editor::PrefabEditor::drawComponentsTab()
                MIN_PANE_WIDTH, MIN_PANE_WIDTH + rightW + 2.0f * SPLITTER_WIDTH);
   ImGui::SameLine();
 
-  // Center: 3D viewport bound to this editor's scene + selection.
   ImGui::BeginChild("##ViewportPane", ImVec2(avail - leftW - rightW - 2.0f * SPLITTER_WIDTH, 0),
     ImGuiChildFlags_Borders);
     viewport.draw();
@@ -291,13 +266,70 @@ void Editor::PrefabEditor::drawComponentsTab()
                MIN_PANE_WIDTH, leftW + 2.0f * SPLITTER_WIDTH + MIN_PANE_WIDTH);
   ImGui::SameLine();
 
-  // Right: object inspector.
   ImGui::BeginChild("##InspectorPane", ImVec2(0, 0), ImGuiChildFlags_Borders);
     inspector.draw(scene, selection);
   ImGui::EndChild();
+
+  ImGui::End();
+  return isOpen;
 }
 
-void Editor::PrefabEditor::drawVariablesTab()
+void Editor::PrefabEditor::drawLeftPane()
+{
+  // Mirrors UE5's Blueprint editor: the left side is split vertically into
+  // a Components panel on top (the prefab's object tree) and a "My Prefab"
+  // panel on the bottom (variables + functions). Both have their own
+  // header bar and border so the two roles read as distinct surfaces.
+  float availH = ImGui::GetContentRegionAvail().y;
+  float topH = ImClamp(availH * leftVerticalSplitFrac,
+                       80.0f, availH - 80.0f - SPLITTER_WIDTH);
+
+  // ---- Components (hierarchy) ----
+  ImGui::BeginChild("##ComponentsPanel", ImVec2(0, topH),
+    ImGuiChildFlags_Borders);
+    ImGui::TextDisabled("%s  Components", ICON_MDI_FILE_TREE);
+    ImGui::Separator();
+    graph.draw(scene, selection);
+  ImGui::EndChild();
+
+  // ---- Horizontal splitter ----
+  ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Separator));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
+  ImGui::Button("##LeftVSplitter", ImVec2(-1, SPLITTER_WIDTH));
+  ImGui::PopStyleColor(3);
+  if (ImGui::IsItemActive()) {
+    float delta = ImGui::GetIO().MouseDelta.y;
+    float newH = topH + delta;
+    float minFrac = 80.0f / availH;
+    float maxFrac = (availH - 80.0f - SPLITTER_WIDTH) / availH;
+    leftVerticalSplitFrac = ImClamp(newH / availH, minFrac, maxFrac);
+  }
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+  }
+
+  // ---- My Prefab (variables + functions) ----
+  ImGui::BeginChild("##MyPrefabPanel", ImVec2(0, 0),
+    ImGuiChildFlags_Borders);
+    ImGui::TextDisabled("%s  My Prefab", ICON_MDI_PACKAGE_VARIANT_CLOSED);
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader(ICON_MDI_GRAPH " Graphs",
+          ImGuiTreeNodeFlags_DefaultOpen)) {
+      drawGraphsPanel();
+    }
+    if (ImGui::CollapsingHeader(ICON_MDI_VARIABLE " Variables",
+          ImGuiTreeNodeFlags_DefaultOpen)) {
+      drawVariablesPanel();
+    }
+    if (ImGui::CollapsingHeader(ICON_MDI_FUNCTION " Functions",
+          ImGuiTreeNodeFlags_DefaultOpen)) {
+      drawFunctionsPanel();
+    }
+  ImGui::EndChild();
+}
+
+void Editor::PrefabEditor::drawVariablesPanel()
 {
   // Header: add a new variable. Defaults to INT, name is auto-generated.
   if (ImGui::Button(ICON_MDI_PLUS " Add Variable")) {
@@ -315,10 +347,7 @@ void Editor::PrefabEditor::drawVariablesTab()
   ImGui::Separator();
 
   if (variables.empty()) {
-    ImGui::TextDisabled(
-      "No variables yet. Click \"Add Variable\" to expose a typed property "
-      "that instances of this prefab can override."
-    );
+    ImGui::TextDisabled("No variables.");
     return;
   }
 
@@ -458,49 +487,48 @@ void Editor::PrefabEditor::drawVariablesTab()
   }
 }
 
-void Editor::PrefabEditor::drawFunctionsTab()
+void Editor::PrefabEditor::drawGraphsPanel()
+{
+  // Every prefab carries a default EventGraph — this is the canvas where
+  // events (OnReady, OnTick, OnHurt…) wire up to user functions in the
+  // event-graph editor. The actual graph asset + editor land in Phase 3;
+  // listing it here keeps the panel visually honest with UE5's layout.
+  ImGui::Bullet();
+  ImGui::SameLine();
+  ImGui::TextUnformatted("EventGraph");
+}
+
+void Editor::PrefabEditor::drawFunctionsPanel()
 {
   if (!ctx.project) return;
 
-  // Re-scan on each draw — the user could be editing the .h in another
-  // editor and we want the panel to reflect that without an explicit
-  // refresh button. Scans are I/O-light (one regex over a small file).
-  const std::string prefabName = getName();
-  functions = Project::scanPrefabFunctions(ctx.project->getPath(), prefabName);
-
-  ImGui::TextWrapped(
-    "Functions tagged with P64_NODE in src/user/%s.h are surfaced here. "
-    "They become callable nodes in the prefab's event graph.",
-    prefabName.c_str()
-  );
-  ImGui::Separator();
+  // Re-scan each draw — the .h is edited in an external editor, so changes
+  // there should appear immediately. Scans are I/O-light (one regex pass
+  // over a small header).
+  functions = Project::scanPrefabFunctions(ctx.project->getPath(), getName());
 
   if (functions.empty()) {
-    ImGui::TextDisabled(
-      "No P64_NODE functions found. Add a declaration to "
-      "src/user/%s.h, e.g. P64_NODE void OnReady(P64::Object* self);",
-      prefabName.c_str()
-    );
+    ImGui::TextDisabled("No functions.");
     return;
   }
 
-  if (ImGui::BeginTable("##Funcs", 3,
-        ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
-    ImGui::TableSetupColumn("Name",       ImGuiTableColumnFlags_WidthStretch, 0.30f);
-    ImGui::TableSetupColumn("Returns",    ImGuiTableColumnFlags_WidthStretch, 0.20f);
-    ImGui::TableSetupColumn("Parameters", ImGuiTableColumnFlags_WidthStretch, 0.50f);
-    ImGui::TableHeadersRow();
-
-    for (const auto &f : functions) {
-      ImGui::TableNextRow();
-      ImGui::TableNextColumn();
-      ImGui::TextUnformatted(f.name.c_str());
-      ImGui::TableNextColumn();
-      ImGui::TextDisabled("%s", f.returnType.c_str());
-      ImGui::TableNextColumn();
-      ImGui::TextWrapped("%s", f.params.empty() ? "(none)" : f.params.c_str());
+  // Compact class-method list: name first, full signature underneath in
+  // dimmed text. Matches the visual rhythm of Unreal's My Blueprint pane
+  // where each entry is a single clickable row.
+  for (const auto &f : functions) {
+    ImGui::PushID(f.name.c_str());
+    ImGui::Bullet();
+    ImGui::SameLine();
+    ImGui::TextUnformatted(f.name.c_str());
+    if (!f.returnType.empty() || !f.params.empty()) {
+      ImGui::Indent();
+      ImGui::TextDisabled("%s(%s)",
+        f.returnType.c_str(),
+        f.params.empty() ? "" : f.params.c_str()
+      );
+      ImGui::Unindent();
     }
-    ImGui::EndTable();
+    ImGui::PopID();
   }
 }
 

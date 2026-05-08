@@ -26,6 +26,12 @@ namespace
   std::string renameBuffer{};
   bool startingRename{false};
 
+  // When set, drawObjectNode appends each Object's components as leaf
+  // children under the object's tree node. Toggled by SceneGraph::draw
+  // from the public showComponentsInline flag — set once per frame, no
+  // reentry concern since ImGui drives this single-threaded.
+  bool g_showComponentsInline{false};
+
   struct DragDropTask {
     uint32_t sourceUUID{0};
     uint32_t targetUUID{0};
@@ -224,9 +230,10 @@ namespace
     // icon. Component icons are pulled straight from Project::Component::TABLE
     // so they stay in sync with the inspector and component-add menu.
     std::string nameID{};
-    if(obj.uuidPrefab.value) {
+    if(obj.uuidPrefab.value || obj.fromPrefab) {
       nameID += ICON_MDI_PACKAGE_VARIANT_CLOSED " ";
-    } else if (!obj.components.empty()) {
+    }
+    if (!obj.components.empty()) {
       const auto &compEntry = obj.components.front();
       if (compEntry.id >= 0 && (size_t)compEntry.id < Project::Component::TABLE.size()) {
         const auto &def = Project::Component::TABLE[compEntry.id];
@@ -262,11 +269,25 @@ namespace
       ImGui::EndDragDropSource();
     }
 
-    if (obj.parent && ImGui::BeginDragDropTarget()) {
-      if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("OBJECT")) {
-        dragDropTask.sourceUUID = *((uint32_t*)payload->Data);
-        dragDropTask.targetUUID = obj.uuid;
-        dragDropTask.isInsert = true;
+    if (ImGui::BeginDragDropTarget()) {
+      // Reparent existing scene object onto this node.
+      if (obj.parent) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("OBJECT")) {
+          dragDropTask.sourceUUID = *((uint32_t*)payload->Data);
+          dragDropTask.targetUUID = obj.uuid;
+          dragDropTask.isInsert = true;
+        }
+      }
+      // Drop a prefab asset to spawn a new instance as a child of this node.
+      // Allowed on root too (then it lands at top level), matching Unity's
+      // hierarchy panel behavior.
+      if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET")) {
+        uint64_t prefabUUID = *((uint64_t*)payload->Data);
+        if (auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID)) {
+          Editor::UndoRedo::getHistory().markChanged("Add Prefab");
+          auto newObj = scene.addPrefabInstance(prefabUUID, &obj);
+          if (newObj) selection.set(newObj->uuid);
+        }
       }
       ImGui::EndDragDropTarget();
     }
@@ -342,6 +363,27 @@ namespace
         ImGui::EndPopup();
       }
 
+      // Render components as leaf children when the host (PrefabEditor)
+      // requested it. Components are listed before child Objects so the
+      // tree reads as "this object's bits, then its sub-objects" — same
+      // ordering as UE5's Components panel.
+      if (g_showComponentsInline) {
+        for (const auto &compEntry : obj.components) {
+          if (compEntry.id < 0
+              || (size_t)compEntry.id >= Project::Component::TABLE.size()) continue;
+          const auto &def = Project::Component::TABLE[compEntry.id];
+          ImGui::PushID((int)compEntry.uuid ^ (int)(compEntry.uuid >> 32));
+          ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 2_px));
+          std::string compLabel = std::string{def.icon ? def.icon : ""}
+            + " " + (compEntry.name.empty() ? std::string{def.name} : compEntry.name);
+          ImGui::TreeNodeEx(compLabel.c_str(),
+            ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen
+            | ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth);
+          ImGui::PopStyleVar();
+          ImGui::PopID();
+        }
+      }
+
       for(auto &child : obj.children) {
         drawObjectNode(scene, selection, *child, keyDelete, parentEnabled && obj.enabled);
       }
@@ -356,6 +398,7 @@ void Editor::SceneGraph::draw(Project::Scene &scene, Project::Selection &selecti
   dragDropTask = {};
   deleteObj = nullptr;
   deleteSelection = false;
+  g_showComponentsInline = this->showComponentsInline;
   bool isFocus = ImGui::IsWindowFocused();
   // While rename is active, shortcuts stay disabled, so the text field can own the keyboard input
   bool isRenaming = renameObjectUUID != 0;

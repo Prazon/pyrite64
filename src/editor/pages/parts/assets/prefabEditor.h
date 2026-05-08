@@ -65,23 +65,24 @@ namespace Editor
       // asset->prefab on load, written back on save. Editing this list goes
       // through the editor's history.
       std::vector<Project::PrefabVarDef> variables{};
-      // Splitter fractions for the Components tab's 3-pane body.
+      // Splitter fractions for the 3-pane body.
       float leftSplitFrac{0.22f};
       float rightSplitFrac{0.30f};
-
-      enum class Tab : int { Components = 0, Variables = 1, Functions = 2 };
-      Tab activeTab{Tab::Components};
+      // Vertical split inside the left pane: top is the components tree,
+      // bottom is the "My Prefab" panel (variables + functions).
+      float leftVerticalSplitFrac{0.55f};
 
       // Cached list of P64_NODE-tagged user functions for this prefab.
-      // Refreshed each time the Functions tab is drawn — file scans are
-      // cheap and per-tab activation makes the cost-of-stale near zero.
+      // Refreshed each frame the Functions section is visible — file scans
+      // are cheap and the cost-of-stale is otherwise immediate confusion.
       std::vector<Project::PrefabFunctionDesc> functions{};
 
       void loadFromDisk();
       void saveToDisk();
-      void drawComponentsTab();
-      void drawVariablesTab();
-      void drawFunctionsTab();
+      void drawLeftPane();
+      void drawGraphsPanel();
+      void drawVariablesPanel();
+      void drawFunctionsPanel();
 
     public:
       explicit PrefabEditor(uint64_t assetUUID);
