@@ -5,6 +5,13 @@ project(pyrite64 VERSION 0.7.0)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# SPBF64 fork: this project does not use C++20 named modules. With CMake 4.x +
+# GCC's -fmodules-ts dep-scan, the per-source `.obj.ddi` step crashes silently
+# (cc1plus exits 1 with no stderr, popping a Windows Error Reporting modal)
+# on this MSYS2 UCRT64 toolchain. Disable scanning since we have nothing to
+# scan for.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)

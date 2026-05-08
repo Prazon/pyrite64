@@ -219,7 +219,7 @@ void Editor::Launcher::draw()
     ImGui::SetCursorPos({ centerPos.x - panelW / 2.0f, panelY });
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.4f));
     ImGui::BeginChild("##recentProjects", ImVec2(panelW, panelH),
-      ImGuiChildFlags_Border | ImGuiChildFlags_AlwaysUseWindowPadding);
+      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
 
     ImGui::PushFont(nullptr, 20_px);
     ImGui::TextDisabled("Recent Projects");
