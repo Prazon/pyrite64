@@ -170,6 +170,19 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
 
   objFile = ptrIn + 4;
 
+  // If the writer emitted a prefab-variable block, advance past it. Each
+  // record is fixed-size (32 bytes — see sceneBuilder.cpp). The actor system
+  // reads these bytes into a typed view; loadObject only walks them so the
+  // next object starts at the right offset. The flag bit is purely a
+  // file-format marker; the runtime clears it before storing flags on Object.
+  if (obj->flags & ObjectFlags::HAS_PREFAB_VARS) {
+    constexpr uint32_t VAR_RECORD_BYTES = 32;
+    uint16_t varCount = *reinterpret_cast<uint16_t*>(objFile);
+    // 2 bytes count + 2 bytes pad header, then N fixed-size records.
+    objFile += 4 + (uint32_t)varCount * VAR_RECORD_BYTES;
+    obj->flags &= ~ObjectFlags::HAS_PREFAB_VARS;
+  }
+
   objects.push_back(obj);
   if(obj->id < idLookup.size()) {
     idLookup[obj->id] = obj;

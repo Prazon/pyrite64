@@ -5,7 +5,10 @@
 
 #include "imgui.h"
 
+#include <vector>
+
 #include "../../../../project/scene/scene.h"
+#include "../../../../project/scene/prefab.h"
 #include "../../../../project/selection.h"
 #include "../../../undoRedo.h"
 #include "../sceneGraph.h"
@@ -54,12 +57,24 @@ namespace Editor
       bool forceFocusNextFrame{true};
       // Last-saved JSON of the prefab subtree; used for dirty detection.
       std::string savedJSON{};
-      // Splitter fractions for the 3-pane body: hierarchy | viewport | inspector.
+      // Last-saved serialized form of the variables list, for dirty tracking
+      // independent of the obj subtree.
+      std::string savedVarsJSON{};
+      // Local working copy of the prefab class variables. Synced from
+      // asset->prefab on load, written back on save. Editing this list goes
+      // through the editor's history.
+      std::vector<Project::PrefabVarDef> variables{};
+      // Splitter fractions for the Components tab's 3-pane body.
       float leftSplitFrac{0.22f};
       float rightSplitFrac{0.30f};
 
+      enum class Tab : int { Components = 0, Variables = 1 };
+      Tab activeTab{Tab::Components};
+
       void loadFromDisk();
       void saveToDisk();
+      void drawComponentsTab();
+      void drawVariablesTab();
 
     public:
       explicit PrefabEditor(uint64_t assetUUID);

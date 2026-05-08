@@ -383,6 +383,123 @@ void Editor::ObjectInspector::draw(Project::Scene &scene, Project::Selection &se
     }
   }
 
+  // Prefab class variables: when this object is an instance of a prefab that
+  // defines class-level variables, render an editable row per variable. Edits
+  // write into obj->varOverrides keyed by the variable def's stable uuid.
+  // The class default lives on prefab->variables[i].defaultValue and is the
+  // fallback when no override exists yet.
+  if (isPrefabInst && prefab && !prefab->variables.empty()) {
+    if (ImGui::CollapsingHeader("Prefab Variables", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (ImTable::start("PrefabVars", obj.get())) {
+        for (const auto &def : prefab->variables) {
+          ImTable::add(def.name);
+          ImGui::PushID(static_cast<int>(def.uuid));
+          ImGui::SetNextItemWidth(-1);
+
+          // Pull current effective value: override if present, otherwise the
+          // class default. We materialize a copy on first edit (the line below
+          // each kind branch) so the override map only grows when the user
+          // actually touches the field.
+          auto it = obj->varOverrides.find(def.uuid);
+          GenericValue effective = (it != obj->varOverrides.end())
+            ? it->second : def.defaultValue;
+
+          bool changed = false;
+          switch (def.kind) {
+            case Project::PrefabVarKind::INT: {
+              int val = effective.get<int32_t>();
+              if (ImGui::DragInt("##v", &val)) { effective.set<int32_t>(val); changed = true; }
+              break;
+            }
+            case Project::PrefabVarKind::FLOAT: {
+              float val = effective.get<float>();
+              if (ImGui::DragFloat("##v", &val, 0.01f)) { effective.set<float>(val); changed = true; }
+              break;
+            }
+            case Project::PrefabVarKind::BOOL: {
+              bool val = effective.get<bool>();
+              if (ImGui::Checkbox("##v", &val)) { effective.set<bool>(val); changed = true; }
+              break;
+            }
+            case Project::PrefabVarKind::VEC3: {
+              glm::vec3 val = effective.get<glm::vec3>();
+              if (ImGui::DragFloat3("##v", &val.x, 0.01f)) { effective.set<glm::vec3>(val); changed = true; }
+              break;
+            }
+            case Project::PrefabVarKind::QUAT: {
+              glm::quat q = effective.get<glm::quat>();
+              float xyzw[4]{q.x, q.y, q.z, q.w};
+              if (ImGui::DragFloat4("##v", xyzw, 0.01f)) {
+                effective.set<glm::quat>(glm::quat{xyzw[3], xyzw[0], xyzw[1], xyzw[2]});
+                changed = true;
+              }
+              break;
+            }
+            case Project::PrefabVarKind::OBJECT_REF: {
+              uint64_t val = effective.get<uint64_t>();
+              auto target = scene.getObjectByUUID(static_cast<uint32_t>(val));
+              std::string label = target ? target->name : "(null)";
+              if (ImGui::BeginCombo("##v", label.c_str())) {
+                if (ImGui::Selectable("(null)", val == 0)) {
+                  effective.set<uint64_t>(0);
+                  changed = true;
+                }
+                for (const auto &candidate : scene.getRootObject().children) {
+                  if (!candidate) continue;
+                  bool sel = (candidate->uuid == val);
+                  std::string entryLabel = candidate->name + "##" + std::to_string(candidate->uuid);
+                  if (ImGui::Selectable(entryLabel.c_str(), sel)) {
+                    effective.set<uint64_t>(candidate->uuid);
+                    changed = true;
+                  }
+                }
+                ImGui::EndCombo();
+              }
+              break;
+            }
+            case Project::PrefabVarKind::PREFAB_REF: {
+              // typeArg is the target prefab uuid; the override stores the
+              // referenced object's runtime uuid (resolved at scene-build time
+              // against the active scene's prefab instances).
+              uint64_t val = effective.get<uint64_t>();
+              auto target = scene.getObjectByUUID(static_cast<uint32_t>(val));
+              std::string label = target ? target->name : "(null)";
+              if (ImGui::BeginCombo("##v", label.c_str())) {
+                if (ImGui::Selectable("(null)", val == 0)) {
+                  effective.set<uint64_t>(0);
+                  changed = true;
+                }
+                for (const auto &candidate : scene.getRootObject().children) {
+                  if (!candidate) continue;
+                  if (candidate->uuidPrefab.value != def.typeArg) continue;
+                  bool sel = (candidate->uuid == val);
+                  std::string entryLabel = candidate->name + "##" + std::to_string(candidate->uuid);
+                  if (ImGui::Selectable(entryLabel.c_str(), sel)) {
+                    effective.set<uint64_t>(candidate->uuid);
+                    changed = true;
+                  }
+                }
+                ImGui::EndCombo();
+              }
+              break;
+            }
+            case Project::PrefabVarKind::ASSET_REF: {
+              ImGui::TextDisabled("(asset ref - TODO)");
+              break;
+            }
+          }
+          ImGui::PopID();
+
+          if (changed) {
+            UndoRedo::getHistory().markChanged("Set Prefab Variable");
+            obj->varOverrides[def.uuid] = effective;
+          }
+        }
+        ImTable::end();
+      }
+    }
+  }
+
   uint64_t compDelUUID = 0;
   Project::Component::Entry *compCopy = nullptr;
 

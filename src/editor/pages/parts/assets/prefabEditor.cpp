@@ -1,11 +1,14 @@
 // added by SPBF64 fork
 #include "prefabEditor.h"
 
+#include <cstdio>
+
 #include "imgui_internal.h"
 #include "IconsMaterialDesignIcons.h"
 
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
+#include "../../../../utils/hash.h"
 #include "../../../../utils/logger.h"
 #include "../../../imgui/helper.h"
 
@@ -14,6 +17,25 @@ namespace
   constexpr ImVec2 DEF_WIN_SIZE{720, 540};
   constexpr float MIN_PANE_WIDTH = 120.0f;
   constexpr float SPLITTER_WIDTH = 4.0f;
+
+  // Stable string form of the variables list, used purely for dirty detection
+  // inside the editor. Mirrors the on-disk format from Prefab::serialize, but
+  // we keep a separate copy here so the editor doesn't have to round-trip the
+  // whole Prefab to compare. Field order matters: keep aligned with prefab.cpp.
+  std::string varsToJSONString(const std::vector<Project::PrefabVarDef> &vars)
+  {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto &v : vars) {
+      arr.push_back({
+        {"uuid", v.uuid},
+        {"name", v.name},
+        {"kind", static_cast<uint8_t>(v.kind)},
+        {"typeArg", v.typeArg},
+        {"default", v.defaultValue.serialize()},
+      });
+    }
+    return arr.dump();
+  }
 }
 
 Editor::PrefabEditor::PrefabEditor(uint64_t uuid) : assetUUID(uuid)
@@ -40,6 +62,11 @@ void Editor::PrefabEditor::loadFromDisk()
   scene.loadFromObjectJSON(objJson);
   savedJSON = scene.serializeRootChild();
 
+  // Snapshot class variables into a local working copy. The Variables tab
+  // mutates this list; saveToDisk writes it back onto asset->prefab.
+  variables = asset->prefab->variables;
+  savedVarsJSON = varsToJSONString(variables);
+
   // Pre-select the prefab root so the inspector shows something on open and
   // pressing the camera-focus shortcut frames the prefab subtree.
   auto &root = scene.getRootObject();
@@ -64,16 +91,53 @@ void Editor::PrefabEditor::saveToDisk()
     asset->prefab->obj.deserialize(nullptr, subtreeDoc);
   }
 
-  // Persist via the canonical prefab serializer (writes uuid + obj).
+  // Push the editor's working variables list onto the prefab before serialize.
+  asset->prefab->variables = variables;
+
+  // For variants, recompute the patch (diff against parent) before persisting
+  // so the on-disk file stores deltas, not the resolved tree.
+  if (asset->prefab->isVariant()) {
+    auto parent = ctx.project->getAssets().getPrefabByUUID(
+      asset->prefab->uuidParentPrefab.value
+    );
+    if (parent) {
+      asset->prefab->rebuildPatchFromCurrent(*parent);
+    } else {
+      Utils::Logger::log(
+        "Variant prefab " + filePath + " parent missing on save — skipping patch rebuild.",
+        Utils::Logger::LEVEL_ERROR
+      );
+    }
+  }
+
+  // Persist via the canonical prefab serializer (writes uuid + obj or uuid + patch).
   Utils::FS::saveTextFile(filePath, asset->prefab->serialize());
   savedJSON = subtreeJson;
+  savedVarsJSON = varsToJSONString(variables);
   history.markSaved();
   Utils::Logger::log("Saved prefab: " + filePath);
+
+  // Re-resolve descendant variants whose parent chain runs through this
+  // prefab; they may have referenced fields that just shifted. The pass is
+  // idempotent and cheap, so we re-run the whole thing.
+  auto &assets = ctx.project->getAssets();
+  auto descendants = assets.getPrefabDescendants(asset->prefab->uuid.value);
+  assets.resolvePrefabVariants();
+
+  // Refresh instances of this prefab + every descendant variant in the
+  // active scene, so structural edits propagate without a project reload.
+  if (auto *active = ctx.project->getScenes().getLoadedScene()) {
+    active->refreshPrefabInstances(asset->prefab->uuid.value);
+    for (auto descUUID : descendants) {
+      active->refreshPrefabInstances(descUUID);
+    }
+  }
 }
 
 bool Editor::PrefabEditor::isDirty() const
 {
-  return scene.serializeRootChild() != savedJSON;
+  if (scene.serializeRootChild() != savedJSON) return true;
+  return varsToJSONString(variables) != savedVarsJSON;
 }
 
 std::string Editor::PrefabEditor::getName() const
@@ -148,6 +212,29 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
     }
   }
 
+  // Tabs: Components (the 3-pane Blueprint-style editor) and Variables
+  // (Blueprint class-variable list). Each tab's body is rendered against the
+  // same EditScope so undo/redo + dirty tracking still route here.
+  if (ImGui::BeginTabBar("##PrefabEditorTabs")) {
+    if (ImGui::BeginTabItem(ICON_MDI_VIEW_QUILT " Components")) {
+      activeTab = Tab::Components;
+      drawComponentsTab();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(ICON_MDI_VARIABLE " Variables")) {
+      activeTab = Tab::Variables;
+      drawVariablesTab();
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+
+  ImGui::End();
+  return isOpen;
+}
+
+void Editor::PrefabEditor::drawComponentsTab()
+{
   // Three-pane body, modeled after Unreal's Blueprint Editor:
   //   [hierarchy] | [3D viewport] | [details inspector]
   // Two draggable splitters between them. We compute pane widths from
@@ -184,23 +271,17 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   ImGui::EndChild();
 
   ImGui::SameLine();
-  // Left splitter: dragging changes left pane width; center pane absorbs.
-  // Other-panes minimum = center min + right (current) + right-splitter.
   drawSplitter("##SplitterL", leftSplitFrac, leftW, avail,
                MIN_PANE_WIDTH, MIN_PANE_WIDTH + rightW + 2.0f * SPLITTER_WIDTH);
   ImGui::SameLine();
 
-  // Center: 3D viewport bound to this editor's scene + selection. Same
-  // Viewport3D class as the main viewport — picking, gizmos, drag-drop, and
-  // component selection highlights all work against the prefab.
+  // Center: 3D viewport bound to this editor's scene + selection.
   ImGui::BeginChild("##ViewportPane", ImVec2(avail - leftW - rightW - 2.0f * SPLITTER_WIDTH, 0),
     ImGuiChildFlags_Borders);
     viewport.draw();
   ImGui::EndChild();
 
   ImGui::SameLine();
-  // Right splitter: dragging changes right pane width; center pane absorbs.
-  // Other-panes minimum = left (current) + left-splitter + center min.
   drawSplitter("##SplitterR", rightSplitFrac, rightW, avail,
                MIN_PANE_WIDTH, leftW + 2.0f * SPLITTER_WIDTH + MIN_PANE_WIDTH);
   ImGui::SameLine();
@@ -209,9 +290,167 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   ImGui::BeginChild("##InspectorPane", ImVec2(0, 0), ImGuiChildFlags_Borders);
     inspector.draw(scene, selection);
   ImGui::EndChild();
+}
 
-  ImGui::End();
-  return isOpen;
+void Editor::PrefabEditor::drawVariablesTab()
+{
+  // Header: add a new variable. Defaults to INT, name is auto-generated.
+  if (ImGui::Button(ICON_MDI_PLUS " Add Variable")) {
+    Project::PrefabVarDef v{};
+    v.uuid = Utils::Hash::sha256_64bit(
+      std::to_string(rand()) + std::to_string(variables.size())
+    );
+    v.name = "NewVar" + std::to_string(variables.size());
+    v.kind = Project::PrefabVarKind::INT;
+    v.defaultValue.set<int32_t>(0);
+    variables.push_back(std::move(v));
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("(%zu)", variables.size());
+  ImGui::Separator();
+
+  if (variables.empty()) {
+    ImGui::TextDisabled(
+      "No variables yet. Click \"Add Variable\" to expose a typed property "
+      "that instances of this prefab can override."
+    );
+    return;
+  }
+
+  static const char* kindNames[] = {
+    "Int", "Float", "Bool", "Vec3", "Quat",
+    "Object Ref", "Prefab Ref", "Asset Ref",
+  };
+
+  if (!ImGui::BeginTable("##Vars", 4,
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable)) {
+    return;
+  }
+  ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.25f);
+  ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 0.20f);
+  ImGui::TableSetupColumn("Default", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+  ImGui::TableSetupColumn("##Del", ImGuiTableColumnFlags_WidthFixed, 28.0f);
+  ImGui::TableHeadersRow();
+
+  int delIdx = -1;
+  for (size_t i = 0; i < variables.size(); ++i) {
+    auto &v = variables[i];
+    ImGui::PushID(static_cast<int>(i));
+    ImGui::TableNextRow();
+
+    // Name
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-1);
+    char nameBuf[128]{};
+    std::snprintf(nameBuf, sizeof(nameBuf), "%s", v.name.c_str());
+    if (ImGui::InputText("##name", nameBuf, sizeof(nameBuf))) {
+      v.name = nameBuf;
+    }
+
+    // Type
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-1);
+    int kindIdx = static_cast<int>(v.kind);
+    if (ImGui::Combo("##kind", &kindIdx, kindNames, IM_ARRAYSIZE(kindNames))) {
+      v.kind = static_cast<Project::PrefabVarKind>(kindIdx);
+      // Reset the default to a sane zero of the new type — switching kinds
+      // would otherwise leave a GenericValue payload typed for the old kind.
+      v.defaultValue = GenericValue{};
+      v.typeArg = 0;
+      switch (v.kind) {
+        case Project::PrefabVarKind::INT:        v.defaultValue.set<int32_t>(0); break;
+        case Project::PrefabVarKind::FLOAT:      v.defaultValue.set<float>(0.0f); break;
+        case Project::PrefabVarKind::BOOL:       v.defaultValue.set<bool>(false); break;
+        case Project::PrefabVarKind::VEC3:       v.defaultValue.set<glm::vec3>({0,0,0}); break;
+        case Project::PrefabVarKind::QUAT:       v.defaultValue.set<glm::quat>(glm::quat{1,0,0,0}); break;
+        case Project::PrefabVarKind::OBJECT_REF:
+        case Project::PrefabVarKind::PREFAB_REF:
+        case Project::PrefabVarKind::ASSET_REF:  v.defaultValue.set<uint64_t>(0); break;
+      }
+    }
+
+    // Default value widget (per-type)
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-1);
+    switch (v.kind) {
+      case Project::PrefabVarKind::INT: {
+        int val = v.defaultValue.get<int32_t>();
+        if (ImGui::DragInt("##def", &val)) v.defaultValue.set<int32_t>(val);
+        break;
+      }
+      case Project::PrefabVarKind::FLOAT: {
+        float val = v.defaultValue.get<float>();
+        if (ImGui::DragFloat("##def", &val, 0.01f)) v.defaultValue.set<float>(val);
+        break;
+      }
+      case Project::PrefabVarKind::BOOL: {
+        bool val = v.defaultValue.get<bool>();
+        if (ImGui::Checkbox("##def", &val)) v.defaultValue.set<bool>(val);
+        break;
+      }
+      case Project::PrefabVarKind::VEC3: {
+        glm::vec3 val = v.defaultValue.get<glm::vec3>();
+        if (ImGui::DragFloat3("##def", &val.x, 0.01f)) v.defaultValue.set<glm::vec3>(val);
+        break;
+      }
+      case Project::PrefabVarKind::QUAT: {
+        glm::quat q = v.defaultValue.get<glm::quat>();
+        float xyzw[4]{q.x, q.y, q.z, q.w};
+        if (ImGui::DragFloat4("##def", xyzw, 0.01f)) {
+          v.defaultValue.set<glm::quat>(glm::quat{xyzw[3], xyzw[0], xyzw[1], xyzw[2]});
+        }
+        break;
+      }
+      case Project::PrefabVarKind::OBJECT_REF: {
+        // Per-instance only — class-level default is always null. Object refs
+        // resolve at scene-graph time, not at prefab-edit time.
+        ImGui::TextDisabled("(null — set per instance)");
+        break;
+      }
+      case Project::PrefabVarKind::PREFAB_REF: {
+        // typeArg pins the target prefab type. Instances will be picked from
+        // prefabs of that type (or its descendants) via a scene picker.
+        std::string label = "(none)";
+        if (ctx.project) {
+          auto *e = ctx.project->getAssets().getEntryByUUID(v.typeArg);
+          if (e) label = e->name;
+        }
+        if (ImGui::BeginCombo("##def", label.c_str())) {
+          if (ctx.project) {
+            for (const auto &e : ctx.project->getAssets().getTypeEntries(Project::FileType::PREFAB)) {
+              uint64_t entryUUID = e.getUUID();
+              if (entryUUID == assetUUID) continue; // can't ref self
+              bool sel = (entryUUID == v.typeArg);
+              std::string entryLabel = e.name + "##" + std::to_string(entryUUID);
+              if (ImGui::Selectable(entryLabel.c_str(), sel)) {
+                v.typeArg = entryUUID;
+              }
+            }
+          }
+          ImGui::EndCombo();
+        }
+        break;
+      }
+      case Project::PrefabVarKind::ASSET_REF: {
+        // Asset-ref variables are reserved for a follow-up phase; the on-disk
+        // schema accepts them but the inspector picker isn't wired yet.
+        ImGui::TextDisabled("(asset ref - TODO)");
+        break;
+      }
+    }
+
+    // Delete row
+    ImGui::TableNextColumn();
+    if (ImGui::SmallButton(ICON_MDI_DELETE)) {
+      delIdx = static_cast<int>(i);
+    }
+    ImGui::PopID();
+  }
+  ImGui::EndTable();
+
+  if (delIdx >= 0) {
+    variables.erase(variables.begin() + delIdx);
+  }
 }
 
 void Editor::PrefabEditor::focus() const

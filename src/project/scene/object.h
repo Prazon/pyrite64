@@ -41,7 +41,19 @@ namespace Project
       bool selectable{true};
       bool isPrefabEdit{false};
 
+      // True for nodes that were materialized as part of a prefab subtree on
+      // instantiation (Scene::addPrefabInstance). User-added "Add Object"
+      // children of a prefab instance keep this false so they remain editable
+      // and survive prefab refreshes. The flag is also what distinguishes
+      // refreshable nodes when re-materializing instances after a prefab edit.
+      bool fromPrefab{false};
+
       std::unordered_map<uint64_t, GenericValue> propOverrides{};
+
+      // Per-instance overrides for prefab class variables (Blueprint-style).
+      // Keyed by PrefabVarDef::uuid (stable across variable renames). Only
+      // populated on objects that are instances of a prefab with variables.
+      std::unordered_map<uint64_t, GenericValue> varOverrides{};
 
       std::vector<std::shared_ptr<Object>> children{};
       std::vector<Component::Entry> components{};

@@ -16,6 +16,11 @@ namespace P64::ObjectFlags
   constexpr uint16_t PENDING_REMOVE     = 1 << 3; // flagged for removal at the end of the frame
   constexpr uint16_t PENDING_ACTIVE_CHG = 1 << 4; // flagged to toggle active state after all updates
   constexpr uint16_t IS_CULLED          = 1 << 5; // if true, object is not drawn this frame (usually set by culling logic)
+  // File-format only: signals that a fixed-size prefab-variable block follows
+  // the component terminator. The engine reader skips/loads it depending on
+  // whether the prefab actor system is wired up; the runtime never sets this
+  // bit on its own (it is purely a serialization marker).
+  constexpr uint16_t HAS_PREFAB_VARS    = 1 << 6;
 
   constexpr uint16_t ACTIVE = SELF_ACTIVE | PARENTS_ACTIVE;
 }

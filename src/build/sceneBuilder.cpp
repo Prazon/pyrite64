@@ -4,8 +4,9 @@
 */
 #include "projectBuilder.h"
 #include "../utils/string.h"
-#include <filesystem>
 #include <algorithm>
+#include <cstring>
+#include <filesystem>
 
 #include "../utils/binaryFile.h"
 #include "../utils/fs.h"
@@ -30,15 +31,23 @@ namespace
 uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool savePrefabItself)
 {
   auto srcObj = &obj;
+  std::shared_ptr<Project::Prefab> prefab{};
   if(!savePrefabItself && obj.isPrefabInstance())
   {
-    auto prefab = ctx.project->getAssets().getPrefabByUUID(srcObj->uuidPrefab.value);
+    prefab = ctx.project->getAssets().getPrefabByUUID(srcObj->uuidPrefab.value);
     if(prefab)srcObj = &prefab->obj;
   }
+
+  // Prefab-instance objects with class variables get a trailing fixed-size
+  // variable block written after the component terminator. The flag below
+  // marks that block so the runtime reader can skip/consume it without
+  // breaking older scenes that don't have it.
+  const bool hasVars = !savePrefabItself && prefab && !prefab->variables.empty();
 
   uint16_t objFlags = 0;
   if(obj.enabled)objFlags |= P64::ObjectFlags::ACTIVE;
   if(!obj.children.empty())objFlags |= P64::ObjectFlags::HAS_CHILDREN;
+  if(hasVars)objFlags |= P64::ObjectFlags::HAS_PREFAB_VARS;
 
   ctx.fileObj.write<uint16_t>(objFlags); // @TODO type
   ctx.fileObj.write<uint16_t>(obj.id);
@@ -101,6 +110,79 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
   }
 
   ctx.fileObj.write<uint32_t>(0);
+
+  if (hasVars) {
+    // Fixed-size variable record: keeps the runtime reader trivial and lets
+    // the engine fast-path skip the block when prefab actors aren't wired up.
+    //   uuid  : uint64                                 (8B)
+    //   kind  : uint8                                  (1B)
+    //   pad   : uint8[3]                               (3B)
+    //   value : uint8[20] (covers vec3=12B and quat=16B; primitives <= 8B)
+    // -> 32 bytes per variable. varCount fits in a uint16; align to 4 bytes.
+    constexpr int VAR_RECORD_BYTES = 32;
+    const auto &vars = prefab->variables;
+    ctx.fileObj.write<uint16_t>(static_cast<uint16_t>(vars.size()));
+    ctx.fileObj.write<uint16_t>(0); // padding to 4-byte align value blocks
+
+    for (const auto &v : vars) {
+      // Resolve effective value: instance override if present, otherwise the
+      // prefab class default. Both end up baked into the scene as plain bytes
+      // — the runtime never reads them as `GenericValue`.
+      GenericValue val = v.defaultValue;
+      auto it = obj.varOverrides.find(v.uuid);
+      if (it != obj.varOverrides.end()) val = it->second;
+
+      ctx.fileObj.write<uint64_t>(v.uuid);
+      ctx.fileObj.write<uint8_t>(static_cast<uint8_t>(v.kind));
+      ctx.fileObj.write<uint8_t>(0);
+      ctx.fileObj.write<uint8_t>(0);
+      ctx.fileObj.write<uint8_t>(0);
+
+      // Layout the value bytes into a 20-byte buffer; unused tail is zeroed.
+      // Type widths must match prefabBuilder.cpp's kindToType so generated
+      // PODs read the same bytes.
+      uint8_t valBuf[20]{};
+      switch (v.kind) {
+        case Project::PrefabVarKind::INT: {
+          int32_t x = val.get<int32_t>();
+          std::memcpy(valBuf, &x, sizeof(x));
+          break;
+        }
+        case Project::PrefabVarKind::FLOAT: {
+          float x = val.get<float>();
+          std::memcpy(valBuf, &x, sizeof(x));
+          break;
+        }
+        case Project::PrefabVarKind::BOOL: {
+          uint8_t x = val.get<bool>() ? 1 : 0;
+          valBuf[0] = x;
+          break;
+        }
+        case Project::PrefabVarKind::VEC3: {
+          glm::vec3 vec = val.get<glm::vec3>();
+          float xs[3]{vec.x, vec.y, vec.z};
+          std::memcpy(valBuf, xs, sizeof(xs));
+          break;
+        }
+        case Project::PrefabVarKind::QUAT: {
+          glm::quat q = val.get<glm::quat>();
+          float xs[4]{q.x, q.y, q.z, q.w};
+          std::memcpy(valBuf, xs, sizeof(xs));
+          break;
+        }
+        case Project::PrefabVarKind::OBJECT_REF:
+        case Project::PrefabVarKind::PREFAB_REF:
+        case Project::PrefabVarKind::ASSET_REF: {
+          uint64_t x = val.get<uint64_t>();
+          std::memcpy(valBuf, &x, sizeof(x));
+          break;
+        }
+      }
+      for (int i = 0; i < 20; ++i) ctx.fileObj.write<uint8_t>(valBuf[i]);
+    }
+    static_assert(VAR_RECORD_BYTES == 8 + 4 + 20,
+      "variable record layout drifted from runtime expectation");
+  }
 
   uint32_t count = 1;
   for (const auto &child : obj.children) {

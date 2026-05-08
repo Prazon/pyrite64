@@ -26,6 +26,7 @@ namespace
     builder.set("proportionalScale", obj.proportionalScale);
     builder.set("selectable", obj.selectable);
     builder.set("enabled", obj.enabled);
+    if (obj.fromPrefab) builder.set("fromPrefab", true);
 
     builder
       .set(obj.uuidPrefab)
@@ -38,6 +39,16 @@ namespace
       ovr[std::to_string(key)] = val.serialize();
     }
     builder.doc["propOverrides"] = ovr;
+
+    // Per-instance prefab class-variable overrides. Only emit when present so
+    // existing prefab/scene files round-trip unchanged.
+    if (!obj.varOverrides.empty()) {
+      auto vovr = nlohmann::json::object();
+      for(auto &[key, val] : obj.varOverrides) {
+        vovr[std::to_string(key)] = val.serialize();
+      }
+      builder.doc["varOverrides"] = vovr;
+    }
 
     nlohmann::json comps = nlohmann::json::array();
     for (auto &comp : obj.components) {
@@ -114,6 +125,7 @@ void Project::Object::deserialize(Scene *scene, nlohmann::json &doc)
   proportionalScale = doc.value("proportionalScale", false);
   selectable = doc.value("selectable", true);
   enabled = doc.value("enabled", true);
+  fromPrefab = doc.value("fromPrefab", false);
 
   Utils::JSON::readProp(doc, uuidPrefab);
   Utils::JSON::readProp(doc, pos);
@@ -130,6 +142,19 @@ void Project::Object::deserialize(Scene *scene, nlohmann::json &doc)
       GenericValue v{};
       v.deserialize(val);
       propOverrides[keyInt] = v;
+    }
+  }
+
+  varOverrides.clear();
+  if(doc.contains("varOverrides"))
+  {
+    auto &overrides = doc["varOverrides"];
+    for (auto& [key, val] : overrides.items())
+    {
+      uint64_t keyInt = std::stoull(std::string(key));
+      GenericValue v{};
+      v.deserialize(val);
+      varOverrides[keyInt] = v;
     }
   }
 
@@ -158,12 +183,17 @@ void Project::Object::deserialize(Scene *scene, nlohmann::json &doc)
   auto &chArray = doc["children"];
   size_t childCount = chArray.size();
 
-  assert(scene || childCount == 0);
-  if(!scene)return;
-
   for (size_t i=0; i<childCount; ++i) {
     auto childObj = std::make_shared<Object>(*this);
     childObj->deserialize(scene, chArray[i]);
-    scene->addObject(*this, childObj);
+    if (scene) {
+      scene->addObject(*this, childObj);
+    } else {
+      // No scene context (prefab asset subtree): attach the child directly
+      // under this object. The prefab carries its hierarchy as a free-
+      // floating subtree; Scene::addPrefabInstance walks it to materialize
+      // fresh runtime nodes when the prefab is dropped into a scene.
+      children.push_back(childObj);
+    }
   }
 }
