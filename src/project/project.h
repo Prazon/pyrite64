@@ -31,6 +31,7 @@ namespace Project
     std::string romName{};
     std::string pathEmu{};
     std::string pathN64Inst{};
+    std::string editorVersion{};
 
     // ROM header metadata (baked into the .z64 by libdragon)
     std::string romTitle{};       // max 20 chars; falls back to `name` when empty

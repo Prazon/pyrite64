@@ -124,6 +124,7 @@ std::string Project::ProjectConf::serialize() const {
     .set("version", version)
     .set("description", description)
     .set("gameImageUUID", gameImageUUID)
+    .set("editorVersion", PYRITE_VERSION)
     .set("sceneIdOnBoot", sceneIdOnBoot)
     .set("sceneIdOnReset", sceneIdOnReset)
     .set("sceneIdLastOpened", sceneIdLastOpened)
@@ -151,6 +152,7 @@ void Project::Project::deserialize(const nlohmann::json &doc) {
   conf.version = doc.value("version", "");
   conf.description = doc.value("description", "");
   conf.gameImageUUID = doc.value("gameImageUUID", 0ull);
+  conf.editorVersion = doc.value("editorVersion", PYRITE_VERSION);
   conf.sceneIdOnBoot = doc.value("sceneIdOnBoot", 1);
   conf.sceneIdOnReset = doc.value("sceneIdOnReset", 1);
   conf.sceneIdLastOpened = doc.value("sceneIdLastOpened", 1);
