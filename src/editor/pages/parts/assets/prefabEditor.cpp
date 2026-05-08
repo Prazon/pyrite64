@@ -505,7 +505,27 @@ void Editor::PrefabEditor::drawFunctionsPanel()
   // Re-scan each draw — the .h is edited in an external editor, so changes
   // there should appear immediately. Scans are I/O-light (one regex pass
   // over a small header).
-  functions = Project::scanPrefabFunctions(ctx.project->getPath(), getName());
+  const std::string prefabName = getName();
+  functions = Project::scanPrefabFunctions(ctx.project->getPath(), prefabName);
+
+  // "+ Add" mirrors UE5's My Blueprint panel header. Picks a default name
+  // that doesn't collide with an existing function so repeated clicks
+  // produce NewFunction, NewFunction_2, NewFunction_3...
+  if (ImGui::SmallButton(ICON_MDI_PLUS " Add")) {
+    auto isTaken = [&](const std::string &n) {
+      for (const auto &f : functions) if (f.name == n) return true;
+      return false;
+    };
+    std::string fnName = "NewFunction";
+    if (isTaken(fnName)) {
+      for (int i = 2; i < 1000; ++i) {
+        std::string candidate = "NewFunction_" + std::to_string(i);
+        if (!isTaken(candidate)) { fnName = candidate; break; }
+      }
+    }
+    Project::addPrefabFunction(ctx.project->getPath(), prefabName, fnName);
+    // The next draw will rescan and pick the new entry up automatically.
+  }
 
   if (functions.empty()) {
     ImGui::TextDisabled("No functions.");

@@ -46,6 +46,117 @@ namespace
   }
 }
 
+std::string Project::sanitizePrefabIdent(std::string s)
+{
+  for (auto &c : s) {
+    bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+          || (c >= '0' && c <= '9') || c == '_';
+    if (!ok) c = '_';
+  }
+  if (s.empty() || (s[0] >= '0' && s[0] <= '9')) s.insert(s.begin(), '_');
+  return s;
+}
+
+namespace
+{
+  // Generate (or read) the user-source pair for `prefabName`. Same template
+  // AssetsBrowser uses on prefab creation — duplicated here so user code
+  // edits work for prefabs that pre-date the scaffold (or had their files
+  // deleted). Returns the pair of paths.
+  std::pair<fs::path, fs::path> ensureUserSourcePair(
+    const std::string &projectPath, const std::string &prefabName)
+  {
+    fs::path userDir = fs::path{projectPath} / "src" / "user";
+    fs::create_directories(userDir);
+    fs::path headerPath = userDir / (prefabName + ".h");
+    fs::path sourcePath = userDir / (prefabName + ".cpp");
+
+    std::error_code ec;
+    std::string ident = Project::sanitizePrefabIdent(prefabName);
+
+    if (!fs::exists(headerPath, ec)) {
+      std::string headerStub =
+        "// Per-prefab user code for \"" + prefabName + "\".\n"
+        "// Functions tagged with P64_NODE are surfaced as nodes in the\n"
+        "// prefab's event graph and dispatched from the runtime.\n"
+        "#pragma once\n"
+        "#include \"script/prefabNode.h\"\n"
+        "#include \"p64/prefabVars.h\"\n\n"
+        "namespace User::" + ident + " {\n"
+        "}\n";
+      Utils::FS::saveTextFile(headerPath.string(), headerStub);
+    }
+    if (!fs::exists(sourcePath, ec)) {
+      std::string sourceStub =
+        "#include \"" + prefabName + ".h\"\n\n"
+        "namespace User::" + ident + " {\n"
+        "}\n";
+      Utils::FS::saveTextFile(sourcePath.string(), sourceStub);
+    }
+    return {headerPath, sourcePath};
+  }
+
+  // Insert `lineToInsert` right before the file's final `}` brace (the
+  // closing brace of the namespace). Falls back to appending if no closing
+  // brace is found. Preserves any trailing whitespace/newline by inserting
+  // ahead of the brace's line. Single line, no extra blank-line hygiene —
+  // trivial enough that we can keep this in one place.
+  std::string insertBeforeLastBrace(const std::string &content, const std::string &lineToInsert)
+  {
+    auto pos = content.find_last_of('}');
+    if (pos == std::string::npos) {
+      // No brace — just append to end.
+      std::string out = content;
+      if (!out.empty() && out.back() != '\n') out.push_back('\n');
+      out += lineToInsert;
+      if (!lineToInsert.empty() && lineToInsert.back() != '\n') out.push_back('\n');
+      return out;
+    }
+    // Find the start of the brace's line so the inserted line lands on
+    // its own line just above.
+    auto lineStart = content.rfind('\n', pos);
+    size_t insertAt = (lineStart == std::string::npos) ? 0 : lineStart + 1;
+
+    std::string out;
+    out.reserve(content.size() + lineToInsert.size() + 1);
+    out.append(content, 0, insertAt);
+    out += lineToInsert;
+    if (!lineToInsert.empty() && lineToInsert.back() != '\n') out.push_back('\n');
+    out.append(content, insertAt, std::string::npos);
+    return out;
+  }
+}
+
+bool Project::addPrefabFunction(
+  const std::string &projectPath,
+  const std::string &prefabName,
+  const std::string &functionName)
+{
+  if (functionName.empty()) return false;
+
+  auto [headerPath, sourcePath] = ensureUserSourcePair(projectPath, prefabName);
+  std::string ident = sanitizePrefabIdent(prefabName);
+
+  // Header: append a tagged forward declaration just before the namespace
+  // closing brace. Two-space indent matches the scaffold's house style.
+  {
+    std::string content = Utils::FS::loadTextFile(headerPath.string());
+    std::string decl = "  P64_NODE void " + functionName + "(P64::Object* self);\n";
+    content = insertBeforeLastBrace(content, decl);
+    Utils::FS::saveTextFile(headerPath.string(), content);
+  }
+
+  // Source: append an empty implementation, also before the namespace
+  // closing brace. Empty body so the user can fill it in their editor.
+  {
+    std::string content = Utils::FS::loadTextFile(sourcePath.string());
+    std::string impl = "  void " + functionName + "(P64::Object* self) {\n  }\n";
+    content = insertBeforeLastBrace(content, impl);
+    Utils::FS::saveTextFile(sourcePath.string(), content);
+  }
+  return true;
+}
+
 std::vector<Project::PrefabFunctionDesc>
 Project::scanPrefabFunctions(const std::string &projectPath, const std::string &prefabName)
 {

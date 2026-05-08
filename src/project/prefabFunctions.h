@@ -25,4 +25,24 @@ namespace Project
     const std::string &projectPath,
     const std::string &prefabName
   );
+
+  // Map a prefab/file name to a C++ identifier suffix (used as the user
+  // namespace name and as the basis for sanitized variable struct names).
+  // Replaces non-[A-Za-z0-9_] with '_'; prefixes a leading digit with '_'.
+  std::string sanitizePrefabIdent(std::string s);
+
+  // Append a new P64_NODE function declaration to the prefab's user header
+  // and a matching empty implementation to the .cpp. Creates the file pair
+  // if it doesn't exist yet (matches the scaffold AssetsBrowser uses for
+  // freshly-created prefabs). Returns true on success.
+  //
+  // The name passed in is the bare function name; the inserted signature is
+  // `P64_NODE void <name>(P64::Object* self)` — a sensible default for
+  // event-style entry points. Users edit the signature later in their own
+  // text editor; the scanner picks up whatever they leave behind.
+  bool addPrefabFunction(
+    const std::string &projectPath,
+    const std::string &prefabName,
+    const std::string &functionName
+  );
 }
