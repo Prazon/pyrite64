@@ -17,7 +17,10 @@
 #include <string>
 #include "../../../utils/logger.h"
 #include "../../../utils/proc.h"
+#include "../../../utils/fs.h"
 #include "../../../utils/filePicker.h"
+#include "../../../utils/hash.h"
+#include "../../../project/scene/prefab.h"
 
 using FileType = Project::FileType;
 namespace fs = std::filesystem;
@@ -484,6 +487,9 @@ void Editor::AssetsBrowser::draw() {
                 || asset.type == FileType::CODE_GLOBAL) {
           ctx.editorScene->openCodeEditor(asset.getUUID());
           handled = true;
+        } else if (asset.type == FileType::PREFAB) {
+          ctx.editorScene->openPrefabEditor(asset.getUUID());
+          handled = true;
         }
       }
       if (!handled && !Utils::Proc::openFile(asset.path))
@@ -624,10 +630,53 @@ void Editor::AssetsBrowser::draw() {
     );
   };
 
+  // SPBF64 fork: "New Prefab" creates a blank .prefab in the active directory
+  // and immediately opens it in the dedicated PrefabEditor. Mirrors how
+  // Unreal's Content Browser "Create > Blueprint" produces a fresh asset
+  // ready to edit, rather than requiring an existing scene object.
+  auto createBlankPrefab = [&](const fs::path &dir) {
+    fs::create_directories(dir);
+    auto pickName = [&](){
+      for (int i = 0; i < 1000; ++i) {
+        std::string base = (i == 0) ? "NewPrefab" : ("NewPrefab_" + std::to_string(i + 1));
+        fs::path candidate = dir / (base + ".prefab");
+        std::error_code existsEc;
+        if (!fs::exists(candidate, existsEc)) {
+          return std::pair{base, candidate};
+        }
+      }
+      return std::pair<std::string, fs::path>{"NewPrefab", dir / "NewPrefab.prefab"};
+    };
+    auto [stem, fullPath] = pickName();
+
+    Project::Prefab prefab{};
+    prefab.uuid.value = Utils::Hash::randomU64();
+    prefab.obj.name = "Root";
+    prefab.obj.scale.value = {1.0f, 1.0f, 1.0f};
+    prefab.obj.rot.value = {0, 0, 0, 1};
+
+    Utils::FS::saveTextFile(fullPath.string(), prefab.serialize());
+    ctx.project->getAssets().reload();
+
+    // Find the freshly-created entry by path and open it.
+    if (ctx.editorScene) {
+      auto* entry = ctx.project->getAssets().getByPath(fullPath.string());
+      if (entry) {
+        ctx.editorScene->openPrefabEditor(entry->getUUID());
+      }
+    }
+  };
+
   if (ImGui::BeginPopupContextWindow("AssetsBrowserCtx",
         ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
   {
     bool hasAny = false;
+    if (activeTab == TAB_IDX_PREFABS) {
+      if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " New Prefab")) {
+        createBlankPrefab(basePathAbs / tabDirs[activeTab]);
+      }
+      hasAny = true;
+    }
     if (activeTab == TAB_IDX_SCRIPTS) {
       if (ImGui::BeginMenu(ICON_MDI_PLUS " Create")) {
         if (ImGui::MenuItem("Object Script")) {

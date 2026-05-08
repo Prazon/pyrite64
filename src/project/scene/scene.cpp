@@ -97,6 +97,41 @@ Project::Scene::Scene(int id_, const std::string &projectPath)
   root.uuid = Utils::Hash::sha256_64bit(root.name);
 }
 
+// SPBF64 fork: in-memory scene used by PrefabEditor.
+Project::Scene::Scene()
+  : id{-1}
+{
+  resetLayers();
+  root.id = 0;
+  root.name = "Scene";
+  root.uuid = Utils::Hash::sha256_64bit(root.name);
+}
+
+void Project::Scene::loadFromObjectJSON(const std::string &objJson)
+{
+  removeAllObjects();
+  // Re-establish the root (removeAllObjects clears children, not root metadata,
+  // but be explicit so the prefab editor can be re-loaded safely).
+  root.id = 0;
+  root.name = "Scene";
+  root.uuid = Utils::Hash::sha256_64bit(root.name);
+
+  auto doc = nlohmann::json::parse(objJson, nullptr, false);
+  if (!doc.is_object()) return;
+
+  auto child = std::make_shared<Object>(root);
+  child->deserialize(this, doc);
+
+  // Preserve UUIDs from the prefab; only register in objectsMap.
+  addObject(root, child, false);
+}
+
+std::string Project::Scene::serializeRootChild() const
+{
+  if (root.children.empty()) return "{}";
+  return root.children.front()->serialize().dump();
+}
+
 std::shared_ptr<Project::Object> Project::Scene::addObject(std::string &objJson, uint64_t parentUUID)
 {
   auto p = getObjectByUUID(parentUUID);
@@ -159,8 +194,10 @@ std::shared_ptr<Project::Object> Project::Scene::addPrefabInstance(uint64_t pref
 }
 
 void Project::Scene::removeObject(Object &obj) {
-  ctx.removeObjectSelection(obj.uuid);
-
+  // SPBF64 fork: previously this also called ctx.removeObjectSelection(obj.uuid).
+  // Selection is now per-edit-context (Project::Selection); the caller is
+  // responsible for clearing/updating its own selection (see SelectionUtils::
+  // deleteSelectedObjects, which calls Selection::clear() after).
   std::erase_if(
     obj.parent->children,
     [&obj](const std::shared_ptr<Object> &ref) { return ref->uuid == obj.uuid; }

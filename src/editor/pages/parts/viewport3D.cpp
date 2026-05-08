@@ -15,6 +15,7 @@
 #include "../../../renderer/uniforms.h"
 #include "../../../utils/meshGen.h"
 #include "../../../utils/colors.h"
+#include "../../../project/component/components.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/matrix_decompose.hpp"
 #include "SDL3/SDL_gpu.h"
@@ -148,7 +149,7 @@ namespace
     for(auto& child : obj.children)
     {
       // if child itself is selected, skip (already transformed with it)
-      if(ctx.isObjectSelected(child->uuid))continue;
+      if(ctx.mainSelection.isSelected(child->uuid))continue;
 
       auto it = relPosMap.find(child->uuid);
       if(it == relPosMap.end())continue;
@@ -260,9 +261,9 @@ bool Editor::Viewport3D::alignFocusedObjectToCamera()
 {
   auto scene = ctx.project ? ctx.project->getScenes().getLoadedScene() : nullptr;
   // No scene loaded or no object selected --> Abort
-  if (!scene || ctx.selObjectUUID == 0)return false;
+  if (!scene || ctx.mainSelection.primary() == 0)return false;
 
-  auto obj = scene->getObjectByUUID(ctx.selObjectUUID);
+  auto obj = scene->getObjectByUUID(ctx.mainSelection.primary());
   // Cannot get selected object --> Abort
   if (!obj)return false;
 
@@ -332,7 +333,7 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   auto scene = ctx.project->getScenes().getLoadedScene();
   if (!scene)return;
 
-  ctx.sanitizeObjectSelection(scene);
+  ctx.mainSelection.sanitize(scene);
 
   SDL_GPURenderPass* renderPass3D = SDL_BeginGPURenderPass(
     cmdBuff, fb.getTargetInfo(), fb.getTargetInfoCount(), &fb.getDepthTargetInfo()
@@ -354,7 +355,7 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
     {
       if(!hadDraw) {
         glm::u8vec4 spriteCol{0xFF, 0xFF, 0xFF, 0xFF};
-        if (ctx.isObjectSelected(obj.uuid)) {
+        if (ctx.mainSelection.isSelected(obj.uuid)) {
           spriteCol = Utils::Colors::kSelectionTint;
         }
         Utils::Mesh::addSprite(*getSprites(), obj.pos.resolve(obj.propOverrides), obj.uuid, 2, spriteCol);
@@ -467,6 +468,82 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   }
 
   SDL_EndGPURenderPass(renderPass3D);
+
+  // SPBF64 fork: Picture-in-Picture preview through the selected Comp::Camera.
+  // Reuses the meshes/buffers populated above (primitives + billboards already
+  // recreated, so they're safe to draw again with a different uniform). Models
+  // and animated models are re-issued via funcDraw3D so they pick up the new
+  // projection. Lines/sprites/grid are intentionally skipped — gizmos shouldn't
+  // appear in what is conceptually the runtime camera's view.
+  if (previewSpec.active && fbPreview.getTexture() != nullptr)
+  {
+    if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "Camera Preview Pass");
+
+    SDL_GPURenderPass* previewPass = SDL_BeginGPURenderPass(
+      cmdBuff, fbPreview.getTargetInfo(), fbPreview.getTargetInfoCount(), &fbPreview.getDepthTargetInfo()
+    );
+
+    // Build view + projection from the camera spec.
+    float aspect = previewSpec.aspect;
+    if (aspect <= 0.0f) {
+      aspect = previewSpec.vpSize.y > 0
+        ? (float)previewSpec.vpSize.x / (float)previewSpec.vpSize.y
+        : 1.0f;
+    }
+    glm::vec3 forward = previewSpec.rot * glm::vec3{0,0,-1};
+    glm::vec3 upDir   = previewSpec.rot * glm::vec3{0,1,0};
+    uniGlobalPreview.projMat = glm::perspective(
+      glm::radians(previewSpec.fov), aspect, previewSpec.nearD, previewSpec.farD
+    );
+    uniGlobalPreview.cameraMat = glm::lookAt(previewSpec.pos, previewSpec.pos + forward, upDir);
+    uniGlobalPreview.screenSize = glm::vec2{(float)fbPreview.getWidth(), (float)fbPreview.getHeight()};
+    uniGlobalPreview.spriteSize = uniGlobal.spriteSize;
+
+    renderScene.getPipeline("n64").bind(previewPass);
+    dummySkeleton.use(previewPass);
+    SDL_PushGPUVertexUniformData(cmdBuff, 0, &uniGlobalPreview, sizeof(uniGlobalPreview));
+
+    // Re-issue immediate-draw renderable components only. compModel / compAnimModel
+    // do not push into the shared mesh buffers; they call obj3D.draw() against the
+    // current render pass, so calling them again here just retargets to fbPreview.
+    iterateObjects(rootObj, [&](Project::Object &obj, Project::Component::Entry *comp) {
+      if (!comp) return;
+      if (comp->id != 1 /* Model (Static) */ && comp->id != 10 /* Model (Animated) */) return;
+      auto &def = Project::Component::TABLE[comp->id];
+      if (def.funcDraw3D) def.funcDraw3D(obj, *comp, *this, cmdBuff, previewPass);
+    });
+
+    // Solid primitives — meshPrimitives is already uploaded from the main pass.
+    if (!meshPrimitives->vertLines.empty()) {
+      renderScene.getPipeline("primitive").bind(previewPass);
+      objPrimitives.draw(previewPass, cmdBuff);
+    }
+
+    // Textured billboards — same indices as the main pass, just reapplied with
+    // the preview uniform.
+    if (!submittedBillboards.empty()) {
+      renderScene.getPipeline("billboard").bind(previewPass);
+      SDL_PushGPUVertexUniformData(cmdBuff, 0, &uniGlobalPreview, sizeof(uniGlobalPreview));
+      for (const auto &bb : submittedBillboards) {
+        struct {
+          glm::vec4 sizeAndPivot;
+          glm::vec4 uvRect;
+          glm::vec4 mode;
+        } params{ bb.sizeAndPivot, bb.uvRect, bb.mode };
+        SDL_PushGPUVertexUniformData(cmdBuff, 1, &params, sizeof(params));
+
+        SDL_GPUTextureSamplerBinding binding{
+          .texture = bb.texture,
+          .sampler = texSamplerRepeat,
+        };
+        SDL_BindGPUFragmentSamplers(previewPass, 0, &binding, 1);
+        meshBillboards->draw(previewPass, bb.indexOffset, 6);
+      }
+    }
+
+    SDL_EndGPURenderPass(previewPass);
+    if(ctx.debugMode)SDL_PopGPUDebugGroup(cmdBuff);
+  }
 }
 
 void Editor::Viewport3D::onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPass *copyPass) {
@@ -523,6 +600,35 @@ void Editor::Viewport3D::draw()
 
   fb.setClearColor(scene->conf.clearColor.value);
 
+  // SPBF64 fork: detect a selected Comp::Camera and capture its projection
+  // params for the Picture-in-Picture preview pass. First selected camera wins.
+  previewSpec.active = false;
+  for (uint32_t selUUID : ctx.mainSelection.all()) {
+    auto selObj = scene->getObjectByUUID(selUUID);
+    if (!selObj) continue;
+    auto srcObj = selObj.get();
+    if (selObj->isPrefabInstance()) {
+      auto prefab = ctx.project->getAssets().getPrefabByUUID(selObj->uuidPrefab.value);
+      if (prefab) srcObj = &prefab->obj;
+    }
+    for (auto &comp : srcObj->components) {
+      if (comp.id != 3 /* Camera */) continue;
+      auto spec = Project::Component::Camera::extractSpec(*selObj, comp);
+      previewSpec.active = true;
+      previewSpec.pos = spec.pos;
+      previewSpec.rot = spec.rot;
+      previewSpec.fov = spec.fov;
+      previewSpec.nearD = spec.nearD;
+      previewSpec.farD = spec.farD;
+      previewSpec.aspect = spec.aspect;
+      previewSpec.vpSize = spec.vpSize;
+      previewSpec.name = selObj->name;
+      break;
+    }
+    if (previewSpec.active) break;
+  }
+  fbPreview.setClearColor(scene->conf.clearColor.value);
+
   if(pickedObjID.hasResult())
   {
     uint32_t newUUID = pickedObjID.consume();
@@ -533,17 +639,17 @@ void Editor::Viewport3D::draw()
 
     if (newUUID == 0) {
       if (!pickAdditive) {
-        ctx.clearObjectSelection();
+        ctx.mainSelection.clear();
       }
     } else {
       if (pickAdditive) {
-        ctx.toggleObjectSelection(newUUID);
+        ctx.mainSelection.toggle(newUUID);
       } else {
-        ctx.setObjectSelection(newUUID);
+        ctx.mainSelection.set(newUUID);
       }
     }
   }
-  auto obj = scene->getObjectByUUID(ctx.selObjectUUID);
+  auto obj = scene->getObjectByUUID(ctx.mainSelection.primary());
 
   float BAR_HEIGHT = 26_px;
 
@@ -562,6 +668,23 @@ void Editor::Viewport3D::draw()
 
   fb.resize((int)renderSize.x, (int)renderSize.y);
   camera.screenSize = {renderSize.x, renderSize.y};
+
+  // SPBF64 fork: size the PiP framebuffer to a sensible thumbnail (256px wide),
+  // matching the camera's intrinsic aspect ratio. AA factor mirrors the main fb.
+  if (previewSpec.active) {
+    float pipAspect = previewSpec.aspect;
+    if (pipAspect <= 0.0f) {
+      pipAspect = previewSpec.vpSize.y > 0
+        ? (float)previewSpec.vpSize.x / (float)previewSpec.vpSize.y
+        : 16.0f / 9.0f;
+    }
+    constexpr float pipDisplayW = 256.0f;
+    int pipW = (int)(pipDisplayW * ctx.prefs.renderFactorAA);
+    int pipH = (int)((pipDisplayW / pipAspect) * ctx.prefs.renderFactorAA);
+    if (pipW < 32) pipW = 32;
+    if (pipH < 32) pipH = 32;
+    fbPreview.resize(pipW, pipH);
+  }
 
   auto &io = ImGui::GetIO();
   float deltaTime = io.DeltaTime;
@@ -586,7 +709,7 @@ void Editor::Viewport3D::draw()
   bool isShiftDown = ImGui::GetIO().KeyShift;
   if(isShiftDown)moveSpeed *= 4.0f;
 
-  bool hasSelection = !ctx.getSelectedObjectUUIDs().empty();
+  bool hasSelection = !ctx.mainSelection.all().empty();
   bool overGizmo = hasSelection && ImGuizmo::IsOver();
 
   bool leftClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -621,7 +744,7 @@ void Editor::Viewport3D::draw()
       rectMax = glm::clamp(rectMax, glm::vec2{0,0}, viewportSize);
 
       if (!additiveSelect) {
-        ctx.clearObjectSelection();
+        ctx.mainSelection.clear();
       }
 
       auto &rootObj = scene->getRootObject();
@@ -637,7 +760,7 @@ void Editor::Viewport3D::draw()
         glm::vec2 screenPos{proj.x, currSize.y - proj.y};
         if (screenPos.x >= rectMin.x && screenPos.x <= rectMax.x
             && screenPos.y >= rectMin.y && screenPos.y <= rectMax.y) {
-          ctx.addObjectSelection(objIter.uuid);
+          ctx.mainSelection.add(objIter.uuid);
         }
       });
     } else {
@@ -667,7 +790,7 @@ void Editor::Viewport3D::draw()
     bool deletedSelection = false;
     if (ImGui::IsWindowFocused() && obj && ImGui::IsKeyPressed(ctx.prefs.keymap.deleteObject)) {
       UndoRedo::getHistory().markChanged("Delete Object");
-      if (Editor::SelectionUtils::deleteSelectedObjects(*scene)) {
+      if (Editor::SelectionUtils::deleteSelectedObjects(*scene, ctx.mainSelection)) {
         deletedSelection = true;
       }
       obj = nullptr;
@@ -740,7 +863,7 @@ void Editor::Viewport3D::draw()
 
   currPos = ImGui::GetCursorPos();
 
-  //ImGui::Text("Viewport: %f | %f | %08X", mousePos.x, mousePos.y, ctx.selObjectUUID);
+  //ImGui::Text("Viewport: %f | %f | %08X", mousePos.x, mousePos.y, ctx.mainSelection.primary());
 
   constexpr const char* const GIZMO_LABELS[3] = {ICON_MDI_CURSOR_MOVE, ICON_MDI_ROTATE_360, ICON_MDI_ARROW_EXPAND};
   constexpr const char* const GIZMO_TOOLTIPS[3] = {"Translate", "Rotate", "Scale"};
@@ -825,6 +948,37 @@ void Editor::Viewport3D::draw()
     (float)fb.getHeight() / ctx.prefs.renderFactorAA
   });
 
+  // SPBF64 fork: Picture-in-Picture preview thumbnail in the bottom-right
+  // corner of the viewport when a Camera component is selected. Drawn before
+  // the per-component overlays so SpriteBillboard/etc icons sit on top of it
+  // if they happen to project into the corner.
+  if (previewSpec.active && fbPreview.getTexture() != nullptr) {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    float pipDisplayW = (float)fbPreview.getWidth() / ctx.prefs.renderFactorAA;
+    float pipDisplayH = (float)fbPreview.getHeight() / ctx.prefs.renderFactorAA;
+    constexpr float margin = 12.0f;
+    constexpr float labelH = 18.0f;
+    ImVec2 pipMin{
+      currPos.x + currSize.x - pipDisplayW - margin,
+      currPos.y + currSize.y - pipDisplayH - margin - labelH
+    };
+    ImVec2 pipMax{ pipMin.x + pipDisplayW, pipMin.y + pipDisplayH };
+    ImVec2 labelMin{ pipMin.x, pipMin.y - labelH };
+    ImVec2 labelMax{ pipMax.x, pipMin.y };
+
+    ImU32 borderCol = IM_COL32(0xFF, 0xFF, 0xFF, 0xC0);
+    ImU32 labelBg   = IM_COL32(0x10, 0x10, 0x10, 0xD0);
+    ImU32 labelFg   = IM_COL32(0xFF, 0xFF, 0xFF, 0xFF);
+
+    dl->AddRectFilled(labelMin, labelMax, labelBg);
+    dl->AddImage(ImTextureID(fbPreview.getTexture()), pipMin, pipMax);
+    dl->AddRect(labelMin, pipMax, borderCol, 0.0f, 0, 1.5f);
+
+    std::string label = std::string(ICON_MDI_VIDEO_VINTAGE " ") + previewSpec.name;
+    ImVec2 labelTextPos{ labelMin.x + 6.0f, labelMin.y + 2.0f };
+    dl->AddText(labelTextPos, labelFg, label.c_str());
+  }
+
   // SPBF64 fork: per-component screen-space overlays drawn after framebuffer.
   // Lets components like SpriteBillboard render their actual texture as a
   // billboard preview at the projected world position.
@@ -856,7 +1010,7 @@ void Editor::Viewport3D::draw()
           glm::vec3 camPos = camera.pos;
           newObj->pos.resolve(newObj->propOverrides) = camPos + camForward * 150.0f;
 
-          ctx.setObjectSelection(newObj->uuid);
+          ctx.mainSelection.set(newObj->uuid);
         }
       }
     }
@@ -888,7 +1042,7 @@ void Editor::Viewport3D::draw()
   ImGuizmo::SetRect(currPos.x, currPos.y, currSize.x, currSize.y);
 
   if (hasSelection) {
-    auto selectedObjects = Editor::SelectionUtils::collectSelectedObjects(*scene);
+    auto selectedObjects = Editor::SelectionUtils::collectSelectedObjects(*scene, ctx.mainSelection);
     if (!selectedObjects.empty()) {
       obj = scene->getObjectByUUID(selectedObjects.back()->uuid);
 

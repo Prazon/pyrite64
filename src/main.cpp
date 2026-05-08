@@ -432,9 +432,19 @@ int main(int argc, char** argv)
       scene.update();
 
       if (ctx.project) {
-        Editor::UndoRedo::getHistory().begin();
-        ctx.editorScene->draw();
-        Editor::UndoRedo::getHistory().end();
+        // SPBF64 fork: EditScope binds the main history to the active scene +
+        // selection for the duration of the draw. PrefabEditor windows push
+        // their own scope when they draw, so their edits go to their own
+        // history without polluting this one.
+        auto* mainScene = ctx.project->getScenes().getLoadedScene();
+        if (mainScene) {
+          Editor::UndoRedo::EditScope mainScope(
+            Editor::UndoRedo::getMainHistory(), *mainScene, ctx.mainSelection
+          );
+          ctx.editorScene->draw();
+        } else {
+          ctx.editorScene->draw();
+        }
       } else {
         editorMain.draw();
       }

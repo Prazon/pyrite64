@@ -144,6 +144,8 @@ add_executable(pyrite64 src/main.cpp
         src/editor/undoRedo.cpp
         src/editor/selectionUtils.h
         src/editor/selectionUtils.cpp
+        src/project/selection.h
+        src/project/selection.cpp
         src/editor/window.h
         src/editor/window.cpp
         src/editor/keymap.h
@@ -284,6 +286,8 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/imageEditor.cpp
         src/editor/pages/parts/assets/codeEditor.h
         src/editor/pages/parts/assets/codeEditor.cpp
+        src/editor/pages/parts/assets/prefabEditor.h
+        src/editor/pages/parts/assets/prefabEditor.cpp
         src/editor/pages/parts/assets/assetPreviewViewport.h
         src/editor/pages/parts/assets/assetPreviewViewport.cpp
         src/project/assets/material.h

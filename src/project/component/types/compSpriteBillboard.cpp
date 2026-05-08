@@ -273,7 +273,7 @@ namespace Project::Component::SpriteBillboard
     // so the object is still pickable in the viewport.
     if (!assetEntry || assetEntry->type != FileType::IMAGE || !assetEntry->texture) {
       glm::u8vec4 col{0xCC, 0xCC, 0xFF, 0xFF};
-      if (ctx.isObjectSelected(obj.uuid)) col = Utils::Colors::kSelectionTint;
+      if (ctx.mainSelection.isSelected(obj.uuid)) col = Utils::Colors::kSelectionTint;
       Utils::Mesh::addSprite(*vp.getSprites(), obj.pos.resolve(obj.propOverrides),
                              obj.uuid, 4, col);
       return;
@@ -320,14 +320,14 @@ namespace Project::Component::SpriteBillboard
       std::swap(uvRect.x, uvRect.z);
     }
 
-    glm::vec4 mode{ worldPerPx, ctx.isObjectSelected(obj.uuid) ? 1.0f : 0.0f, 0.0f, 0.0f };
+    glm::vec4 mode{ worldPerPx, ctx.mainSelection.isSelected(obj.uuid) ? 1.0f : 0.0f, 0.0f, 0.0f };
 
     vp.addBillboardQuad(obj.pos.resolve(obj.propOverrides), obj.uuid,
                         gpuTex, sizeAndPivot, uvRect, mode);
 
     // A small selection marker (still uses the icon-sprite path) so authors
     // see the pivot point at the world anchor.
-    if (ctx.isObjectSelected(obj.uuid)) {
+    if (ctx.mainSelection.isSelected(obj.uuid)) {
       Utils::Mesh::addSprite(*vp.getSprites(), obj.pos.resolve(obj.propOverrides),
                              obj.uuid, 4, Utils::Colors::kSelectionTint);
     }
@@ -403,7 +403,7 @@ namespace Project::Component::SpriteBillboard
     }
 
     // Pivot marker for the selected sprite
-    if (ctx.isObjectSelected(obj.uuid)) {
+    if (ctx.mainSelection.isSelected(obj.uuid)) {
       drawList->AddCircleFilled({screenX, screenY}, 3.0f, IM_COL32(255, 80, 80, 220));
       drawList->AddCircle({screenX, screenY}, 4.0f, IM_COL32(255, 255, 255, 220), 0, 1.5f);
     }

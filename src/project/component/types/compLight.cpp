@@ -123,7 +123,7 @@ namespace Project::Component::Light
     constexpr float LINE_LEN = 75.0f;
     glm::u8vec4 col = data.color.resolve(obj.propOverrides) * 255.0f;
 
-    bool isSelected = ctx.isObjectSelected(obj.uuid);
+    bool isSelected = ctx.mainSelection.isSelected(obj.uuid);
 
     auto pos = obj.pos.resolve(obj.propOverrides);
     if(isSelected)

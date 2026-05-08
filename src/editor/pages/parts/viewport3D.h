@@ -4,6 +4,7 @@
 */
 #pragma once
 #include <memory>
+#include <string>
 
 #include "../../../renderer/camera.h"
 #include "../../../renderer/vertBuffer.h"
@@ -23,6 +24,24 @@ namespace Editor
       Renderer::Framebuffer fb{};
       Renderer::Camera camera{};
       uint32_t passId{};
+
+      // SPBF64 fork: Picture-in-Picture preview of the selected Comp::Camera.
+      // Runs a second render pass against `fbPreview` driven by `previewSpec`
+      // and is composited into the main viewport as a corner thumbnail.
+      Renderer::Framebuffer fbPreview{};
+      Renderer::UniformGlobal uniGlobalPreview{};
+      struct PreviewCamSpec {
+        bool active{false};
+        glm::vec3 pos{};
+        glm::quat rot{0,0,0,1};
+        float fov{65.0f};       // degrees
+        float nearD{100.0f};
+        float farD{4000.0f};
+        float aspect{0.0f};     // 0 means "derive from vpSize"
+        glm::ivec2 vpSize{320, 240};
+        std::string name{};
+      };
+      PreviewCamSpec previewSpec{};
 
       bool isMouseHover{false};
       bool isMouseDown{false};

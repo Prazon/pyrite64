@@ -3,11 +3,19 @@
 * @license MIT
 */
 #include "undoRedo.h"
+
 #include "../context.h"
+#include "../project/scene/scene.h"
+#include "../project/selection.h"
 
 namespace
 {
-  Editor::UndoRedo::History globalHistory;
+  Editor::UndoRedo::History mainHistory{};
+
+  // SPBF64 fork: stack of active EditScopes. Top entry is the History
+  // markChanged()/getHistory() target. Empty stack falls through to the
+  // main history.
+  std::vector<Editor::UndoRedo::History*> activeStack{};
 }
 
 namespace Editor::UndoRedo
@@ -15,42 +23,42 @@ namespace Editor::UndoRedo
   bool History::undo()
   {
     if (!canUndo()) return false;
+    if (!boundScene || !boundSelection) return false;
 
     auto cmd = std::move(undoStack.back());
     undoStack.pop_back();
     const auto &prevCmd = undoStack.back();
 
-    if (!snapshotScene) return false;
-    snapshotScene->deserialize(prevCmd->state);
+    boundScene->deserialize(prevCmd->state);
 
     uint32_t primarySel = prevCmd->selection.empty() ? 0 : prevCmd->selection.back();
-    ctx.setObjectSelectionList(prevCmd->selection, primarySel);
-    ctx.sanitizeObjectSelection(snapshotScene);
+    boundSelection->setList(prevCmd->selection, primarySel);
+    boundSelection->sanitize(boundScene);
 
     redoStack.push_back(std::move(cmd));
-    
+
     return true;
   }
-  
+
   bool History::redo()
   {
     if (!canRedo()) return false;
+    if (!boundScene || !boundSelection) return false;
 
     auto cmd = std::move(redoStack.back());
     redoStack.pop_back();
 
-    if (!snapshotScene) return false;
-    snapshotScene->deserialize(cmd->state);
+    boundScene->deserialize(cmd->state);
 
     uint32_t primarySel = cmd->selection.empty() ? 0 : cmd->selection.back();
-    ctx.setObjectSelectionList(cmd->selection, primarySel);
-    ctx.sanitizeObjectSelection(snapshotScene);
+    boundSelection->setList(cmd->selection, primarySel);
+    boundSelection->sanitize(boundScene);
 
     undoStack.push_back(std::move(cmd));
 
     return true;
   }
-  
+
   void History::clear()
   {
     undoStack.clear();
@@ -62,31 +70,30 @@ namespace Editor::UndoRedo
   }
 
   void History::begin() {
-    auto scene = ctx.project ? ctx.project->getScenes().getLoadedScene() : nullptr;
-    if (!scene)return;
+    if (!boundScene || !boundSelection) return;
 
     if (undoStack.empty()) {
-      // If this is the first change, we need to save the initial state of the scene
-      std::string initialState = scene->serialize(true);
+      // First change: snapshot initial scene state so undo can return to it.
+      std::string initialState = boundScene->serialize(true);
       if (!savedState.has_value()) {
         savedState = initialState;
       }
-      auto ids = ctx.selObjectUUIDs;
+      auto ids = boundSelection->all();
       undoStack.push_back(std::make_unique<Entry>(
         std::move(initialState), "Initial State", ids
       ));
     }
 
-    snapshotScene = scene;
-    snapshotSelUUIDs = ctx.selObjectUUIDs;
+    snapshotScene = boundScene;
+    snapshotSelUUIDs = boundSelection->all();
   }
 
   void History::end() {
-    if (nextChangedReason.empty())return;
+    if (nextChangedReason.empty()) return;
 
     auto scene = snapshotScene;
     snapshotScene = nullptr;
-    if (!scene) {
+    if (!scene || !boundSelection) {
       nextChangedReason.clear();
       return;
     }
@@ -95,7 +102,7 @@ namespace Editor::UndoRedo
       undoStack.back()->selection = snapshotSelUUIDs;
     }
 
-    auto ids = ctx.selObjectUUIDs;
+    auto ids = boundSelection->all();
 
     auto newEntry = std::make_unique<Entry>(
       scene->serialize(true),
@@ -150,7 +157,7 @@ namespace Editor::UndoRedo
     if (undoStack.empty()) return "";
     return undoStack.back()->description;
   }
-  
+
   std::string History::getRedoDescription() const
   {
     if (redoStack.empty()) return "";
@@ -174,7 +181,7 @@ namespace Editor::UndoRedo
       redoStack.erase(redoStack.begin(), redoStack.end() - maxHistorySize);
     }
   }
-  
+
   uint64_t History::getMemoryUsage()
   {
     uint64_t total = 0;
@@ -189,6 +196,33 @@ namespace Editor::UndoRedo
 
   History& getHistory()
   {
-    return globalHistory;
+    if (!activeStack.empty()) {
+      return *activeStack.back();
+    }
+    return mainHistory;
+  }
+
+  History& getMainHistory()
+  {
+    return mainHistory;
+  }
+
+  EditScope::EditScope(History& h, Project::Scene& scene, Project::Selection& selection)
+    : history(h),
+      prevScene(h.getBoundScene()),
+      prevSelection(h.getBoundSelection())
+  {
+    history.bind(&scene, &selection);
+    activeStack.push_back(&history);
+    history.begin();
+  }
+
+  EditScope::~EditScope()
+  {
+    history.end();
+    if (!activeStack.empty() && activeStack.back() == &history) {
+      activeStack.pop_back();
+    }
+    history.bind(prevScene, prevSelection);
   }
 }

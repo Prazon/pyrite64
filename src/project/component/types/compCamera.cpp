@@ -119,7 +119,7 @@ namespace Project::Component::Camera
 
     auto pos = obj.pos.resolve(obj);
 
-    bool isSelected = ctx.isObjectSelected(obj.uuid);
+    bool isSelected = ctx.mainSelection.isSelected(obj.uuid);
 
     // calculate frustum corners in world space
     float fovY = glm::radians(data.fov.resolve(obj));
@@ -196,5 +196,21 @@ namespace Project::Component::Camera
 
     auto spriteCol = isSelected ? Utils::Colors::kSelectionTint : glm::u8vec4{0xFF};
     Utils::Mesh::addSprite(*vp.getSprites(), pos, obj.uuid, 3, spriteCol);
+  }
+
+  // SPBF64 fork: pull projection params out of a Camera component so the
+  // editor's PiP preview can render the scene through it.
+  Spec extractSpec(Object &obj, Entry &entry)
+  {
+    Data &data = *static_cast<Data*>(entry.data.get());
+    Spec s{};
+    s.pos = obj.pos.resolve(obj);
+    s.rot = obj.rot.resolve(obj);
+    s.fov = data.fov.resolve(obj);
+    s.nearD = data.near.resolve(obj);
+    s.farD = data.far.resolve(obj);
+    s.aspect = data.aspect.resolve(obj);
+    s.vpSize = data.vpSize.resolve(obj);
+    return s;
   }
 }

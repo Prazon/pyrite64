@@ -4,6 +4,12 @@
 */
 #pragma once
 
+namespace Project
+{
+  class Scene;
+  class Selection;
+}
+
 namespace Editor
 {
   class ObjectInspector
@@ -13,6 +19,8 @@ namespace Editor
     public:
       ObjectInspector();
 
-      void draw();
+      // SPBF64 fork: explicit scene + selection so the inspector drives the
+      // active scene and any open PrefabEditor's prefab-as-scene wrapper.
+      void draw(Project::Scene &scene, Project::Selection &selection);
   };
 }

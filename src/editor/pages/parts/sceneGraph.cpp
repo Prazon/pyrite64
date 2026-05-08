@@ -9,6 +9,8 @@
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "../../../context.h"
+#include "../../../project/scene/scene.h"
+#include "../../../project/selection.h"
 #include "../../imgui/helper.h"
 #include "IconsMaterialDesignIcons.h"
 #include "imgui_internal.h"
@@ -64,22 +66,17 @@ namespace
   /**
    * Starts inline renaming for an object.
    *
-   * @param objectUUID UUID of the object to rename
-   * @param objectName Current name
+   * @param scene Scene the object lives in.
+   * @param objectUUID UUID of the object to rename.
    */
-  void startRenaming(uint32_t objectUUID)
+  void startRenaming(Project::Scene &scene, uint32_t objectUUID)
   {
-    // Get the scene to look for the object
-    auto scene = ctx.project->getScenes().getLoadedScene();
-    if (!scene) return;
-
-    // Can find object with such UUID --> Start renaming
-    if (const std::shared_ptr<Project::Object> theObject = scene->getObjectByUUID(objectUUID)) {
+    if (const std::shared_ptr<Project::Object> theObject = scene.getObjectByUUID(objectUUID)) {
       renameObjectUUID = objectUUID;
       renameBuffer = theObject->name;
       startingRename = true;
-    // Cannot find object with such UUID (selection may have gone stale between frames) --> Cancel renaming
     } else {
+      // Selection may have gone stale between frames
       clearRenaming();
     }
   }
@@ -195,7 +192,8 @@ namespace
   }
 
   void drawObjectNode(
-    Project::Scene &scene, Project::Object &obj, bool keyDelete,
+    Project::Scene &scene, Project::Selection &selection,
+    Project::Object &obj, bool keyDelete,
     bool parentEnabled = true
   )
   {
@@ -207,7 +205,7 @@ namespace
       flag |= ImGuiTreeNodeFlags_Leaf;
     }
 
-    bool isSelected = ctx.isObjectSelected(obj.uuid);
+    bool isSelected = selection.isSelected(obj.uuid);
     if (isSelected) {
       flag |= ImGuiTreeNodeFlags_Selected;
     }
@@ -241,7 +239,7 @@ namespace
 
     // Double-clicked a node --> Start renaming
     if (nodeIsDoubleClicked)
-      startRenaming(obj.uuid);
+      startRenaming(scene, obj.uuid);
 
     bool isRenaming = renameObjectUUID == obj.uuid;
 
@@ -303,12 +301,10 @@ namespace
     if (nodeIsClicked) {
       bool isCtrlDown = ImGui::GetIO().KeyCtrl;
       if (isCtrlDown) {
-        ctx.toggleObjectSelection(obj.uuid);
+        selection.toggle(obj.uuid);
       } else {
-        ctx.setObjectSelection(obj.uuid);
+        selection.set(obj.uuid);
       }
-      //ImGui::SetWindowFocus("Object");
-      //ImGui::SetWindowFocus("Graph");
     }
 
     if(isOpen)
@@ -318,8 +314,8 @@ namespace
         if (ImGui::MenuItem(ICON_MDI_CUBE_OUTLINE " Add Object")) {
           auto added = scene.addObject(obj);
           if (added) {
-            ctx.setObjectSelection(added->uuid);
-            startRenaming(added->uuid);
+            selection.set(added->uuid);
+            startRenaming(scene, added->uuid);
           }
           Editor::UndoRedo::getHistory().markChanged("Add Object");
         }
@@ -335,7 +331,7 @@ namespace
       }
 
       for(auto &child : obj.children) {
-        drawObjectNode(scene, *child, keyDelete, parentEnabled && obj.enabled);
+        drawObjectNode(scene, selection, *child, keyDelete, parentEnabled && obj.enabled);
       }
 
       ImGui::TreePop();
@@ -343,11 +339,8 @@ namespace
   }
 }
 
-void Editor::SceneGraph::draw()
+void Editor::SceneGraph::draw(Project::Scene &scene, Project::Selection &selection)
 {
-  auto scene = ctx.project->getScenes().getLoadedScene();
-  if (!scene)return;
-
   dragDropTask = {};
   deleteObj = nullptr;
   deleteSelection = false;
@@ -361,16 +354,15 @@ void Editor::SceneGraph::draw()
   bool keyRename = isFocus && !isRenaming && ImGui::IsKeyPressed(ImGuiKey_F2);
 
   if (keyRename) {
-    const std::vector<uint32_t> &selectedIds = ctx.getSelectedObjectUUIDs();
+    const std::vector<uint32_t> &selectedIds = selection.all();
     // Inline renaming only makes sense for a single target; multi-select keeps its current state
     if (selectedIds.size() == 1) {
-      // Rename the selected object
-      startRenaming(selectedIds.front());
+      startRenaming(scene, selectedIds.front());
     }
   }
 
-  auto &root = scene->getRootObject();
-  drawObjectNode(*scene, root, keyDelete);
+  auto &root = scene.getRootObject();
+  drawObjectNode(scene, selection, root, keyDelete);
 
   ImGui::PopStyleVar(1);
 
@@ -379,28 +371,26 @@ void Editor::SceneGraph::draw()
       && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
       && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
       && !ImGui::IsAnyItemHovered()) {
-    ctx.clearObjectSelection();
+    selection.clear();
   }
 
   if(dragDropTask.sourceUUID && dragDropTask.targetUUID) {
-    //printf("dragDropTarget %08X -> %08X (%d)\n", dragDropTask.sourceUUID, dragDropTask.targetUUID, dragDropTask.isInsert);
-    bool moved = scene->moveObject(
+    bool moved = scene.moveObject(
       dragDropTask.sourceUUID,
       dragDropTask.targetUUID,
       dragDropTask.isInsert
     );
 
-    // Could move --> Add to history
     if (moved)
       UndoRedo::getHistory().markChanged("Move Object");
   }
 
   if (deleteSelection || deleteObj) {
-    if (deleteObj && !ctx.isObjectSelected(deleteObj->uuid)) {
-      ctx.setObjectSelection(deleteObj->uuid);
+    if (deleteObj && !selection.isSelected(deleteObj->uuid)) {
+      selection.set(deleteObj->uuid);
     }
 
     UndoRedo::getHistory().markChanged("Delete Object");
-    Editor::SelectionUtils::deleteSelectedObjects(*scene);
+    Editor::SelectionUtils::deleteSelectedObjects(scene, selection);
   }
 }

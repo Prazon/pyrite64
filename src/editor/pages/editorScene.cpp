@@ -22,6 +22,7 @@
 #include "parts/assets/modelEditor.h"
 #include "parts/assets/imageEditor.h"
 #include "parts/assets/codeEditor.h"
+#include "parts/assets/prefabEditor.h"
 
 namespace
 {
@@ -64,6 +65,11 @@ Editor::Scene::Scene()
         openCodeEditor(assetUUID.get<uint64_t>());
       }
     }
+    if(json.contains("winPrefabs")) {
+      for(const auto& assetUUID : json["winPrefabs"]) {
+        openPrefabEditor(assetUUID.get<uint64_t>());
+      }
+    }
   } catch(const std::exception& e) {}
 }
 
@@ -81,6 +87,10 @@ Editor::Scene::~Scene()
   conf["winCode"] = nlohmann::json::array();
   for(const auto& [assetUUID, _] : codeEditors) {
     conf["winCode"].push_back(assetUUID);
+  }
+  conf["winPrefabs"] = nlohmann::json::array();
+  for(const auto& [assetUUID, _] : prefabEditors) {
+    conf["winPrefabs"].push_back(assetUUID);
   }
 
   Utils::FS::saveTextFile(Utils::Proc::getAppDataPath() / "editorScene.json", conf.dump(2));
@@ -115,6 +125,16 @@ void Editor::Scene::openCodeEditor(uint64_t assetUUID)
     it->second->focus();
   } else {
     codeEditors[assetUUID] = std::make_shared<CodeEditor>(assetUUID);
+  }
+}
+
+void Editor::Scene::openPrefabEditor(uint64_t assetUUID)
+{
+  auto it = prefabEditors.find(assetUUID);
+  if(it != prefabEditors.end()) {
+    it->second->focus();
+  } else {
+    prefabEditors[assetUUID] = std::make_shared<PrefabEditor>(assetUUID);
   }
 }
 
@@ -284,8 +304,65 @@ void Editor::Scene::draw()
   }
   for(auto &uuid : delCodeUUIDs)codeEditors.erase(uuid);
 
+  // SPBF64 fork: prefab editors. On close attempts, prompt the user if there
+  // are unsaved changes; same pattern as the unsaved-NodeGraph popup above.
+  std::vector<uint64_t> delPrefabUUIDs{};
+  for(auto &[uuid, editor] : prefabEditors) {
+    if (!editor->draw(dockSpaceID)) {
+      if (editor->isDirty()) {
+        pendingPrefabEditorCloseUUID = uuid;
+        pendingPrefabEditorClosePopup = true;
+      } else {
+        delPrefabUUIDs.push_back(uuid);
+      }
+    }
+  }
+  for(auto &uuid : delPrefabUUIDs)prefabEditors.erase(uuid);
+
+  if (pendingPrefabEditorClosePopup) {
+    ImGui::OpenPopup("Unsaved Prefab");
+    pendingPrefabEditorClosePopup = false;
+  }
+
+  if (ImGui::BeginPopupModal("Unsaved Prefab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    auto it = prefabEditors.find(pendingPrefabEditorCloseUUID);
+    if (it == prefabEditors.end()) {
+      pendingPrefabEditorCloseUUID = 0;
+      ImGui::CloseCurrentPopup();
+    } else {
+      auto &editor = it->second;
+      ImGui::Text("The prefab '%s' has unsaved changes.", editor->getName().c_str());
+      ImGui::Spacing();
+      if (ImGui::Button("Save", {100_px, 0})) {
+        editor->save();
+        prefabEditors.erase(it);
+        pendingPrefabEditorCloseUUID = 0;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Discard", {100_px, 0})) {
+        prefabEditors.erase(it);
+        pendingPrefabEditorCloseUUID = 0;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel", {100_px, 0})) {
+        pendingPrefabEditorCloseUUID = 0;
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::EndPopup();
+  }
+
+  // SPBF64 fork: graph + inspector now take an explicit scene + selection.
+  // Here we drive them with the project's active scene and the main selection.
+  // PrefabEditor windows below set up their own EditScope and call these
+  // widgets with their own (in-memory) scene + selection.
+  auto* mainScene = ctx.project->getScenes().getLoadedScene();
+
   ImGui::Begin("Object");
-    objectInspector.draw();
+    if (mainScene) objectInspector.draw(*mainScene, ctx.mainSelection);
+    else ImGui::Text("No Scene loaded");
   ImGui::End();
 
   ImGui::Begin("Asset");
@@ -298,10 +375,10 @@ void Editor::Scene::draw()
     assetsBrowser.draw();
   ImGui::End();
 
-  if (ctx.project->getScenes().getLoadedScene()) {
+  if (mainScene) {
 
     ImGui::Begin("Graph");
-      sceneGraph.draw();
+      sceneGraph.draw(*mainScene, ctx.mainSelection);
     ImGui::End();
 
     ImGui::Begin("Scene");

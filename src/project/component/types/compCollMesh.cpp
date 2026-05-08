@@ -214,7 +214,7 @@ namespace Project::Component::CollMesh
       .isCollision = true
     });
 
-    bool isSelected = ctx.isObjectSelected(obj.uuid);
+    bool isSelected = ctx.mainSelection.isSelected(obj.uuid);
     if (isSelected)
     {
       auto center = obj.pos.resolve(obj.propOverrides) + (data.aabb.getCenter() * obj.scale.resolve(obj.propOverrides) * (float)0xFFFF);

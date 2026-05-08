@@ -165,7 +165,7 @@ namespace Editor::Actions
       auto scene = ctx.project->getScenes().getLoadedScene();
       if(!scene)return false;
 
-      const auto &selected = ctx.getSelectedObjectUUIDs();
+      const auto &selected = ctx.mainSelection.all();
       if (selected.empty()) return false;
 
       std::unordered_set<uint32_t> selectedSet(selected.begin(), selected.end());
@@ -208,12 +208,12 @@ namespace Editor::Actions
       if(!scene)return false;
 
       UndoRedo::getHistory().markChanged("Paste Object");
-      ctx.clearObjectSelection();
+      ctx.mainSelection.clear();
       for (const auto &entry : ctx.clipboard.entries) {
         std::string data = entry.data;
         auto obj = scene->addObject(data, entry.refUUID);
         if (obj) {
-          ctx.addObjectSelection(obj->uuid);
+          ctx.mainSelection.add(obj->uuid);
         }
       }
       return true;

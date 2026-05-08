@@ -234,7 +234,7 @@ namespace Project::Component::Model
       .obj = obj
     });
 
-    bool isSelected = ctx.isObjectSelected(obj.uuid);
+    bool isSelected = ctx.mainSelection.isSelected(obj.uuid);
     if (isSelected)
     {
       Utils::AABB aabb = data.aabb;

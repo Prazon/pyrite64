@@ -13,6 +13,9 @@
 #include "../../utils/aabb.h"
 #include "glm/mat4x4.hpp"
 #include "glm/vec4.hpp"
+#include "glm/vec3.hpp"
+#include "glm/vec2.hpp"
+#include "glm/gtc/quaternion.hpp"
 
 namespace Editor
 {
@@ -97,6 +100,24 @@ namespace Project::Component
   MAKE_COMP(Model)
   MAKE_COMP(Light)
   MAKE_COMP(Camera)
+
+  // SPBF64 fork: Picture-in-Picture preview reads runtime projection params
+  // out of a selected Camera component to render the scene through it.
+  namespace Camera
+  {
+    struct Spec
+    {
+      glm::vec3 pos{};
+      glm::quat rot{0,0,0,1};
+      float fov{65.0f};       // degrees
+      float nearD{100.0f};
+      float farD{4000.0f};
+      float aspect{0.0f};     // 0 means "derive from vpSize"
+      glm::ivec2 vpSize{320, 240};
+    };
+    Spec extractSpec(Object &obj, Entry &entry);
+  }
+
   MAKE_COMP(CollMesh)
   MAKE_COMP(CollBody)
   MAKE_COMP(RigidBody)

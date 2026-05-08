@@ -21,6 +21,7 @@ namespace Editor
   class ModelEditor;
   class ImageEditor;
   class CodeEditor;
+  class PrefabEditor;
 
   class Scene
   {
@@ -32,6 +33,15 @@ namespace Editor
       std::map<uint64_t, std::shared_ptr<ModelEditor>> modelEditors{};
       std::map<uint64_t, std::shared_ptr<ImageEditor>> imageEditors{};
       std::map<uint64_t, std::shared_ptr<CodeEditor>> codeEditors{};
+      // SPBF64 fork: per-asset prefab editors. Same lifecycle pattern as the
+      // other asset editors above.
+      std::map<uint64_t, std::shared_ptr<PrefabEditor>> prefabEditors{};
+
+      // Holds prefab editors that the user closed; we drop them next frame
+      // so any in-flight ImGui draw using their resources finishes safely.
+      // The unsaved-on-close popup also uses this list as its target.
+      uint64_t pendingPrefabEditorCloseUUID{0};
+      bool pendingPrefabEditorClosePopup{false};
 
       // Deferred-destroy lists for editors that own GPU resources referenced
       // by ImGui draw data (e.g. ModelEditor's preview framebuffer texture).
@@ -65,6 +75,8 @@ namespace Editor
       void openModelEditor(uint64_t assetUUID);
       void openImageEditor(uint64_t assetUUID);
       void openCodeEditor(uint64_t assetUUID);
+      // SPBF64 fork: open the dedicated prefab editor for the given .prefab asset.
+      void openPrefabEditor(uint64_t assetUUID);
 
       void draw();
       void save();

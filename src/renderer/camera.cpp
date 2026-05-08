@@ -154,7 +154,7 @@ void Renderer::Camera::focus(glm::vec3 position, float distance) {
 }
 
 void Renderer::Camera::focusSelection(Context &ctx) {
-  const auto& selectedUUIDs = ctx.getSelectedObjectUUIDs();
+  const auto& selectedUUIDs = ctx.mainSelection.all();
   if (selectedUUIDs.empty()) return;
   
   auto scene = ctx.project->getScenes().getLoadedScene();

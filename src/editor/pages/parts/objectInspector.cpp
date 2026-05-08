@@ -16,28 +16,27 @@
 #include "../../imgui/helper.h"
 #include "../../../context.h"
 #include "../../../project/component/components.h"
+#include "../../../project/scene/scene.h"
+#include "../../../project/selection.h"
 #include "../../selectionUtils.h"
 #include "../../undoRedo.h"
 
 Editor::ObjectInspector::ObjectInspector() {
 }
 
-void Editor::ObjectInspector::draw() {
-  auto scene = ctx.project->getScenes().getLoadedScene();
-  if (!scene)return;
-
-  ctx.sanitizeObjectSelection(scene);
-  const auto &selectedIds = ctx.getSelectedObjectUUIDs();
+void Editor::ObjectInspector::draw(Project::Scene &scene, Project::Selection &selection) {
+  selection.sanitize(&scene);
+  const auto &selectedIds = selection.all();
   if (selectedIds.empty()) {
     ImGui::Text("No Object selected");
     return;
   }
 
   if (selectedIds.size() > 1) {
-    auto selectedObjects = Editor::SelectionUtils::collectSelectedObjects(*scene);
+    auto selectedObjects = Editor::SelectionUtils::collectSelectedObjects(scene, selection);
 
     if (selectedObjects.empty()) {
-      ctx.clearObjectSelection();
+      selection.clear();
       ImGui::Text("No Object selected");
       return;
     }
@@ -268,13 +267,13 @@ void Editor::ObjectInspector::draw() {
 
   bool isPrefabInst = false;
 
-  auto obj = scene->getObjectByUUID(selectedIds.front());
+  auto obj = scene.getObjectByUUID(selectedIds.front());
   if (!obj) {
-    ctx.clearObjectSelection();
+    selection.clear();
     return;
   }
-  if (ctx.selObjectUUID != obj->uuid) {
-    ctx.setObjectSelection(obj->uuid);
+  if (selection.primary() != obj->uuid) {
+    selection.set(obj->uuid);
   }
 
   Project::Object* srcObj = obj.get();

@@ -65,11 +65,25 @@ namespace Project
 
       Scene(int id_, const std::string &projectPath);
 
+      // SPBF64 fork: in-memory scene with no disk backing (no scene.json).
+      // Used by PrefabEditor to host a prefab's Object subtree as a Scene so
+      // SceneGraph / ObjectInspector can drive it through their normal API.
+      Scene();
+
       int getId() const { return id; }
       const std::string &getName() const { return conf.name.value; }
 
       void save();
       Object& getRootObject() { return root; }
+
+      // SPBF64 fork: load a single Object subtree from JSON as the only child
+      // of root. Clears any existing objects first.
+      void loadFromObjectJSON(const std::string &objJson);
+
+      // SPBF64 fork: serialize root's first child to JSON. Used to persist the
+      // prefab subtree back to disk on save. Returns "{}" if there is no
+      // first child.
+      std::string serializeRootChild() const;
 
       std::unordered_map<uint32_t, std::shared_ptr<Object>> objectsMap{};
 

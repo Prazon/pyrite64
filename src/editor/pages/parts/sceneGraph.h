@@ -4,6 +4,12 @@
 */
 #pragma once
 
+namespace Project
+{
+  class Scene;
+  class Selection;
+}
+
 namespace Editor
 {
   class SceneGraph
@@ -11,9 +17,8 @@ namespace Editor
     private:
 
     public:
-//      SceneGraph();
-//      ~SceneGraph();
-
-      void draw();
+      // SPBF64 fork: explicit scene + selection so the same widget drives the
+      // active scene and any open PrefabEditor's prefab-as-scene wrapper.
+      void draw(Project::Scene &scene, Project::Selection &selection);
   };
 }
