@@ -258,11 +258,19 @@ namespace
           }
         }
       }
-      // Empty / untyped object — fall back to the same wireframe-cube glyph
-      // the Add Object context-menu uses, so a fresh object reads as a
-      // "generic actor" rather than a bare text label.
       if (!gotComponentIcon) {
-        nameID += ICON_MDI_CUBE_OUTLINE " ";
+        // The scene root has no components but isn't a "generic actor" —
+        // give it a film-clapboard glyph (Godot convention for a scene
+        // container) so it visually distinguishes itself from regular
+        // empty objects below it.
+        if (obj.parent == nullptr) {
+          nameID += ICON_MDI_MOVIE_OPEN_OUTLINE " ";
+        } else {
+          // Empty / untyped object — same wireframe cube the Add Object
+          // context-menu uses, so a fresh object reads as a generic actor
+          // rather than a bare text label.
+          nameID += ICON_MDI_CUBE_OUTLINE " ";
+        }
       }
     }
     nameID += obj.name + "##" + std::to_string(obj.uuid);
