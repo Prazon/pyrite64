@@ -172,15 +172,13 @@ std::shared_ptr<Project::Object> Project::Scene::addObject(Object&parent, std::s
   return obj;
 }
 
-std::shared_ptr<Project::Object> Project::Scene::addPrefabInstance(uint64_t prefabUUID)
+std::shared_ptr<Project::Object> Project::Scene::addPrefabInstance(uint64_t prefabUUID, Object *parent)
 {
   auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID);
   if (!prefab)return nullptr;
 
-  auto obj = std::make_shared<Object>(root);
-  obj->id = getFreeObjectId();
-  obj->name += prefab->obj.name + " ("+std::to_string(obj->id)+")";
-  obj->uuid = Utils::Hash::randomU32();
+  Object &targetParent = parent ? *parent : root;
+  auto obj = std::make_shared<Object>(targetParent);
   obj->pos = prefab->obj.pos;
   obj->rot = prefab->obj.rot;
   obj->scale = prefab->obj.scale;
@@ -190,7 +188,81 @@ std::shared_ptr<Project::Object> Project::Scene::addPrefabInstance(uint64_t pref
   obj->addPropOverride(obj->rot);
   obj->addPropOverride(obj->scale);
 
-  return addObject(root, obj);
+  // Materialize the prefab's child subtree as independent scene nodes.
+  // Deep-copy via JSON so we don't alias prefab->obj's children. Component
+  // uuids are rewritten so undo/redo identifiers stay unique across multiple
+  // instances of the same prefab; addObject(..., generateIDs=true) below then
+  // assigns fresh object ids/uuids to the whole subtree. fromPrefab=true
+  // tags the materialized lineage so isPrefabLocked locks them and so
+  // refreshPrefabInstances knows which children are safe to discard on
+  // re-materialization.
+  auto markSubtree = [](Object &o, auto &self) -> void {
+    for (auto &comp : o.components) {
+      comp.uuid = Utils::Hash::sha256_64bit(
+        std::to_string(rand()) + std::to_string(comp.id)
+      );
+    }
+    o.fromPrefab = true;
+    for (auto &gc : o.children) self(*gc, self);
+  };
+  for (const auto &srcChild : prefab->obj.children) {
+    auto childJson = srcChild->serialize();
+    auto child = std::make_shared<Object>(*obj);
+    child->deserialize(nullptr, childJson);
+    markSubtree(*child, markSubtree);
+    obj->children.push_back(child);
+  }
+
+  auto added = addObject(targetParent, obj, true);
+  obj->name = prefab->obj.name + " ("+std::to_string(obj->id)+")";
+  return added;
+}
+
+void Project::Scene::refreshPrefabInstances(uint64_t prefabUUID)
+{
+  auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID);
+  if (!prefab) return;
+
+  auto markSubtree = [](Object &o, auto &self) -> void {
+    for (auto &comp : o.components) {
+      comp.uuid = Utils::Hash::sha256_64bit(
+        std::to_string(rand()) + std::to_string(comp.id)
+      );
+    }
+    o.fromPrefab = true;
+    for (auto &gc : o.children) self(*gc, self);
+  };
+
+  auto eraseFromMap = [this](Object &o, auto &self) -> void {
+    objectsMap.erase(o.uuid);
+    for (auto &gc : o.children) self(*gc, self);
+  };
+
+  // Snapshot instance roots before mutating: addObject below inserts into
+  // objectsMap and would invalidate iterators / cause a rehash.
+  std::vector<std::shared_ptr<Object>> instances;
+  for (auto &[_uuid, obj] : objectsMap) {
+    if (obj->uuidPrefab.value == prefabUUID) instances.push_back(obj);
+  }
+
+  for (auto &inst : instances) {
+    auto &kids = inst->children;
+    for (auto it = kids.begin(); it != kids.end(); ) {
+      if ((*it)->fromPrefab) {
+        eraseFromMap(**it, eraseFromMap);
+        it = kids.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    for (const auto &srcChild : prefab->obj.children) {
+      auto childJson = srcChild->serialize();
+      auto child = std::make_shared<Object>(*inst);
+      child->deserialize(nullptr, childJson);
+      markSubtree(*child, markSubtree);
+      addObject(*inst, child, true);
+    }
+  }
 }
 
 void Project::Scene::removeObject(Object &obj) {
@@ -301,6 +373,25 @@ uint32_t Project::Scene::createPrefabFromObject(uint32_t uuid)
   );
 
   ctx.project->getAssets().reload();
+
+  // Convert the source object into an instance of the prefab we just saved,
+  // matching Unity / Unreal "create prefab from selection" behavior. The
+  // root gets the uuidPrefab link (so the inspector shows the prefab badge
+  // and edit-mode toggle), default transform overrides so the user can move
+  // the instance freely, and the existing children are tagged fromPrefab so
+  // they render with the prefab badge in the hierarchy and stay locked.
+  obj->uuidPrefab.value = prefab.uuid.value;
+  obj->addPropOverride(obj->pos);
+  obj->addPropOverride(obj->rot);
+  obj->addPropOverride(obj->scale);
+
+  auto markFromPrefab = [](Object &o, auto &self) -> void {
+    o.fromPrefab = true;
+    for (auto &gc : o.children) self(*gc, self);
+  };
+  for (auto &child : obj->children) {
+    markFromPrefab(*child, markFromPrefab);
+  }
   return 0;
 }
 
@@ -308,6 +399,7 @@ std::string Project::Scene::serialize(bool minify) {
   nlohmann::json doc{};
   doc["conf"] = conf.serialize();
   doc["graph"] = root.serialize();
+  if (!relPath.empty()) doc["relPath"] = relPath;
   return doc.dump(minify ? -1 : 2);
 }
 
@@ -349,6 +441,8 @@ void Project::Scene::deserialize(const std::string &data)
     !data.empty() ? data : "{\"conf\": {}}",
     nullptr, false);
   if (!doc.is_object())return;
+
+  relPath = doc.value("relPath", std::string{});
 
   auto &docConf = doc["conf"];
   {

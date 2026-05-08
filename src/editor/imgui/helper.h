@@ -152,13 +152,26 @@ namespace ImTable
   extern Project::Object *obj;
   inline bool prefabEditOverride{false};
 
-  // Checks if the current object is a prefab instance and not in edit mode, or if the prefab edit override is active.
+  // Locked when the node is the prefab instance root (uuidPrefab set) and
+  // not in edit mode, OR when the node is a fromPrefab descendant whose
+  // ancestor instance root is not in edit mode. User-added "Add Object"
+  // children of an instance keep fromPrefab=false and stay editable; their
+  // own descendants are likewise unlocked (we stop walking on the first
+  // non-fromPrefab ancestor). prefabEditOverride bypasses everything.
   inline bool isPrefabLocked(const Project::Object *target = nullptr)
   {
     const auto *ref = target ? target : obj;
     if (!ref) return false;
     if (prefabEditOverride) return false;
-    return ref->isPrefabInstance() && !ref->isPrefabEdit;
+
+    if (ref->isPrefabInstance()) return !ref->isPrefabEdit;
+    if (!ref->fromPrefab) return false;
+
+    for (const auto *cur = ref->parent; cur; cur = cur->parent) {
+      if (cur->isPrefabInstance()) return !cur->isPrefabEdit;
+      if (!cur->fromPrefab) return false;
+    }
+    return false;
   }
 
   struct PrefabEditScope

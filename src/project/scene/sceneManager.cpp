@@ -33,6 +33,7 @@ void Project::SceneManager::reload()
       auto path = entry.path();
       auto name = path.filename().string();
 
+      std::string relPath{};
       try {
         auto sceneJsonPath = path / "scene.json";
 
@@ -45,6 +46,7 @@ void Project::SceneManager::reload()
           if(!scName.empty()) {
             name = scName;
           }
+          relPath = doc.value("relPath", std::string{});
         }
       } catch(std::exception &e) {
         printf("Failed to load scene json: %s\n", e.what());
@@ -54,7 +56,7 @@ void Project::SceneManager::reload()
 
       try {
         int id = std::stoi(path.filename().string());
-        entries.push_back({id, name});
+        entries.push_back({id, name, relPath});
       } catch(...) {
         // ignore
       }
@@ -138,4 +140,66 @@ void Project::SceneManager::loadScene(int id) {
   Editor::UndoRedo::getHistory().clear();
 
   loadedScene = new Scene(id, project->getPath());
+}
+
+namespace
+{
+  // Treat path B as nested under path A iff B == A or B starts with A + '/'.
+  bool isUnderOrEqual(const std::string &child, const std::string &parent) {
+    if (parent.empty()) return true;
+    if (child == parent) return true;
+    return child.size() > parent.size()
+        && child[parent.size()] == '/'
+        && child.compare(0, parent.size(), parent) == 0;
+  }
+}
+
+void Project::SceneManager::setSceneRelPath(int id, const std::string &newRelPath)
+{
+  if (loadedScene && loadedScene->getId() == id) {
+    loadedScene->relPath = newRelPath;
+    loadedScene->save();
+  } else {
+    auto scenesPath = getScenePath(project);
+    auto sceneJsonPath = fs::path{scenesPath} / std::to_string(id) / "scene.json";
+    if (!fs::exists(sceneJsonPath)) return;
+
+    try {
+      auto doc = Utils::JSON::loadFile(sceneJsonPath);
+      if (!doc.is_object()) return;
+      if (newRelPath.empty()) doc.erase("relPath");
+      else                    doc["relPath"] = newRelPath;
+      Utils::FS::saveTextFile(sceneJsonPath.string(), doc.dump(2));
+    } catch (...) {
+      return;
+    }
+  }
+
+  for (auto &e : entries) {
+    if (e.id == id) {
+      e.relPath = newRelPath;
+      break;
+    }
+  }
+}
+
+void Project::SceneManager::renameSceneFolder(const std::string &oldPrefix, const std::string &newPrefix)
+{
+  if (oldPrefix.empty()) return;
+  for (const auto &entry : entries) {
+    if (!isUnderOrEqual(entry.relPath, oldPrefix)) continue;
+    std::string suffix = entry.relPath.substr(oldPrefix.size()); // "" or "/sub..."
+    std::string updated = newPrefix + suffix;
+    setSceneRelPath(entry.id, updated);
+  }
+}
+
+std::vector<int> Project::SceneManager::findScenesUnder(const std::string &prefix) const
+{
+  std::vector<int> ids;
+  if (prefix.empty()) return ids;
+  for (const auto &e : entries) {
+    if (isUnderOrEqual(e.relPath, prefix)) ids.push_back(e.id);
+  }
+  return ids;
 }

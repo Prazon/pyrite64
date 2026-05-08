@@ -63,6 +63,12 @@ namespace Project
     public:
       SceneConf conf{};
 
+      // Virtual content-browser folder this scene appears in. Empty = the
+      // root of the unified Content view. Persisted as a top-level field in
+      // scene.json so it stays out of SceneConf (the on-device baked image)
+      // and never reaches the runtime.
+      std::string relPath{};
+
       Scene(int id_, const std::string &projectPath);
 
       // SPBF64 fork: in-memory scene with no disk backing (no scene.json).
@@ -91,7 +97,6 @@ namespace Project
       std::shared_ptr<Object> addObject(Object &parent);
       std::shared_ptr<Object> addObject(Object &parent, std::shared_ptr<Object> obj, bool generateIDs = false);
 
-      std::shared_ptr<Object> addPrefabInstance(uint64_t prefabUUID);
 
       void removeObject(Object &obj);
       void removeAllObjects();
@@ -105,7 +110,21 @@ namespace Project
         return nullptr;
       }
 
+      // Spawn a prefab instance under `parent` (or scene root when nullptr).
+      // Used by viewport / scene-graph drag-drop and the prefab right-click
+      // shortcuts; the parented form is what makes drag-drop into a specific
+      // hierarchy node behave like Unity / Godot.
+      std::shared_ptr<Object> addPrefabInstance(uint64_t prefabUUID, Object *parent = nullptr);
+
       uint32_t createPrefabFromObject(uint32_t uuid);
+
+      // Re-materializes the fromPrefab subtree under every instance of the
+      // given prefab uuid. User-added (fromPrefab=false) children of an
+      // instance are preserved; their fromPrefab descendants are dropped and
+      // rebuilt from the prefab's current children. Stale selection on
+      // dropped nodes is harmless (lookups return nullptr). No-op if the
+      // prefab is missing.
+      void refreshPrefabInstances(uint64_t prefabUUID);
 
       std::string serialize(bool minify = false);
 
