@@ -246,11 +246,23 @@ namespace
         || obj.fromPrefab) {
       nameID += ICON_MDI_PACKAGE_VARIANT_CLOSED " ";
     }
-    if (!isPrefabRoot && !obj.components.empty()) {
-      const auto &compEntry = obj.components.front();
-      if (compEntry.id >= 0 && (size_t)compEntry.id < Project::Component::TABLE.size()) {
-        const auto &def = Project::Component::TABLE[compEntry.id];
-        if (def.icon) nameID += def.icon;
+    if (!isPrefabRoot) {
+      bool gotComponentIcon = false;
+      if (!obj.components.empty()) {
+        const auto &compEntry = obj.components.front();
+        if (compEntry.id >= 0 && (size_t)compEntry.id < Project::Component::TABLE.size()) {
+          const auto &def = Project::Component::TABLE[compEntry.id];
+          if (def.icon) {
+            nameID += def.icon;
+            gotComponentIcon = true;
+          }
+        }
+      }
+      // Empty / untyped object — fall back to the same wireframe-cube glyph
+      // the Add Object context-menu uses, so a fresh object reads as a
+      // "generic actor" rather than a bare text label.
+      if (!gotComponentIcon) {
+        nameID += ICON_MDI_CUBE_OUTLINE " ";
       }
     }
     nameID += obj.name + "##" + std::to_string(obj.uuid);
