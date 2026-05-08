@@ -27,6 +27,9 @@ namespace
     builder.set("selectable", obj.selectable);
     builder.set("enabled", obj.enabled);
     if (obj.fromPrefab) builder.set("fromPrefab", true);
+    if (obj.isCanvas2D) builder.set("isCanvas2D", true);
+    if (obj.anchor2D)   builder.set("anchor2D", (int)obj.anchor2D);
+    if (obj.layerIndex2D) builder.set("layerIndex2D", (int)obj.layerIndex2D);
 
     builder
       .set(obj.uuidPrefab)
@@ -126,6 +129,9 @@ void Project::Object::deserialize(Scene *scene, nlohmann::json &doc)
   selectable = doc.value("selectable", true);
   enabled = doc.value("enabled", true);
   fromPrefab = doc.value("fromPrefab", false);
+  isCanvas2D = doc.value("isCanvas2D", false);
+  anchor2D = static_cast<uint8_t>(doc.value("anchor2D", 0));
+  layerIndex2D = static_cast<uint8_t>(doc.value("layerIndex2D", 0));
 
   Utils::JSON::readProp(doc, uuidPrefab);
   Utils::JSON::readProp(doc, pos);

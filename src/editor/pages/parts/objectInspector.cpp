@@ -383,6 +383,69 @@ void Editor::ObjectInspector::draw(Project::Scene &scene, Project::Selection &se
     }
   }
 
+  // 2D / Canvas section: surfaces the screen-space pass routing knobs only
+  // when the object itself is a Canvas root or sits under one. Hidden on
+  // pure 3D objects so the inspector stays uncluttered for the common case.
+  bool inCanvas2D = obj->isCanvas2D;
+  for(auto *p = obj->parent; p && !inCanvas2D; p = p->parent) {
+    if(p->isCanvas2D) inCanvas2D = true;
+  }
+  if (obj->isCanvas2D || inCanvas2D)
+  {
+    if (ImGui::CollapsingHeader("2D / Canvas", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+      if (ImTable::start("Canvas2D", obj.get()))
+      {
+        ImTable::add("Canvas Root");
+        bool isRoot = obj->isCanvas2D;
+        if (ImGui::Checkbox("##canvasRoot", &isRoot)) {
+          obj->isCanvas2D = isRoot;
+          UndoRedo::getHistory().markChanged("Toggle Canvas Root");
+        }
+        ImGui::SetItemTooltip(
+          "Marks this Object as the start of a 2D screen-space subtree.\n"
+          "All descendants render in the 2D pass instead of the 3D pass.");
+
+        ImTable::add("Anchor");
+        // 3x3 anchor grid; selected cell is highlighted. UE/Godot pattern.
+        const char *anchorNames[9] = {
+          "TL","TC","TR",
+          "ML","C ","MR",
+          "BL","BC","BR",
+        };
+        for (int i = 0; i < 9; ++i) {
+          if (i % 3 != 0) ImGui::SameLine(0.0f, 2.0f);
+          ImGui::PushID(i);
+          bool sel = (obj->anchor2D == (uint8_t)i);
+          if (ImGui::Selectable(anchorNames[i], sel,
+                ImGuiSelectableFlags_DontClosePopups, ImVec2(20.0f, 18.0f))) {
+            obj->anchor2D = (uint8_t)i;
+            UndoRedo::getHistory().markChanged("Edit Anchor");
+          }
+          ImGui::PopID();
+        }
+        ImGui::SetItemTooltip(
+          "Anchor inside the framebuffer. Object's pos is added to the\n"
+          "anchor origin at build time.");
+
+        ImTable::add("Layer Idx (2D)");
+        int layer = (int)obj->layerIndex2D;
+        if (ImGui::DragInt("##layer2D", &layer, 0.1f, 0, 15)) {
+          if (layer < 0) layer = 0;
+          if (layer > 255) layer = 255;
+          obj->layerIndex2D = (uint8_t)layer;
+          UndoRedo::getHistory().markChanged("Edit 2D Layer Index");
+        }
+        ImGui::SetItemTooltip(
+          "Which 2D rspq queue this Object's components render into.\n"
+          "Higher numbers draw on top of lower ones. The scene config's\n"
+          "layerCount2D bounds this — values past it are ignored.");
+
+        ImTable::end();
+      }
+    }
+  }
+
   // Prefab class variables: when this object is an instance of a prefab that
   // defines class-level variables, render an editable row per variable. Edits
   // write into obj->varOverrides keyed by the variable def's stable uuid.

@@ -103,6 +103,11 @@ namespace Project
 
       bool moveObject(uint32_t uuidObject, uint32_t uuidTarget, bool asChild);
 
+      // Promote `uuidNewRoot` to be the prefab's root (root.children[0]).
+      // The previous root becomes a child of the new root, preserving its
+      // remaining subtree. Used by PrefabEditor's "Make Root" action.
+      bool promoteToPrefabRoot(uint32_t uuidNewRoot);
+
       std::shared_ptr<Object> getObjectByUUID(uint32_t uuid) {
         if (objectsMap.contains(uuid)) {
           return objectsMap[uuid];

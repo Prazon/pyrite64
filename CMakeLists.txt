@@ -161,6 +161,8 @@ add_executable(pyrite64 src/main.cpp
         src/utils/filePicker.cpp
         src/editor/pages/parts/viewport3D.h
         src/editor/pages/parts/viewport3D.cpp
+        src/editor/pages/parts/viewport2D.h
+        src/editor/pages/parts/viewport2D.cpp
         src/renderer/scene.h
         src/renderer/scene.cpp
         src/renderer/framebuffer.h
@@ -274,6 +276,9 @@ add_executable(pyrite64 src/main.cpp
         src/project/component/types/compNodeGraph.cpp
         src/project/component/types/compAnimModel.cpp
         src/project/component/types/compSpriteBillboard.cpp
+        src/project/component/types/compSprite2D.cpp
+        src/project/component/types/compLabel2D.cpp
+        src/project/component/types/compProgressBar2D.cpp
         src/project/component/types/compPrimitive.cpp
         src/editor/pages/parts/createProjectOverlay.cpp
         src/editor/globalActions.cpp

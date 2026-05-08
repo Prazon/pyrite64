@@ -306,6 +306,9 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
     {
       //debugf(" - %d\n", obj->id);
       if(!obj->isEnabled())continue;
+      // Skip 2D-flagged objects in the 3D pass — they're drawn in the
+      // screen-space 2D block below.
+      if(obj->flags & ObjectFlags::RENDER_LAYER_2D) continue;
       auto compRefs = obj->getCompRefs();
 
       for (uint32_t i=0; i<obj->compCount; ++i)
@@ -338,6 +341,28 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
 
   auto t = get_user_ticks();
   DrawLayer::use2D();
+    // Walk every 2D-flagged object's components in screen-space pass. Runs
+    // before the user's onSceneDraw2D() hook so user-script primitives can
+    // composite on top of authored Canvas content. Each object's
+    // layerIdx2D switches to its dedicated 2D layer queue so distinct UI
+    // strata stack predictably; we restore use2D(0) afterwards so the
+    // global script hook lands on the default layer.
+    for(auto obj : objects)
+    {
+      if(!obj->isEnabled()) continue;
+      if(!(obj->flags & ObjectFlags::RENDER_LAYER_2D)) continue;
+      if(obj->layerIdx2D) DrawLayer::use2D(obj->layerIdx2D);
+      auto compRefs = obj->getCompRefs();
+      for(uint32_t i=0; i<obj->compCount; ++i)
+      {
+        const auto &compDef = COMP_TABLE[compRefs[i].type];
+        if(compDef.draw) {
+          char* dataPtr = (char*)obj + compRefs[i].offset;
+          compDef.draw(*obj, dataPtr, deltaTime);
+        }
+      }
+      if(obj->layerIdx2D) DrawLayer::use2D(0);
+    }
     GlobalScript::callHooks(GlobalScript::HookType::SCENE_DRAW_2D);
   DrawLayer::useDefault();
   ticksGlobalDraw += get_user_ticks() - t;

@@ -50,6 +50,12 @@ namespace P64
       // event firings to the right per-prefab generated dispatch function.
       uint32_t prefabUUID{0};
 
+      // 2D draw-layer index for screen-space components. Only meaningful when
+      // RENDER_LAYER_2D is set; the scene draw loop wraps each 2D object in
+      // DrawLayer::use2D(layerIdx2D) so distinct queues stack predictably
+      // (e.g. HUD on layer 0, pause overlay on layer 1).
+      uint8_t layerIdx2D{0};
+
       // extra data, is overlapping with component data if unused
       fm_quat_t rot{};
       fm_vec3_t pos{};

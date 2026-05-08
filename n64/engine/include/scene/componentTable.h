@@ -34,6 +34,6 @@ namespace P64
     FuncGetAllocSize getAllocSize{};
   };
 
-  constexpr uint32_t COMP_TABLE_SIZE = 16;
+  constexpr uint32_t COMP_TABLE_SIZE = 32;
   extern const ComponentDef COMP_TABLE[COMP_TABLE_SIZE];
 }

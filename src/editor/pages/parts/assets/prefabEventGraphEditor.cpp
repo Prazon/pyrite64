@@ -135,9 +135,11 @@ Editor::PrefabEventGraphEditor::PrefabEventGraphEditor(uint64_t prefabAssetUUID)
 
 std::string Editor::PrefabEventGraphEditor::getName() const
 {
-  if (!ctx.project) return {};
-  auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
-  return asset ? (asset->name + " — EventGraph") : std::string{"EventGraph"};
+  // Tab title is just "EventGraph" — when this editor is docked into the
+  // parent PrefabEditor's tabset, the prefab name is implicit from context.
+  // The hidden ID suffix in winName (###...UUID) gives ImGui per-prefab
+  // uniqueness without bloating what the user sees.
+  return "EventGraph";
 }
 
 bool Editor::PrefabEventGraphEditor::isDirty() const

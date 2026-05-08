@@ -3,6 +3,7 @@
 * @license MIT
 */
 #pragma once
+#include <cstdint>
 
 namespace Project
 {

@@ -22,5 +22,13 @@ namespace P64::ObjectFlags
   // bit on its own (it is purely a serialization marker).
   constexpr uint16_t HAS_PREFAB_VARS    = 1 << 6;
 
+  // Object renders in the screen-space 2D pass (DrawLayer::use2D) instead of
+  // the world-space 3D pass. Set on every Object whose ancestor chain includes
+  // a Canvas-marked Object — sceneBuilder propagates the flag down at write
+  // time so the runtime draw loop just consults this bit per object.
+  // Components on a 2D-flagged Object should treat obj.pos.x/y as pixel
+  // coordinates (320×240 N64 framebuffer) and obj.pos.z as draw-order depth.
+  constexpr uint16_t RENDER_LAYER_2D    = 1 << 7;
+
   constexpr uint16_t ACTIVE = SELF_ACTIVE | PARENTS_ACTIVE;
 }

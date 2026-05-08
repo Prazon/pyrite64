@@ -1,6 +1,7 @@
 // added by SPBF64 fork
 #include "prefabEditor.h"
 
+#include <algorithm>
 #include <cstdio>
 
 #include "imgui_internal.h"
@@ -43,8 +44,11 @@ Editor::PrefabEditor::PrefabEditor(uint64_t uuid) : assetUUID(uuid)
 {
   // Prefab editor leans on the UE5 Components panel convention: each Object
   // shows its attached components as leaf children, so the user can scan
-  // what's on every node without having to click through them.
+  // what's on every node without having to click through them. prefabRootMode
+  // skips the synthetic Scene wrapper so the prefab root reads as the
+  // topmost item — and it gets the prefab icon as its badge.
   graph.showComponentsInline = true;
+  graph.prefabRootMode       = true;
   loadFromDisk();
 }
 
@@ -259,7 +263,24 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   // so they can't be closed individually — they're permanent dock targets
   // for this editor instance.
   ImGui::Begin(winComp.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    graph.selectedComponentUUID = detailsCompUUID;
     graph.draw(scene, selection);
+
+    // Consume the SceneGraph's per-frame outputs.
+    if (graph.pendingPromoteToRoot != 0) {
+      Editor::UndoRedo::getHistory().markChanged("Make Root");
+      scene.promoteToPrefabRoot(graph.pendingPromoteToRoot);
+      graph.pendingPromoteToRoot = 0;
+    }
+    if (graph.pendingComponentUUID != 0) {
+      detailsCompObjUUID = graph.pendingComponentObjUUID;
+      detailsCompUUID    = graph.pendingComponentUUID;
+      detailsKind        = DetailsKind::COMPONENT;
+      detailsVarIdx      = -1;
+      detailsFuncName.clear();
+      graph.pendingComponentUUID    = 0;
+      graph.pendingComponentObjUUID = 0;
+    }
   ImGui::End();
 
   ImGui::Begin(winMyP.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
@@ -294,28 +315,37 @@ void Editor::PrefabEditor::clearMyPrefabSelection()
   detailsKind = DetailsKind::OBJECT;
   detailsVarIdx = -1;
   detailsFuncName.clear();
+  detailsCompUUID = 0;
+  detailsCompObjUUID = 0;
   renameBuffer.clear();
 }
 
 void Editor::PrefabEditor::drawDetailsPanel()
 {
   // UE-style mutual-exclusion: clicking an Object node in the Components
-  // tree clobbers the my-prefab selection so Details snaps back to the
-  // object inspector. Detect by watching selection.primary() for changes
-  // — if it just became non-zero this frame, the user just clicked.
+  // tree clobbers the my-prefab selection (variables / functions) so
+  // Details snaps back to the object inspector. Detect by watching
+  // selection.primary() for changes — if it just became non-zero this
+  // frame, the user just clicked. Component-leaf clicks set both the
+  // primary selection AND COMPONENT mode in the same frame, so we
+  // preserve COMPONENT mode in that case.
   uint32_t curSel = selection.primary();
-  if (curSel != 0 && curSel != lastSelectionPrimary) {
+  if (curSel != 0 && curSel != lastSelectionPrimary
+      && detailsKind != DetailsKind::COMPONENT) {
     detailsKind = DetailsKind::OBJECT;
     detailsVarIdx = -1;
     detailsFuncName.clear();
+    detailsCompUUID = 0;
+    detailsCompObjUUID = 0;
   }
   lastSelectionPrimary = curSel;
 
   switch (detailsKind) {
-    case DetailsKind::VARIABLE: drawVariableDetails(); break;
-    case DetailsKind::FUNCTION: drawFunctionDetails(); break;
+    case DetailsKind::VARIABLE:  drawVariableDetails();  break;
+    case DetailsKind::FUNCTION:  drawFunctionDetails();  break;
+    case DetailsKind::COMPONENT: drawComponentDetails(); break;
     case DetailsKind::OBJECT:
-    default:                    inspector.draw(scene, selection); break;
+    default:                     inspector.draw(scene, selection); break;
   }
 }
 
@@ -525,6 +555,15 @@ void Editor::PrefabEditor::drawFunctionsPanel()
         std::string cppPath = ctx.project->getPath() + "/src/user/"
                             + prefabName + ".cpp";
         ctx.editorScene->openCodeEditorByPath(cppPath, viewportDockNodeID);
+        // Track ownership so EditorScene can close this tab when the
+        // prefab editor itself is dismissed. Same hash openCodeEditorByPath
+        // uses to key its codeEditors map.
+        uint64_t synth = Utils::Hash::sha256_64bit(cppPath);
+        if (std::find(ownedCodeEditorUUIDs.begin(),
+                      ownedCodeEditorUUIDs.end(), synth)
+              == ownedCodeEditorUUIDs.end()) {
+          ownedCodeEditorUUIDs.push_back(synth);
+        }
       }
     }
     ImGui::PopID();
@@ -712,6 +751,52 @@ void Editor::PrefabEditor::drawFunctionDetails()
       clearMyPrefabSelection();
     }
   }
+}
+
+void Editor::PrefabEditor::drawComponentDetails()
+{
+  // Render only the single component the user clicked on in the hierarchy.
+  // Defers to the existing Component::TABLE funcDraw so per-type editors
+  // stay identical to what the full ObjectInspector shows; we just isolate
+  // the chosen entry. Selection mutual-exclusion: clicking an empty area
+  // (which clears the primary selection) drops back to OBJECT in
+  // drawDetailsPanel.
+  auto obj = scene.getObjectByUUID(detailsCompObjUUID);
+  if (!obj || detailsCompUUID == 0) {
+    clearMyPrefabSelection();
+    inspector.draw(scene, selection);
+    return;
+  }
+
+  Project::Component::Entry* entry = nullptr;
+  auto findIn = [&](std::vector<Project::Component::Entry> &list) {
+    for (auto &e : list) {
+      if (e.uuid == detailsCompUUID) { entry = &e; return; }
+    }
+  };
+  findIn(obj->components);
+  // Prefab-instance fall-through: also search the source prefab object's
+  // components, since those are what the hierarchy shows for instances.
+  if (!entry && obj->isPrefabInstance() && ctx.project) {
+    auto prefab = ctx.project->getAssets().getPrefabByUUID(obj->uuidPrefab.value);
+    if (prefab) findIn(prefab->obj.components);
+  }
+
+  if (!entry || entry->id < 0
+      || (size_t)entry->id >= Project::Component::TABLE.size()) {
+    clearMyPrefabSelection();
+    inspector.draw(scene, selection);
+    return;
+  }
+
+  const auto &def = Project::Component::TABLE[entry->id];
+  ImGui::TextDisabled("%s  Component", def.icon ? def.icon : "");
+  ImGui::SameLine();
+  ImGui::TextUnformatted(entry->name.empty()
+    ? std::string{def.name}.c_str()
+    : entry->name.c_str());
+  ImGui::Separator();
+  def.funcDraw(*obj, *entry);
 }
 
 void Editor::PrefabEditor::focus() const

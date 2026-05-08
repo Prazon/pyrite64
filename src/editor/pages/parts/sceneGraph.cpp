@@ -366,6 +366,21 @@ namespace
           Editor::UndoRedo::getHistory().markChanged("Add Object");
         }
 
+        // Add Canvas (2D): a normal Object marked as the start of a 2D
+        // subtree. Flag inheritance lives on the build side, so the only
+        // thing different about a Canvas at edit time is the isCanvas2D
+        // bit. Newly added Canvases get a name that signals their role.
+        if (ImGui::MenuItem(ICON_MDI_VECTOR_RECTANGLE " Add Canvas (2D)")) {
+          auto added = scene.addObject(obj);
+          if (added) {
+            added->name = "Canvas";
+            added->isCanvas2D = true;
+            selection.set(added->uuid);
+            startRenaming(scene, added->uuid);
+          }
+          Editor::UndoRedo::getHistory().markChanged("Add Canvas");
+        }
+
         // "Make Root" (prefab editor only): promote this object to be the
         // prefab's root. Defers the actual reparenting to the host so the
         // mutation happens after the in-tree iteration finishes.

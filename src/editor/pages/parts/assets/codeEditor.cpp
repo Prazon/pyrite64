@@ -102,10 +102,12 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
     displayName = asset->name;
   }
 
-  // Title shows the file name + asterisk for unsaved changes. Window ID is
-  // tied to the UUID so multiple files can be open simultaneously without
-  // ImGui ID collisions.
-  std::string baseTitle = "Code: " + displayName + (isDirty() ? " *" : "");
+  // Title shows just the file name + asterisk for unsaved changes — when
+  // the code editor is docked as a tab alongside the prefab editor's
+  // viewport, the parent editor already provides the prefab context, so a
+  // "Code: Player.cpp" prefix would just bloat the tab. Window ID is tied
+  // to the UUID so multiple files stay distinct in ImGui's id stack.
+  std::string baseTitle = displayName + (isDirty() ? " *" : "");
   // ID suffix bumped (was ###CodeEditor_) so stale imgui.ini entries from
   // the old auto-dock-into-3D-Viewport behavior don't override our new
   // spawn-as-its-own-OS-window default.
@@ -120,11 +122,16 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
 
   // Caller-supplied first-frame dock override wins over the loop-passed
   // default. PrefabEditor uses this to drop function source tabs next to
-  // its viewport rather than the outer Scene-Editor strip.
-  ImGuiID openDockId = (firstDockTarget && !firstDockApplied)
-                        ? firstDockTarget : defDockId;
-  if (openDockId) ImGui::SetNextWindowDockID(openDockId, ImGuiCond_FirstUseEver);
-  if (firstDockTarget && !firstDockApplied) firstDockApplied = true;
+  // its viewport. Use Always when the override is in play so a stale
+  // imgui.ini entry from when this file was previously opened standalone
+  // doesn't keep it floating; FirstUseEver is fine for the loop-passed
+  // default since that path doesn't have to fight prior layout state.
+  if (firstDockTarget && !firstDockApplied) {
+    ImGui::SetNextWindowDockID(firstDockTarget, ImGuiCond_Always);
+    firstDockApplied = true;
+  } else if (defDockId) {
+    ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  }
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);

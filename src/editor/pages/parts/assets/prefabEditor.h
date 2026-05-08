@@ -78,6 +78,13 @@ namespace Editor
       // as siblings of the viewport instead of on the outer Scene-Editor strip.
       ImGuiID viewportDockNodeID{0};
 
+      // Synthetic CodeEditor UUIDs we've spawned for this prefab's
+      // function bodies. Used at close time so the parent EditorScene can
+      // tear down those tabs when the prefab editor itself is dismissed —
+      // otherwise undocked function tabs linger as ghost windows referring
+      // to a no-longer-open prefab.
+      std::vector<uint64_t> ownedCodeEditorUUIDs{};
+
       // Cached list of P64_NODE-tagged user functions for this prefab.
       // Refreshed each frame the Functions section is visible — file scans
       // are cheap and the cost-of-stale is otherwise immediate confusion.
@@ -90,10 +97,15 @@ namespace Editor
       // back. Index is into `variables` for VARIABLE; for FUNCTION we store
       // the function name (the scan list is rebuilt each frame, so name is
       // the stable identifier we can reselect against).
-      enum class DetailsKind : int { OBJECT = 0, VARIABLE = 1, FUNCTION = 2 };
+      enum class DetailsKind : int { OBJECT = 0, VARIABLE = 1, FUNCTION = 2, COMPONENT = 3 };
       DetailsKind detailsKind{DetailsKind::OBJECT};
       int          detailsVarIdx{-1};
       std::string  detailsFuncName{};
+      // Selected component within the focused object; non-zero means show
+      // ONLY that component in the details panel (UE-Blueprint behavior:
+      // clicking a component leaf in the hierarchy filters details).
+      uint64_t     detailsCompUUID{0};
+      uint32_t     detailsCompObjUUID{0};
       // Rename buffer used by the function-details rename input — separate
       // so the user can stage a name before committing the file rewrite.
       std::string  renameBuffer{};
@@ -112,6 +124,7 @@ namespace Editor
       void drawDetailsPanel();
       void drawVariableDetails();
       void drawFunctionDetails();
+      void drawComponentDetails();
       // Clear the variable/function selection so the details panel falls
       // back to the object inspector. Called when the user picks an Object
       // node (since they're navigating the hierarchy now).
@@ -128,5 +141,8 @@ namespace Editor
       [[nodiscard]] uint64_t getAssetUUID() const { return assetUUID; }
       [[nodiscard]] bool isDirty() const;
       [[nodiscard]] std::string getName() const;
+      [[nodiscard]] const std::vector<uint64_t>& getOwnedCodeEditorUUIDs() const {
+        return ownedCodeEditorUUIDs;
+      }
   };
 }

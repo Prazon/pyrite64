@@ -20,6 +20,7 @@
 namespace Editor
 {
   class Viewport3D;
+  class Viewport2D;
 }
 
 struct ImDrawList;
@@ -60,6 +61,22 @@ namespace Project::Component
     const glm::vec4 &viewportRect /* {x, y, w, h} in window coords */
   );
 
+  // Called from Viewport2D to paint a screen-space preview of this
+  // component's runtime appearance. originScreen is where (obj.pos.x,
+  // obj.pos.y) lands in window coords after the 2D viewport's pan/zoom
+  // and the Object's anchor offset have been applied. Components write
+  // their bounding rect into outMin/outMax (in window coords) so the
+  // viewport can do hover-picking and selection outlines uniformly.
+  // Optional — components without a 2D preview leave this null and
+  // are simply skipped during the 2D walk.
+  typedef void(*FuncCompDraw2D)(
+    Object&, Entry &entry,
+    ImDrawList *drawList,
+    ImVec2 originScreen,
+    float zoom,
+    ImVec2 *outMin, ImVec2 *outMax
+  );
+
   struct CompInfo
   {
     int id{};
@@ -77,6 +94,7 @@ namespace Project::Component
     FuncCompBuild funcBuild{};
     FuncCompGetAABB funcGetAABB{};
     FuncCompDrawOverlay funcDrawOverlay{};
+    FuncCompDraw2D      funcDraw2D{};
   };
 
   #define MAKE_COMP(name) \
@@ -94,6 +112,8 @@ namespace Project::Component
       void drawOverlay(Object&, Entry &entry, Editor::Viewport3D &vp, \
         ImDrawList *drawList, const glm::mat4 &cameraMat, const glm::mat4 &projMat, \
         const glm::vec4 &viewportRect); \
+      void draw2D(Object&, Entry &entry, ImDrawList *drawList, \
+        ImVec2 originScreen, float zoom, ImVec2 *outMin, ImVec2 *outMax); \
     }
 
   MAKE_COMP(Code)
@@ -128,6 +148,9 @@ namespace Project::Component
   MAKE_COMP(AnimModel)
   MAKE_COMP(SpriteBillboard)
   MAKE_COMP(Primitive)
+  MAKE_COMP(Sprite2D)
+  MAKE_COMP(Label2D)
+  MAKE_COMP(ProgressBar2D)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -304,6 +327,42 @@ namespace Project::Component
       .funcDeserialize = Primitive::deserialize,
       .funcBuild = Primitive::build,
       .funcGetAABB = nullptr,
+    },
+    CompInfo{
+      .id = 14,
+      .icon = ICON_MDI_IMAGE_OUTLINE " ",
+      .name = "Sprite (2D)",
+      .funcInit = Sprite2D::init,
+      .funcDraw = Sprite2D::draw,
+      .funcSerialize = Sprite2D::serialize,
+      .funcDeserialize = Sprite2D::deserialize,
+      .funcBuild = Sprite2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Sprite2D::draw2D,
+    },
+    CompInfo{
+      .id = 15,
+      .icon = ICON_MDI_FORMAT_TEXT " ",
+      .name = "Label (2D)",
+      .funcInit = Label2D::init,
+      .funcDraw = Label2D::draw,
+      .funcSerialize = Label2D::serialize,
+      .funcDeserialize = Label2D::deserialize,
+      .funcBuild = Label2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Label2D::draw2D,
+    },
+    CompInfo{
+      .id = 16,
+      .icon = ICON_MDI_PROGRESS_HELPER " ",
+      .name = "Progress Bar (2D)",
+      .funcInit = ProgressBar2D::init,
+      .funcDraw = ProgressBar2D::draw,
+      .funcSerialize = ProgressBar2D::serialize,
+      .funcDeserialize = ProgressBar2D::deserialize,
+      .funcBuild = ProgressBar2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = ProgressBar2D::draw2D,
     },
   };
 

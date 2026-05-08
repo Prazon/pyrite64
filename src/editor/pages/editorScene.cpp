@@ -260,17 +260,19 @@ void Editor::Scene::draw()
       sceneDockRightID = ImGui::DockBuilderSplitNode(sceneDockID, ImGuiDir_Right, 0.28f, nullptr, &sceneDockID);
       sceneDockCenterID = sceneDockID;
 
-      // Lock the 3D-Viewport's node so the user can't drop other windows onto
-      // it or split it — keeps the central viewport exclusive, like Unreal's
-      // Level Viewport. Other panels still dock into the left/right groups.
+      // Lock the central viewport node so the user can't drop other windows
+      // onto it or split it — keeps the viewport pair exclusive, like
+      // Unreal's Level Viewport. Other panels still dock into the
+      // left/right groups. Tab bar stays enabled so 2D-Viewport can sit
+      // alongside 3D-Viewport as a Godot-style switcher.
       if (auto *centerNode = ImGui::DockBuilderGetNode(sceneDockCenterID)) {
         centerNode->LocalFlags |=
           ImGuiDockNodeFlags_NoDockingOverMe |
-          ImGuiDockNodeFlags_NoDockingSplit |
-          ImGuiDockNodeFlags_NoTabBar;
+          ImGuiDockNodeFlags_NoDockingSplit;
       }
 
       ImGui::DockBuilderDockWindow("3D-Viewport", sceneDockCenterID);
+      ImGui::DockBuilderDockWindow("2D-Viewport", sceneDockCenterID);
       ImGui::DockBuilderDockWindow("Scene",       sceneDockLeftID);
       ImGui::DockBuilderDockWindow("Graph",       sceneDockLeftID);
       ImGui::DockBuilderDockWindow("Layers",      sceneDockLeftID);
@@ -286,14 +288,22 @@ void Editor::Scene::draw()
   ImGui::Begin("3D-Viewport");
     // Re-apply the central-viewport lock every frame so it survives returning
     // users whose imgui.ini already has the layout cached (LocalFlags isn't
-    // fully restored from .ini).
+    // fully restored from .ini). The tab bar must remain enabled here so
+    // 2D-Viewport can dock as a sibling tab.
     if (auto *node = ImGui::GetWindowDockNode()) {
       node->LocalFlags |=
         ImGuiDockNodeFlags_NoDockingOverMe |
-        ImGuiDockNodeFlags_NoDockingSplit |
-        ImGuiDockNodeFlags_NoTabBar;
+        ImGuiDockNodeFlags_NoDockingSplit;
+      // Clear NoTabBar in case a stale imgui.ini from before the 2D
+      // viewport was added still locks it off. Otherwise the user can
+      // never see the 2D-Viewport tab.
+      node->LocalFlags &= ~ImGuiDockNodeFlags_NoTabBar;
     }
     viewport3d.draw();
+  ImGui::End();
+
+  ImGui::Begin("2D-Viewport");
+    viewport2d.draw();
   ImGui::End();
   ImGui::PopStyleVar(1);
 
@@ -410,9 +420,21 @@ void Editor::Scene::draw()
       }
     }
   }
+  // Helper: when a prefab editor is dismissed, also close the auxiliary
+  // tabs it spawned (its EventGraph window + every CodeEditor opened from
+  // its function rows). Without this, undocked function-source tabs hang
+  // around as ghost windows referring to a no-longer-open prefab.
+  auto closePrefabAux = [&](PrefabEditor &editor) {
+    prefabEventGraphEditors.erase(editor.getAssetUUID());
+    for (uint64_t synth : editor.getOwnedCodeEditorUUIDs()) {
+      codeEditors.erase(synth);
+    }
+  };
+
   for(auto &uuid : delPrefabUUIDs) {
     auto it = prefabEditors.find(uuid);
     if (it != prefabEditors.end()) {
+      closePrefabAux(*it->second);
       pendingPrefabEditorErase.push_back(std::move(it->second));
       prefabEditors.erase(it);
     }
@@ -436,6 +458,7 @@ void Editor::Scene::draw()
         editor->save();
         // Defer-erase: keep the editor (and its Viewport3D's GPU texture)
         // alive until next frame.
+        closePrefabAux(*it->second);
         pendingPrefabEditorErase.push_back(std::move(it->second));
         prefabEditors.erase(it);
         pendingPrefabEditorCloseUUID = 0;
@@ -443,6 +466,7 @@ void Editor::Scene::draw()
       }
       ImGui::SameLine();
       if (ImGui::Button("Discard", {100_px, 0})) {
+        closePrefabAux(*it->second);
         pendingPrefabEditorErase.push_back(std::move(it->second));
         prefabEditors.erase(it);
         pendingPrefabEditorCloseUUID = 0;

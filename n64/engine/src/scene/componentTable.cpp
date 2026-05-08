@@ -20,6 +20,9 @@
 #include "scene/components/animModel.h"
 #include "scene/components/spriteBillboard.h"
 #include "scene/components/primitive.h"
+#include "scene/components/sprite2D.h"
+#include "scene/components/label2D.h"
+#include "scene/components/progressBar2D.h"
 
 // some template magic to auto-detect if a function exists in a component
 #define HAS_FUNC_TPL(NAME_HAS, NAME_GET, FUNC) \
@@ -71,5 +74,8 @@ namespace P64
     SET_COMP(RigidBody),
     SET_COMP(SpriteBillboard),
     SET_COMP(Primitive),
+    SET_COMP(Sprite2D),
+    SET_COMP(Label2D),
+    SET_COMP(ProgressBar2D),
   };
 }

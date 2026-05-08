@@ -14,6 +14,7 @@
 #include "parts/projectSettings.h"
 #include "parts/sceneGraph.h"
 #include "parts/sceneInspector.h"
+#include "parts/viewport2D.h"
 #include "parts/viewport3D.h"
 
 namespace Editor
@@ -28,6 +29,7 @@ namespace Editor
   {
     private:
       Viewport3D viewport3d{};
+      Viewport2D viewport2d{};
 
       // Editors
       std::vector<std::shared_ptr<NodeEditor>> nodeEditors{};

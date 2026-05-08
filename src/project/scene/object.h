@@ -41,6 +41,26 @@ namespace Project
       bool selectable{true};
       bool isPrefabEdit{false};
 
+      // Marker for the start of a screen-space 2D subtree (Godot Canvas
+      // convention). When true on an Object, the build pipeline tags this
+      // Object and every descendant with ObjectFlags::RENDER_LAYER_2D so the
+      // runtime draws their components in DrawLayer::use2D() instead of the
+      // 3D pass. pos.x/pos.y are pixel coordinates (320×240 framebuffer);
+      // pos.z is draw-order depth within the 2D layer.
+      bool isCanvas2D{false};
+
+      // Anchor for 2D nodes. Maps to a 9-cell origin within the framebuffer
+      // applied at runtime as an offset to obj.pos. 0 = top-left, 1 = top-
+      // center, 2 = top-right, 3 = mid-left, 4 = center, 5 = mid-right,
+      // 6 = bottom-left, 7 = bottom-center, 8 = bottom-right.
+      uint8_t anchor2D{0};
+
+      // Per-Object draw layer for 2D rendering. Maps to DrawLayer::use2D(idx).
+      // 0 keeps the default 2D layer; >0 routes the component's RDP commands
+      // into a separate queue (e.g. a pause-overlay layer above the HUD).
+      // The scene config's layerCount2D bounds the maximum.
+      uint8_t layerIndex2D{0};
+
       // True for nodes that were materialized as part of a prefab subtree on
       // instantiation (Scene::addPrefabInstance). User-added "Add Object"
       // children of a prefab instance keep this false so they remain editable

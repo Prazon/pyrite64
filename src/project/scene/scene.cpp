@@ -346,6 +346,49 @@ bool Project::Scene::moveObject(uint32_t uuidObject, uint32_t uuidTarget, bool a
   return true;
 }
 
+bool Project::Scene::promoteToPrefabRoot(uint32_t uuidNewRoot)
+{
+  // Prefab editor invariant: the synthetic Scene wrapper has exactly one
+  // child — the prefab root. Promote uuidNewRoot to that slot, while the
+  // previous root becomes a child of it (preserving the rest of its
+  // subtree).
+  if (root.children.empty()) return false;
+  auto oldRoot = root.children.front();
+  if (!oldRoot || oldRoot->uuid == uuidNewRoot) return false;
+
+  auto newRoot = getObjectByUUID(uuidNewRoot);
+  if (!newRoot || !newRoot->parent) return false;
+  // Walk up to confirm newRoot is actually somewhere inside oldRoot.
+  Object* walker = newRoot.get();
+  bool insideOldRoot = false;
+  while (walker) {
+    if (walker->uuid == oldRoot->uuid) { insideOldRoot = true; break; }
+    walker = walker->parent;
+  }
+  if (!insideOldRoot) return false;
+
+  // Detach newRoot from its current parent's children list.
+  auto oldParent = newRoot->parent;
+  std::erase_if(
+    oldParent->children,
+    [&](const std::shared_ptr<Object> &ref) { return ref->uuid == newRoot->uuid; }
+  );
+
+  // Detach oldRoot from the wrapper, swap in newRoot.
+  std::erase_if(
+    root.children,
+    [&](const std::shared_ptr<Object> &ref) { return ref->uuid == oldRoot->uuid; }
+  );
+  newRoot->parent = &root;
+  root.children.insert(root.children.begin(), newRoot);
+
+  // Reattach the old root as a child of the new root, preserving its
+  // remaining subtree (which now no longer contains newRoot's branch).
+  oldRoot->parent = newRoot.get();
+  newRoot->children.push_back(oldRoot);
+  return true;
+}
+
 void Project::Scene::save()
 {
   Utils::FS::saveTextFile(scenePath + "/scene.json", serialize());

@@ -45,16 +45,42 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
   // when an event fires on this object.
   const bool hasPrefabData = !savePrefabItself && prefab;
 
+  // 2D pass routing: a Canvas-marked Object and every descendant render in
+  // the screen-space pass. Since writeObject recurses into obj.children, we
+  // walk back up the parent chain at write time to detect "any ancestor is
+  // a Canvas" — this stays correct regardless of save order.
+  bool inCanvas2D = obj.isCanvas2D;
+  for(auto *p = obj.parent; p && !inCanvas2D; p = p->parent) {
+    if(p->isCanvas2D) inCanvas2D = true;
+  }
+
   uint16_t objFlags = 0;
   if(obj.enabled)objFlags |= P64::ObjectFlags::ACTIVE;
   if(!obj.children.empty())objFlags |= P64::ObjectFlags::HAS_CHILDREN;
   if(hasPrefabData)objFlags |= P64::ObjectFlags::HAS_PREFAB_VARS;
+  if(inCanvas2D)objFlags |= P64::ObjectFlags::RENDER_LAYER_2D;
+
+  // Anchor-resolved pos: 2D nodes anchor to one of nine framebuffer corners.
+  // We bake the anchor offset into pos at build time so the runtime draws at
+  // (pos.x + anchorOffsetX, pos.y + anchorOffsetY) without consulting any
+  // scene config. Framebuffer dimensions come from the scene conf; default
+  // fallback is the libdragon 320×240 if the conf hasn't loaded yet.
+  glm::vec3 finalPos = srcObj->pos.resolve(obj.propOverrides);
+  if(inCanvas2D && obj.anchor2D != 0) {
+    int fbW = ctx.scene ? ctx.scene->conf.fbWidth  : 320;
+    int fbH = ctx.scene ? ctx.scene->conf.fbHeight : 240;
+    int col = obj.anchor2D % 3;       // 0=L, 1=C, 2=R
+    int row = obj.anchor2D / 3;       // 0=T, 1=M, 2=B
+    finalPos.x += (col == 1 ? fbW * 0.5f : (col == 2 ? (float)fbW : 0.0f));
+    finalPos.y += (row == 1 ? fbH * 0.5f : (row == 2 ? (float)fbH : 0.0f));
+  }
 
   ctx.fileObj.write<uint16_t>(objFlags); // @TODO type
   ctx.fileObj.write<uint16_t>(obj.id);
   ctx.fileObj.write<uint16_t>(obj.parent ? obj.parent->id : 0);
-  ctx.fileObj.write<uint16_t>(0); // padding
-  ctx.fileObj.write(srcObj->pos.resolve(obj.propOverrides));
+  ctx.fileObj.write<uint8_t>(obj.layerIndex2D);
+  ctx.fileObj.write<uint8_t>(0); // padding
+  ctx.fileObj.write(finalPos);
   ctx.fileObj.write(srcObj->scale.resolve(obj.propOverrides));
 
   auto &rot = srcObj->rot.resolve(obj.propOverrides);

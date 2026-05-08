@@ -16,7 +16,8 @@ namespace {
     uint16_t flags;
     uint16_t id;
     uint16_t group;
-    uint16_t _padding;
+    uint8_t  layerIdx2D; // only used when RENDER_LAYER_2D is set
+    uint8_t  _padding;
     fm_vec3_t pos;
     fm_vec3_t scale;
     uint32_t packedRot;
@@ -136,6 +137,7 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
   obj->id = objEntry->id;
   obj->group = objEntry->group;
   obj->flags = objEntry->flags;
+  obj->layerIdx2D = objEntry->layerIdx2D;
   obj->compCount = compCount;
   obj->varCount = varCount;
   obj->prefabUUID = prefabUUIDFromFile;
