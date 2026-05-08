@@ -1,5 +1,6 @@
 #include "prefabFunctions.h"
 
+#include <cstring>
 #include <filesystem>
 #include <regex>
 
@@ -125,6 +126,147 @@ namespace
     out.append(content, insertAt, std::string::npos);
     return out;
   }
+}
+
+// Replace every occurrence of `<token>(` with `<replacement>(`. Token-bound
+// on the right by '('; on the left by a non-identifier char (or start of
+// file). Avoids partial-match false positives like `MyOldName_thing(` when
+// renaming `MyOldName`.
+static std::string replaceFunctionToken(
+  const std::string &src,
+  const std::string &token,
+  const std::string &replacement)
+{
+  std::string out;
+  out.reserve(src.size());
+  size_t i = 0;
+  while (i < src.size()) {
+    if (i + token.size() <= src.size()
+        && std::memcmp(src.data() + i, token.data(), token.size()) == 0
+        && i + token.size() < src.size()
+        && src[i + token.size()] == '(')
+    {
+      char prev = i == 0 ? ' ' : src[i - 1];
+      bool prevIsIdent = (prev >= 'A' && prev <= 'Z')
+                      || (prev >= 'a' && prev <= 'z')
+                      || (prev >= '0' && prev <= '9')
+                      || prev == '_';
+      if (!prevIsIdent) {
+        out += replacement;
+        i += token.size();
+        continue;
+      }
+    }
+    out.push_back(src[i++]);
+  }
+  return out;
+}
+
+bool Project::renamePrefabFunction(
+  const std::string &projectPath,
+  const std::string &prefabName,
+  const std::string &oldName,
+  const std::string &newName)
+{
+  if (oldName.empty() || newName.empty() || oldName == newName) return false;
+  fs::path userDir = fs::path{projectPath} / "src" / "user";
+  fs::path headerPath = userDir / (prefabName + ".h");
+  fs::path sourcePath = userDir / (prefabName + ".cpp");
+
+  std::error_code ec;
+  if (!fs::exists(headerPath, ec) && !fs::exists(sourcePath, ec)) return false;
+
+  if (fs::exists(headerPath, ec)) {
+    auto h = Utils::FS::loadTextFile(headerPath.string());
+    h = replaceFunctionToken(h, oldName, newName);
+    Utils::FS::saveTextFile(headerPath.string(), h);
+  }
+  if (fs::exists(sourcePath, ec)) {
+    auto c = Utils::FS::loadTextFile(sourcePath.string());
+    c = replaceFunctionToken(c, oldName, newName);
+    Utils::FS::saveTextFile(sourcePath.string(), c);
+  }
+  return true;
+}
+
+bool Project::removePrefabFunction(
+  const std::string &projectPath,
+  const std::string &prefabName,
+  const std::string &functionName)
+{
+  if (functionName.empty()) return false;
+  fs::path userDir = fs::path{projectPath} / "src" / "user";
+  fs::path headerPath = userDir / (prefabName + ".h");
+  fs::path sourcePath = userDir / (prefabName + ".cpp");
+
+  std::error_code ec;
+  bool any = false;
+
+  // Header: drop the line containing `P64_NODE ... <name>(...)`. We match
+  // line-by-line so we don't touch surrounding declarations.
+  if (fs::exists(headerPath, ec)) {
+    auto h = Utils::FS::loadTextFile(headerPath.string());
+    std::string out;
+    size_t lineStart = 0;
+    while (lineStart < h.size()) {
+      size_t lineEnd = h.find('\n', lineStart);
+      if (lineEnd == std::string::npos) lineEnd = h.size();
+      std::string line = h.substr(lineStart, lineEnd - lineStart);
+      bool drop = (line.find("P64_NODE") != std::string::npos)
+               && (line.find(functionName + "(") != std::string::npos);
+      if (!drop) {
+        out += line;
+        if (lineEnd < h.size()) out.push_back('\n');
+      } else {
+        any = true;
+      }
+      lineStart = (lineEnd < h.size()) ? lineEnd + 1 : lineEnd;
+    }
+    if (any) Utils::FS::saveTextFile(headerPath.string(), out);
+  }
+
+  // Source: find `<name>(` preceded by whitespace, walk back to the start
+  // of the line, then walk forward to the matching `}` past the body. Only
+  // commit the strip if brace nesting balances cleanly.
+  if (fs::exists(sourcePath, ec)) {
+    auto c = Utils::FS::loadTextFile(sourcePath.string());
+    std::string token = functionName + "(";
+    size_t pos = 0;
+    while ((pos = c.find(token, pos)) != std::string::npos) {
+      char prev = pos == 0 ? ' ' : c[pos - 1];
+      bool prevIsIdent = (prev >= 'A' && prev <= 'Z')
+                      || (prev >= 'a' && prev <= 'z')
+                      || (prev >= '0' && prev <= '9')
+                      || prev == '_';
+      if (prevIsIdent) { ++pos; continue; }
+
+      size_t lineStart = c.rfind('\n', pos);
+      lineStart = (lineStart == std::string::npos) ? 0 : lineStart + 1;
+
+      size_t openBrace = c.find('{', pos);
+      if (openBrace == std::string::npos) break;
+      int depth = 0;
+      size_t scan = openBrace;
+      bool ok = false;
+      for (; scan < c.size(); ++scan) {
+        if (c[scan] == '{') ++depth;
+        else if (c[scan] == '}') {
+          if (--depth == 0) { ok = true; break; }
+        }
+      }
+      if (!ok) break;
+      // Include the trailing newline if present so we don't leave a bare
+      // newline behind.
+      size_t endPos = scan + 1;
+      if (endPos < c.size() && c[endPos] == '\n') ++endPos;
+
+      c.erase(lineStart, endPos - lineStart);
+      any = true;
+      pos = lineStart;
+    }
+    if (any) Utils::FS::saveTextFile(sourcePath.string(), c);
+  }
+  return any;
 }
 
 bool Project::addPrefabFunction(

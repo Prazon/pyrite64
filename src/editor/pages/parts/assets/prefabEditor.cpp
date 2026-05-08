@@ -504,6 +504,192 @@ void Editor::PrefabEditor::drawFunctionsPanel()
   }
 }
 
+void Editor::PrefabEditor::drawVariableDetails()
+{
+  if (detailsVarIdx < 0 || detailsVarIdx >= (int)variables.size()) {
+    clearMyPrefabSelection();
+    inspector.draw(scene, selection);
+    return;
+  }
+  auto &v = variables[detailsVarIdx];
+
+  ImGui::TextDisabled("%s  Variable", ICON_MDI_VARIABLE);
+  ImGui::Separator();
+
+  if (ImTable::start("VarDetails")) {
+    ImTable::add("Name");
+    ImGui::SetNextItemWidth(-1);
+    char nameBuf[128]{};
+    std::snprintf(nameBuf, sizeof(nameBuf), "%s", v.name.c_str());
+    if (ImGui::InputText("##varname", nameBuf, sizeof(nameBuf))) {
+      v.name = nameBuf;
+    }
+
+    ImTable::add("Type");
+    ImGui::SetNextItemWidth(-1);
+    static const char* kindNames[] = {
+      "Int", "Float", "Bool", "Vec3", "Quat",
+      "Object Ref", "Prefab Ref", "Asset Ref",
+    };
+    int kindIdx = static_cast<int>(v.kind);
+    if (ImGui::Combo("##varkind", &kindIdx, kindNames, IM_ARRAYSIZE(kindNames))) {
+      v.kind = static_cast<Project::PrefabVarKind>(kindIdx);
+      v.defaultValue = GenericValue{};
+      v.typeArg = 0;
+      switch (v.kind) {
+        case Project::PrefabVarKind::INT:        v.defaultValue.set<int32_t>(0); break;
+        case Project::PrefabVarKind::FLOAT:      v.defaultValue.set<float>(0.0f); break;
+        case Project::PrefabVarKind::BOOL:       v.defaultValue.set<bool>(false); break;
+        case Project::PrefabVarKind::VEC3:       v.defaultValue.set<glm::vec3>({0,0,0}); break;
+        case Project::PrefabVarKind::QUAT:       v.defaultValue.set<glm::quat>(glm::quat{1,0,0,0}); break;
+        case Project::PrefabVarKind::OBJECT_REF:
+        case Project::PrefabVarKind::PREFAB_REF:
+        case Project::PrefabVarKind::ASSET_REF:  v.defaultValue.set<uint64_t>(0); break;
+      }
+    }
+
+    if (v.kind == Project::PrefabVarKind::PREFAB_REF) {
+      ImTable::add("Target Prefab");
+      ImGui::SetNextItemWidth(-1);
+      std::string label = "(none)";
+      if (ctx.project) {
+        auto *e = ctx.project->getAssets().getEntryByUUID(v.typeArg);
+        if (e) label = e->name;
+      }
+      if (ImGui::BeginCombo("##targ", label.c_str())) {
+        if (ctx.project) {
+          for (const auto &e : ctx.project->getAssets().getTypeEntries(Project::FileType::PREFAB)) {
+            uint64_t entryUUID = e.getUUID();
+            if (entryUUID == assetUUID) continue;
+            bool sel = (entryUUID == v.typeArg);
+            std::string entryLabel = e.name + "##" + std::to_string(entryUUID);
+            if (ImGui::Selectable(entryLabel.c_str(), sel)) v.typeArg = entryUUID;
+          }
+        }
+        ImGui::EndCombo();
+      }
+    }
+
+    ImTable::add("Default");
+    ImGui::SetNextItemWidth(-1);
+    switch (v.kind) {
+      case Project::PrefabVarKind::INT: {
+        int val = v.defaultValue.get<int32_t>();
+        if (ImGui::DragInt("##def", &val)) v.defaultValue.set<int32_t>(val);
+        break;
+      }
+      case Project::PrefabVarKind::FLOAT: {
+        float val = v.defaultValue.get<float>();
+        if (ImGui::DragFloat("##def", &val, 0.01f)) v.defaultValue.set<float>(val);
+        break;
+      }
+      case Project::PrefabVarKind::BOOL: {
+        bool val = v.defaultValue.get<bool>();
+        if (ImGui::Checkbox("##def", &val)) v.defaultValue.set<bool>(val);
+        break;
+      }
+      case Project::PrefabVarKind::VEC3: {
+        glm::vec3 val = v.defaultValue.get<glm::vec3>();
+        if (ImGui::DragFloat3("##def", &val.x, 0.01f)) v.defaultValue.set<glm::vec3>(val);
+        break;
+      }
+      case Project::PrefabVarKind::QUAT: {
+        glm::quat q = v.defaultValue.get<glm::quat>();
+        float xyzw[4]{q.x, q.y, q.z, q.w};
+        if (ImGui::DragFloat4("##def", xyzw, 0.01f)) {
+          v.defaultValue.set<glm::quat>(glm::quat{xyzw[3], xyzw[0], xyzw[1], xyzw[2]});
+        }
+        break;
+      }
+      case Project::PrefabVarKind::OBJECT_REF: ImGui::TextDisabled("(null — set per instance)"); break;
+      case Project::PrefabVarKind::PREFAB_REF: ImGui::TextDisabled("(null — set per instance)"); break;
+      case Project::PrefabVarKind::ASSET_REF:  ImGui::TextDisabled("(asset ref - TODO)"); break;
+    }
+
+    ImTable::end();
+  }
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  if (ImGui::Button(ICON_MDI_DELETE " Delete Variable")) {
+    variables.erase(variables.begin() + detailsVarIdx);
+    clearMyPrefabSelection();
+  }
+}
+
+void Editor::PrefabEditor::drawFunctionDetails()
+{
+  if (detailsFuncName.empty() || !ctx.project) {
+    clearMyPrefabSelection();
+    inspector.draw(scene, selection);
+    return;
+  }
+
+  // Find the descriptor in the cached scan list. If it's no longer there
+  // (e.g. the .h was edited externally), fall back to a minimal view that
+  // still lets the user open the .cpp or rename.
+  const Project::PrefabFunctionDesc *fd = nullptr;
+  for (const auto &f : functions) {
+    if (f.name == detailsFuncName) { fd = &f; break; }
+  }
+
+  ImGui::TextDisabled("%s  Function", ICON_MDI_FUNCTION);
+  ImGui::Separator();
+
+  if (ImTable::start("FuncDetails")) {
+    ImTable::add("Name");
+    ImGui::SetNextItemWidth(-1);
+    char nameBuf[128]{};
+    std::snprintf(nameBuf, sizeof(nameBuf), "%s",
+      renameBuffer.empty() ? detailsFuncName.c_str() : renameBuffer.c_str());
+    if (ImGui::InputText("##fnname", nameBuf, sizeof(nameBuf))) {
+      renameBuffer = nameBuf;
+    }
+    bool canCommit = !renameBuffer.empty() && renameBuffer != detailsFuncName;
+    if (canCommit) {
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Apply")) {
+        if (Project::renamePrefabFunction(
+              ctx.project->getPath(), getName(), detailsFuncName, renameBuffer)) {
+          detailsFuncName = renameBuffer;
+        }
+      }
+    }
+
+    ImTable::add("Returns");
+    ImGui::TextUnformatted(fd ? fd->returnType.c_str() : "(unknown)");
+
+    ImTable::add("Parameters");
+    if (fd && !fd->params.empty()) ImGui::TextWrapped("%s", fd->params.c_str());
+    else ImGui::TextDisabled("(none)");
+
+    if (fd) {
+      ImTable::add("Source");
+      ImGui::TextDisabled("src/user/%s.h:%d", getName().c_str(), fd->line);
+    }
+
+    ImTable::end();
+  }
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  if (ImGui::Button(ICON_MDI_PENCIL " Open in Editor")) {
+    if (ctx.editorScene) {
+      std::string cppPath = ctx.project->getPath() + "/src/user/"
+                          + getName() + ".cpp";
+      auto *entry = ctx.project->getAssets().getByPath(cppPath);
+      if (entry) ctx.editorScene->openCodeEditor(entry->getUUID());
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(ICON_MDI_DELETE " Delete")) {
+    if (Project::removePrefabFunction(
+          ctx.project->getPath(), getName(), detailsFuncName)) {
+      clearMyPrefabSelection();
+    }
+  }
+}
+
 void Editor::PrefabEditor::focus() const
 {
   ImGui::SetWindowFocus(("###PrefabEditorWin_" + std::to_string(assetUUID)).c_str());

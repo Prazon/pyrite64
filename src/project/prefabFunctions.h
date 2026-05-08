@@ -45,4 +45,26 @@ namespace Project
     const std::string &prefabName,
     const std::string &functionName
   );
+
+  // Rename a P64_NODE function in src/user/<prefabName>.{h,cpp}: replaces
+  // every occurrence of the old function-name token (followed by `(`) with
+  // the new name. The match deliberately requires a `(` after the name so
+  // we don't touch unrelated identifier prefixes. Returns true on success.
+  bool renamePrefabFunction(
+    const std::string &projectPath,
+    const std::string &prefabName,
+    const std::string &oldName,
+    const std::string &newName
+  );
+
+  // Remove a P64_NODE function from both files. Strips the line containing
+  // `P64_NODE ... <name>(...)` from the .h and the matching definition
+  // (function body up to the matching `}`) from the .cpp. Conservative:
+  // only acts when the .cpp body is well-bracketed; otherwise leaves the
+  // file untouched and returns false.
+  bool removePrefabFunction(
+    const std::string &projectPath,
+    const std::string &prefabName,
+    const std::string &functionName
+  );
 }
