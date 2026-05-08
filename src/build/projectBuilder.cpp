@@ -102,6 +102,7 @@ bool Build::buildProject(const std::string &configPath)
       if (entry.conf.exclude || entry.type == Project::FileType::UNKNOWN
         || entry.type == Project::FileType::CODE_OBJ
         || entry.type == Project::FileType::CODE_GLOBAL
+        || entry.type == Project::FileType::RESOURCE_TYPE
       ) continue;
       sceneCtx.addAsset(entry);
     }
@@ -145,9 +146,17 @@ bool Build::buildProject(const std::string &configPath)
     return false;
   }
 
+  if(!buildResourceAssets(project, sceneCtx)) {
+    Utils::Logger::log("Resource-Asset build failed!", Utils::Logger::LEVEL_ERROR);
+    return false;
+  }
+
   // Scripts
   buildGlobalScripts(project, sceneCtx);
   buildScripts(project, sceneCtx);
+  // Must run after sceneCtx.assetList is fully populated (above) so the
+  // emitted typeForAssetIdx[] aligns with the rom asset table.
+  buildResourceTable(project, sceneCtx);
 
   // Scenes
   project.getScenes().reload();

@@ -14,6 +14,7 @@
 #include "../utils/codeParser.h"
 #include "../renderer/texture.h"
 #include "assets/model3d.h"
+#include "assets/resourceInstance.h"
 #include "scene/prefab.h"
 #include "tiny3d/tools/gltf_importer/src/structs.h"
 
@@ -42,6 +43,8 @@ namespace Project
     PREFAB,
     NODE_GRAPH,
     MUSIC_XM,
+    RESOURCE_TYPE,     // .h header in P64::Asset::C… namespace, defines a Data struct
+    RESOURCE_INSTANCE, // .p64res json file, holds field values for one RESOURCE_TYPE
 
     _SIZE
   };
@@ -80,6 +83,7 @@ namespace Project
     Assets::Model3D model{};
     std::shared_ptr<Renderer::N64Mesh> mesh3D{};
     std::shared_ptr<Prefab> prefab{nullptr};
+    std::shared_ptr<Resource::Instance> resource{nullptr};
     AssetConf conf{};
     Utils::CPP::Struct params{};
 
@@ -170,6 +174,15 @@ namespace Project
 
       const std::shared_ptr<Renderer::Texture> &getFallbackTexture();
 
+      // Walks all prefab assets and resolves variants against their parents
+      // in dependency order. Called once at the end of reload() so every
+      // variant's `obj` reflects parent + patch by the time scenes load.
+      void resolvePrefabVariants();
+
+      // Returns prefab uuids that descend from `parentUUID` via uuidParentPrefab
+      // chains (transitive). Excludes parentUUID itself. Order is unspecified.
+      std::vector<uint64_t> getPrefabDescendants(uint64_t parentUUID);
+
       void markPrefabDirty(uint64_t uuid);
       void markAssetMetaDirty(uint64_t uuid);
       void markNodeGraphDirty(uint64_t uuid, const std::string &currentState);
@@ -180,5 +193,6 @@ namespace Project
 
       bool createScript(const std::string &name, bool isGlobal, const std::string &subDir = {});
       uint64_t createNodeGraph(const std::string &name);
+      uint64_t createResourceInstance(const std::string &name, uint64_t typeUuid, const std::string &subDir = {});
   };
 }

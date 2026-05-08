@@ -25,6 +25,7 @@ namespace Utils
     ASSET_SPRITE,
     OBJECT_REF,
     PREFAB,
+    RESOURCE_REF, // AssetRef<UserType> — serialized as uint32 asset index
   };
 
   class BinaryFile
@@ -117,6 +118,7 @@ namespace Utils
           case s8: write<int8_t>(std::stol(str)); break;
           case OBJECT_REF: write<uint32_t>(std::stoul(str)); break;
           case PREFAB: write<uint32_t>(std::stoul(str)); break;
+          case RESOURCE_REF: write<uint32_t>(std::stoul(str)); break;
           case string:
             for(char c : str)write<uint8_t>(c);
             write<uint8_t>(0);

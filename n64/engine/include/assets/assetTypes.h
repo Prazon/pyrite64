@@ -17,4 +17,9 @@ namespace P64::Assets::Type
   constexpr uint8_t PREFAB = 7;
   constexpr uint8_t NODE_GRAPH = 8;
   constexpr uint8_t MUSIC_XM = 9;
+  // RESOURCE_TYPE (.h headers) are not packed into the rom asset table —
+  // they only inform editor-side codegen — but the slot is reserved so the
+  // editor's FileType enum stays aligned with this one.
+  constexpr uint8_t RESOURCE_TYPE = 10;
+  constexpr uint8_t RESOURCE_INSTANCE = 11;
 }

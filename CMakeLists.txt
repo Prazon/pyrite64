@@ -270,6 +270,7 @@ add_executable(pyrite64 src/main.cpp
         src/project/graph/graph.h
         src/project/graph/graph.cpp
         src/build/nodeGraphBuilder.cpp
+        src/build/resourceBuilder.cpp
         src/project/component/types/compNodeGraph.cpp
         src/project/component/types/compAnimModel.cpp
         src/project/component/types/compSpriteBillboard.cpp

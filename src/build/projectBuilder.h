@@ -25,6 +25,8 @@ namespace Build
   bool buildAudioAssets(Project::Project &project, SceneCtx &sceneCtx);
   bool buildPrefabAssets(Project::Project &project, SceneCtx &sceneCtx);
   bool buildNodeGraphAssets(Project::Project &project, SceneCtx &sceneCtx);
+  bool buildResourceAssets(Project::Project &project, SceneCtx &sceneCtx);
+  void buildResourceTable(Project::Project &project, SceneCtx &sceneCtx);
 
   bool buildProject(const std::string &path);
 

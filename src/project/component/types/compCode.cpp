@@ -11,6 +11,10 @@
 #include "../../../utils/logger.h"
 #include "../../../utils/string.h"
 
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
 namespace Project::Component::Code
 {
   struct Data
@@ -86,6 +90,12 @@ namespace Project::Component::Code
       } else if(field.type == Utils::DataType::PREFAB){
         uint64_t uuid = Utils::parseU64(val);
         ctx.fileObj.write<uint32_t>(ctx.assetUUIDToIdx[uuid]);
+      } else if(field.type == Utils::DataType::RESOURCE_REF){
+        uint64_t uuid = Utils::parseU64(val);
+        auto it = ctx.assetUUIDToIdx.find(uuid);
+        // Same encoding as P64::AssetRef<T>: store the index directly so the
+        // first ::get() call resolves it through P64::AssetManager.
+        ctx.fileObj.write<uint32_t>(it != ctx.assetUUIDToIdx.end() ? it->second : 0xFFFF);
       } else {
         ctx.fileObj.writeAs(val, field.type);
       }
@@ -127,7 +137,8 @@ namespace Project::Component::Code
           auto &prop = data.args[field.name];
           if(field.type == Utils::DataType::ASSET_SPRITE ||
              field.type == Utils::DataType::OBJECT_REF ||
-             field.type == Utils::DataType::PREFAB)
+             field.type == Utils::DataType::PREFAB ||
+             field.type == Utils::DataType::RESOURCE_REF)
           {
             ImGui::PushID(static_cast<int>(prop.id & 0xFFFFFFFFULL));
             ImTable::add(name);
@@ -178,6 +189,27 @@ namespace Project::Component::Code
             } else if(field.type == Utils::DataType::PREFAB) {
               const auto &prefabs = ctx.project->getAssets().getTypeEntries(FileType::PREFAB);
               ImTable::addAssetVecComboBox("", prefabs, uuid, validationFunc);
+            } else if(field.type == Utils::DataType::RESOURCE_REF) {
+              // Narrow the dropdown to instances of the requested resource
+              // type when a typename was successfully parsed; otherwise show
+              // every instance so the user at least sees what's available.
+              auto typeNameIt = field.attr.find("resourceTypeName");
+              const std::string typeName = typeNameIt != field.attr.end() ? typeNameIt->second : "";
+              uint64_t targetTypeUuid = 0;
+              if (!typeName.empty()) {
+                for (const auto &t : ctx.project->getAssets().getTypeEntries(FileType::RESOURCE_TYPE)) {
+                  if (fs::path(t.name).stem().string() == typeName) {
+                    targetTypeUuid = t.getUUID();
+                    break;
+                  }
+                }
+              }
+              std::vector<::Project::AssetManagerEntry> filtered;
+              for (const auto &inst : ctx.project->getAssets().getTypeEntries(FileType::RESOURCE_INSTANCE)) {
+                if (targetTypeUuid != 0 && inst.resource && inst.resource->typeUuid != targetTypeUuid) continue;
+                filtered.push_back(inst);
+              }
+              ImTable::addAssetVecComboBox("", filtered, uuid, validationFunc);
             }
             ImGui::PopID();
           } else {

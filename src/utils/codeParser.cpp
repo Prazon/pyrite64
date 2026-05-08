@@ -25,6 +25,10 @@ namespace
     if (str == "float") return Utils::DataType::f32;
     if (str == "char") return Utils::DataType::string;
     if (str == "AssetRef<sprite_t>") return Utils::DataType::ASSET_SPRITE;
+    // Any other AssetRef<…> is treated as a user resource type reference.
+    // The inner type name is recovered later from the raw type string and
+    // stashed on the field for the inspector to filter against.
+    if (str.rfind("AssetRef<", 0) == 0) return Utils::DataType::RESOURCE_REF;
     if (str == "PrefabRef") return Utils::DataType::PREFAB;
     if (str == "ObjectRef" || str == "P64::ObjectRef" || str.rfind("ObjectRef<", 0) == 0 || str.find("::ObjectRef<") != std::string::npos) return Utils::DataType::OBJECT_REF;
     return Utils::DataType::s32;
@@ -44,6 +48,7 @@ namespace
       case Utils::DataType::ASSET_SPRITE:
       case Utils::DataType::OBJECT_REF:
       case Utils::DataType::PREFAB:
+      case Utils::DataType::RESOURCE_REF:
       default:
         return 4;
     }
@@ -131,6 +136,17 @@ Utils::CPP::Struct Utils::CPP::parseDataStruct(const std::string &sourceCode, co
         .attr = parseAttributes(fieldMatch[2]),
         .defaultValue = fieldMatch[6],
       };
+
+      // For AssetRef<UserType>, stash the user-type name so the inspector
+      // can narrow the picker dropdown to instances of that resource type.
+      if (field.type == DataType::RESOURCE_REF) {
+        std::string raw = fieldMatch[3];
+        auto lt = raw.find('<');
+        auto gt = raw.rfind('>');
+        if (lt != std::string::npos && gt != std::string::npos && gt > lt) {
+          field.attr["resourceTypeName"] = trim(raw.substr(lt + 1, gt - lt - 1));
+        }
+      }
 
       if(field.type == DataType::string) {
         try

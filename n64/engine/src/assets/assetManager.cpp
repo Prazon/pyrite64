@@ -7,6 +7,7 @@
 #include <libdragon.h>
 
 #include "assets/assetTypes.h"
+#include "assets/resourceTable.h"
 #include "lib/logger.h"
 #include "scene/components/model.h"
 
@@ -92,6 +93,11 @@ namespace
     [AssetType::PREFAB]      = {(LoadFunc)assetLoad,      (FreeFunc)free          },
     [AssetType::NODE_GRAPH]  = {P64::NodeGraph::load,     (FreeFunc)free          },
     [AssetType::MUSIC_XM]    = {(LoadFunc)xmLoad,         (FreeFunc)xmFree        },
+    // RESOURCE_TYPE (.h) is editor-only; it never lands in the rom asset
+    // table, so the slot is left null. RESOURCE_INSTANCE (.res) is a raw
+    // packed-field blob that user code casts to the matching `Data`.
+    [AssetType::RESOURCE_TYPE]     = {nullptr,                   nullptr        },
+    [AssetType::RESOURCE_INSTANCE] = {(LoadFunc)assetLoad,       (FreeFunc)free },
   };
 
   constinit AssetTable* assetTable{nullptr};
@@ -122,6 +128,11 @@ void P64::AssetManager::freeAll() {
       auto type = entry.getType();
       const auto &loader = assetHandler[type];
       void *data = (void*)((uint32_t)entry.getPointer() | 0x8000'0000);
+      // Resource lifecycle: run the user's onUnload before the blob is freed
+      // so any external state it set up can release in order.
+      if (type == AssetType::RESOURCE_INSTANCE) {
+        P64::Resources::callOnUnload(i, data);
+      }
       loader.fnFree(data);
       entry.setPointer(nullptr);
     }
@@ -136,15 +147,24 @@ void* P64::AssetManager::getByIndex(uint32_t idx) {
   auto &entry = assetTable->entries[idx];
 
   void* res = entry.getPointer();
+  bool firstLoad = false;
   if (!res) {
     auto type = entry.getType();
     const auto &loader = assetHandler[type];
     assertf(loader.fnLoad != nullptr, "No asset loader for type: %lu, %lu:%s", type, idx, entry.path);
     res = loader.fnLoad(entry.path);
     entry.setPointer(res);
+    firstLoad = true;
     //debugf("Load Asset: %s | %lu\n", entry.path, type);
   } else {
     res = (void*)((uint32_t)res | 0x8000'0000);
+  }
+
+  // Resource lifecycle: fire onLoad once on the first lazy resolution so the
+  // user's setup runs against the blob view they'll see from AssetRef::get().
+  if (firstLoad && entry.getType() == AssetType::RESOURCE_INSTANCE) {
+    void* uncachedRes = (void*)((uint32_t)res | 0x8000'0000);
+    P64::Resources::callOnLoad(idx, uncachedRes);
   }
 
   return res;

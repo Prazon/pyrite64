@@ -8,6 +8,8 @@
 #include "misc/cpp/imgui_stdlib.h"
 #include "../../imgui/helper.h"
 #include "../../../context.h"
+#include "../../../utils/fs.h"
+#include "../../../utils/string.h"
 #include "../../../utils/textureFormats.h"
 
 using FileType = Project::FileType;
@@ -43,7 +45,9 @@ void Editor::AssetInspector::draw() {
   bool hasAssetConf = true;
   if (asset->type == FileType::CODE_OBJ
     || asset->type == FileType::CODE_GLOBAL
-    || asset->type == FileType::PREFAB)
+    || asset->type == FileType::PREFAB
+    || asset->type == FileType::RESOURCE_TYPE
+    || asset->type == FileType::RESOURCE_INSTANCE)
   {
     hasAssetConf = false;
   }
@@ -113,6 +117,75 @@ void Editor::AssetInspector::draw() {
 
     if (confBefore != asset->conf.serialize()) {
       ctx.project->getAssets().markAssetMetaDirty(asset->getUUID());
+    }
+  }
+
+  if (asset->type == FileType::RESOURCE_INSTANCE && asset->resource)
+  {
+    auto &assetMgr = ctx.project->getAssets();
+    auto *typeEntry = assetMgr.getEntryByUUID(asset->resource->typeUuid);
+
+    ImTable::start("Resource");
+    ImTable::add("Type");
+    if (typeEntry) {
+      ImGui::TextUnformatted(typeEntry->name.c_str());
+    } else {
+      ImGui::TextDisabled("(unresolved typeUuid 0x%016llX)",
+        (unsigned long long)asset->resource->typeUuid);
+    }
+    ImTable::end();
+
+    if (typeEntry && !typeEntry->params.fields.empty())
+    {
+      auto stateBefore = asset->resource->serialize();
+
+      ImGui::Separator();
+      ImTable::start("ResourceFields");
+      for (const auto &field : typeEntry->params.fields) {
+        // Only fields with a P64::Name attribute are user-editable; the rest
+        // are runtime-internal scratch fields that get zero-init at load.
+        auto metaName = field.attr.find("P64::Name");
+        if (metaName == field.attr.end()) continue;
+        const std::string &label = metaName->second;
+
+        auto &slot = asset->resource->values[field.name];
+        if (slot.empty()) slot = field.defaultValue;
+        if (slot.empty()) slot = "0";
+
+        ImTable::add(label);
+        ImGui::PushID(field.name.c_str());
+        switch (field.type) {
+          case Utils::DataType::u8: case Utils::DataType::u16: case Utils::DataType::u32:
+          case Utils::DataType::s8: case Utils::DataType::s16: case Utils::DataType::s32: {
+            int v = 0;
+            try { v = std::stoi(slot); } catch (...) {}
+            if (ImGui::InputInt("##v", &v)) slot = std::to_string(v);
+            break;
+          }
+          case Utils::DataType::f32: {
+            float v = 0.f;
+            try { v = std::stof(slot); } catch (...) {}
+            if (ImGui::InputFloat("##v", &v)) slot = std::to_string(v);
+            break;
+          }
+          case Utils::DataType::string:
+            ImGui::InputText("##v", &slot);
+            break;
+          default:
+            ImGui::TextDisabled("(unsupported field type)");
+            break;
+        }
+        ImGui::PopID();
+      }
+      ImTable::end();
+
+      if (stateBefore != asset->resource->serialize()) {
+        Utils::FS::saveTextFile(asset->path, asset->resource->serialize());
+      }
+    } else if (!typeEntry) {
+      ImGui::TextDisabled("Resource type header missing — open the .p64res in a text editor to repair.");
+    } else {
+      ImGui::TextDisabled("(this resource type defines no editable fields)");
     }
   }
 

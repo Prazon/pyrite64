@@ -131,6 +131,9 @@ namespace
     } else if (ext == ".p64graph") {
       type = Project::FileType::NODE_GRAPH;
       outPath = changeExt(outPath, ".pg");
+    } else if (ext == ".p64res") {
+      type = Project::FileType::RESOURCE_INSTANCE;
+      outPath = changeExt(outPath, ".res");
     }
 
     if (type == Project::FileType::UNKNOWN) {
@@ -187,18 +190,33 @@ namespace
   {
     auto code = Utils::FS::loadTextFile(path);
 
+    // Dispatch by namespace marker. Order matters: ::Asset:: must be checked
+    // before ::Script:: would fail through, since headers live in P64::Asset
+    // and source files in P64::Script / P64::GlobalScript.
     Project::FileType type = Project::FileType::UNKNOWN;
-    auto uuidPos = code.find("::Script::");
-    if (uuidPos == std::string::npos) {
-      type = Project::FileType::CODE_GLOBAL;
-      uuidPos = code.find("::GlobalScript::");
-      if (uuidPos == std::string::npos) {
-        return false;
-      }
-      uuidPos += 16;
+    size_t uuidPos = std::string::npos;
+
+    auto ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+
+    if (ext == ".h") {
+      uuidPos = code.find("::Asset::");
+      if (uuidPos == std::string::npos) return false;
+      type = Project::FileType::RESOURCE_TYPE;
+      uuidPos += 9;
     } else {
-      type = Project::FileType::CODE_OBJ;
-      uuidPos += 10;
+      uuidPos = code.find("::Script::");
+      if (uuidPos == std::string::npos) {
+        type = Project::FileType::CODE_GLOBAL;
+        uuidPos = code.find("::GlobalScript::");
+        if (uuidPos == std::string::npos) {
+          return false;
+        }
+        uuidPos += 16;
+      } else {
+        type = Project::FileType::CODE_OBJ;
+        uuidPos += 10;
+      }
     }
 
     if (uuidPos + 16 > code.size()) {
@@ -291,6 +309,12 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
       entry.prefab->deserialize(Utils::FS::loadTextFile(path));
     } break;
 
+    case FileType::RESOURCE_INSTANCE:
+    {
+      entry.resource = std::make_shared<Resource::Instance>();
+      entry.resource->deserialize(Utils::FS::loadTextFile(path));
+    } break;
+
     case FileType::MODEL_3D:
     {
       try{
@@ -380,6 +404,20 @@ void Project::AssetManager::reload() {
         }
       }
 
+      if (assetEntry.type == FileType::RESOURCE_INSTANCE) {
+        reloadEntry(assetEntry, path.string());
+        if (assetEntry.resource && assetEntry.resource->uuid != 0) {
+          // Self-contained UUID inside the .p64res — match prefab convention,
+          // ignore any sidecar .conf uuid that buildAssetEntry may have minted.
+          assetEntry.conf.uuid = assetEntry.resource->uuid;
+        } else if (assetEntry.resource) {
+          // Fresh instance with no uuid yet (just got created): seed it from
+          // the conf uuid that buildAssetEntry generated, and persist.
+          assetEntry.resource->uuid = assetEntry.conf.uuid;
+          Utils::FS::saveTextFile(assetEntry.path, assetEntry.resource->serialize());
+        }
+      }
+
       entries[(int)assetEntry.type].push_back(assetEntry);
     }
   }
@@ -388,7 +426,9 @@ void Project::AssetManager::reload() {
   for (const auto &entry : fs::recursive_directory_iterator{codePath}) {
     if (entry.is_regular_file()) {
       auto path = entry.path();
-      if (path.extension().string() != ".cpp") continue;
+      auto ext = path.extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+      if (ext != ".cpp" && ext != ".h") continue;
 
       watchFiles[path.string()] = Utils::FS::getFileAge(path);
       AssetManagerEntry codeEntry{};
@@ -425,6 +465,82 @@ void Project::AssetManager::reload() {
       }
     }
   }
+
+  // Resolve prefab variants once all prefab assets are present in the map.
+  resolvePrefabVariants();
+}
+
+void Project::AssetManager::resolvePrefabVariants()
+{
+  // Kahn's algorithm: process prefabs whose parents are already resolved.
+  // Standalone prefabs (no parent) are resolved-by-default and seed the queue
+  // implicitly. Cycles (a → b → a) leave participants unresolved; we log and
+  // skip rather than infinite-loop.
+  auto &prefabEntries = entries[(int)FileType::PREFAB];
+  std::unordered_set<uint64_t> resolved;
+  for (auto &e : prefabEntries) {
+    if (e.prefab && !e.prefab->isVariant()) resolved.insert(e.prefab->uuid.value);
+  }
+
+  bool progress = true;
+  while (progress) {
+    progress = false;
+    for (auto &e : prefabEntries) {
+      if (!e.prefab) continue;
+      if (!e.prefab->isVariant()) continue;
+      if (resolved.contains(e.prefab->uuid.value)) continue;
+
+      uint64_t parentUUID = e.prefab->uuidParentPrefab.value;
+      if (!resolved.contains(parentUUID)) continue;
+
+      auto parent = getPrefabByUUID(parentUUID);
+      if (!parent) {
+        Utils::Logger::log(
+          "Prefab variant " + std::to_string(e.prefab->uuid.value)
+            + " references missing parent " + std::to_string(parentUUID)
+            + " — leaving empty.",
+          Utils::Logger::LEVEL_ERROR
+        );
+        resolved.insert(e.prefab->uuid.value);
+        progress = true;
+        continue;
+      }
+      e.prefab->resolveAgainstParent(*parent);
+      resolved.insert(e.prefab->uuid.value);
+      progress = true;
+    }
+  }
+
+  for (auto &e : prefabEntries) {
+    if (e.prefab && e.prefab->isVariant() && !resolved.contains(e.prefab->uuid.value)) {
+      Utils::Logger::log(
+        "Prefab variant " + std::to_string(e.prefab->uuid.value)
+          + " unresolved (cycle or missing parent chain).",
+        Utils::Logger::LEVEL_ERROR
+      );
+    }
+  }
+}
+
+std::vector<uint64_t> Project::AssetManager::getPrefabDescendants(uint64_t parentUUID)
+{
+  std::vector<uint64_t> out;
+  auto &prefabEntries = entries[(int)FileType::PREFAB];
+
+  // BFS from parentUUID over the parent->children edge induced by
+  // uuidParentPrefab. Cheap; O(prefabs * depth).
+  std::vector<uint64_t> frontier{parentUUID};
+  while (!frontier.empty()) {
+    auto cur = frontier.back();
+    frontier.pop_back();
+    for (auto &e : prefabEntries) {
+      if (!e.prefab) continue;
+      if (e.prefab->uuidParentPrefab.value != cur) continue;
+      out.push_back(e.prefab->uuid.value);
+      frontier.push_back(e.prefab->uuid.value);
+    }
+  }
+  return out;
 }
 
 bool Project::AssetManager::pollWatch()
@@ -473,7 +589,9 @@ bool Project::AssetManager::pollWatch()
     for (const auto &entry : fs::recursive_directory_iterator{codePath}) {
       if (!entry.is_regular_file()) continue;
       auto path = entry.path();
-      if (path.extension().string() != ".cpp") continue;
+      auto ext = path.extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+      if (ext != ".cpp" && ext != ".h") continue;
 
       auto pathStr = path.string();
       uint64_t age = Utils::FS::getFileAge(path);
@@ -550,10 +668,16 @@ bool Project::AssetManager::pollWatch()
       return;
     }
 
-    if (entry->type == FileType::IMAGE || entry->type == FileType::PREFAB) {
+    if (entry->type == FileType::IMAGE
+      || entry->type == FileType::PREFAB
+      || entry->type == FileType::RESOURCE_INSTANCE)
+    {
       reloadEntry(*entry, entry->path);
       if (entry->type == FileType::PREFAB && entry->prefab) {
         entry->conf.uuid = entry->prefab->uuid.value;
+      }
+      if (entry->type == FileType::RESOURCE_INSTANCE && entry->resource && entry->resource->uuid != 0) {
+        entry->conf.uuid = entry->resource->uuid;
       }
     }
 
@@ -815,6 +939,41 @@ uint64_t Project::AssetManager::createNodeGraph(const std::string &name)
   reload();
 
   auto entry = getByName(name + ".p64graph");
+  return entry ? entry->getUUID() : 0;
+}
+
+uint64_t Project::AssetManager::createResourceInstance(
+  const std::string &name, uint64_t typeUuid, const std::string &subDir)
+{
+  if (name.empty() || typeUuid == 0) return 0;
+  if (name.find_first_of("/\\:*?\"<>|") != std::string::npos) return 0;
+
+  auto assetPath = getAssetPath(project);
+  fs::path dirPath = assetPath;
+
+  if (!subDir.empty()) {
+    fs::path relPath{subDir};
+    if (!relPath.is_absolute()) {
+      relPath = relPath.lexically_normal();
+      bool hasParent = false;
+      for (const auto &part : relPath) {
+        if (part == "..") { hasParent = true; break; }
+      }
+      if (!hasParent) dirPath /= relPath;
+    }
+  }
+  fs::create_directories(dirPath);
+
+  auto filePath = dirPath / (name + ".p64res");
+  if (fs::exists(filePath)) return 0;
+
+  Resource::Instance inst{};
+  inst.uuid = Utils::Hash::randomU64();
+  inst.typeUuid = typeUuid;
+  Utils::FS::saveTextFile(filePath, inst.serialize());
+
+  reload();
+  auto entry = getByPath(filePath.string());
   return entry ? entry->getUUID() : 0;
 }
 
