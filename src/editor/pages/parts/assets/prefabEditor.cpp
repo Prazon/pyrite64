@@ -110,12 +110,18 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   }
 
   bool isOpen = true;
-  if (!ImGui::Begin(winName.c_str(), &isOpen,
-        isDirty() ? ImGuiWindowFlags_UnsavedDocument : 0))
-  {
-    ImGui::End();
-    return isOpen;
-  }
+  // Don't gate the body on Begin's return value — matches ModelEditor's
+  // pattern. When Begin returns false (window hidden after X click), ImGui
+  // renders the body widgets to a hidden draw list, but our internal C++
+  // (viewport.draw) still runs every frame the editor is in the map. That
+  // keeps GPU resource lifetime predictable: the framebuffer is written to
+  // every frame up to and including the close frame, matching the
+  // defer-by-one destruction timing that ModelEditor / AssetPreviewViewport
+  // rely on. Gating the body would skip GPU writes on the close frame, which
+  // sounds safer but actually leaves SDL_GPU's in-flight texture
+  // tracking inconsistent with our defer cadence.
+  ImGui::Begin(winName.c_str(), &isOpen,
+        isDirty() ? ImGuiWindowFlags_UnsavedDocument : 0);
 
   // EditScope binds this editor's history+scene+selection so that any
   // markChanged() call inside the nested SceneGraph / ObjectInspector routes
