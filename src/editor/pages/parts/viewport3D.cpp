@@ -383,8 +383,16 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   auto* scene = getScene();
   if (!scene)return;
 
-  // SPBF64 fork: bind this viewport's selection so component draw paths see
-  // the right selection (e.g. compModel's selection-tint highlight).
+  // SPBF64 fork: skip the pass entirely until the framebuffer has been
+  // sized by at least one draw() call. This fires on the frame a new
+  // Viewport3D is constructed (e.g. PrefabEditor opened via the assets
+  // browser, which runs after the editor-loop) — the editor hasn't drawn
+  // yet, so fb's GPU textures are still nullptr and SDL_BeginGPURenderPass
+  // would fault.
+  if (fb.getWidth() == 0 || fb.getHeight() == 0) return;
+
+  // Bind this viewport's selection so component draw paths see the right
+  // selection (e.g. compModel's selection-tint highlight).
   ViewportSelectionScope vpSelScope(getSelection());
 
   getSelection().sanitize(scene);
@@ -607,6 +615,10 @@ void Editor::Viewport3D::onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPa
   auto* scene = getScene();
   if (!scene)return;
 
+  // Skip until first draw() has sized the framebuffer; pairs with the same
+  // guard in onRenderPass.
+  if (fb.getWidth() == 0 || fb.getHeight() == 0) return;
+
   ViewportSelectionScope vpSelScope(getSelection());
 
   if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "Object Copy-Pass");
@@ -624,6 +636,8 @@ void Editor::Viewport3D::onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPa
 }
 
 void Editor::Viewport3D::onPostRender(Renderer::Scene &renderScene) {
+  // Skip if framebuffer hasn't been sized yet (mirrors onRenderPass guard).
+  if (fb.getWidth() == 0 || fb.getHeight() == 0) return;
   if (pickedObjID.isRequested()) {
     pickedObjID.setResult(fb.readObjectID(
       mousePosClick.x * ctx.prefs.renderFactorAA,
