@@ -58,7 +58,7 @@ namespace
     ChipDef{ "Scripts",     ICON_MDI_LANGUAGE_CPP,             FileType::CODE_OBJ,   true  },
     ChipDef{ "Globals",     ICON_MDI_SCRIPT_OUTLINE,           FileType::CODE_GLOBAL,true  },
     ChipDef{ "Node Graphs", ICON_MDI_GRAPH_OUTLINE,            FileType::NODE_GRAPH, false },
-    ChipDef{ "Res. Types",  ICON_MDI_DATABASE_OUTLINE,         FileType::RESOURCE_TYPE,     true  },
+    ChipDef{ "Res. Types",  ICON_MDI_DATABASE_OUTLINE,         FileType::RESOURCE_TYPE,     false },
     ChipDef{ "Resources",   ICON_MDI_DATABASE_EDIT_OUTLINE,    FileType::RESOURCE_INSTANCE, false },
     ChipDef{ "Materials",   ICON_MDI_PALETTE_SWATCH,           FileType::MATERIAL,          false },
   };
@@ -140,19 +140,6 @@ namespace
     return ec ? base : abs;
   }
 
-  // Per-tab filter state held outside the AssetsBrowser instance because the
-  // popup dispatch decouples the menu click from the popup body that consumes
-  // these. Deliberately not class members — the script popup is a singleton
-  // anyway.
-  std::string scriptName{};
-  int scriptType{0};
-  std::string newScriptDir{};
-
-  // "Create Resource Instance" popup state — same singleton-popup rationale
-  // as the script popup above.
-  std::string newResourceName{};
-  std::string newResourceDir{};
-  uint64_t newResourceTypeUUID{0};
 }
 
 void Editor::AssetsBrowser::draw() {
@@ -247,10 +234,26 @@ void Editor::AssetsBrowser::draw() {
   // ── Hoisted create-menu helpers ──────────────────────────────────────
   // Live above the LEFT/RIGHT split so both the toolbar Add button and
   // the empty-area context menu can share one drawCreateMenu() body.
-  // These bools are consumed at the bottom of draw() to open the
-  // NewScript / NewResource modals — wherever drawCreateMenu fired.
-  bool wantsNewScript = false;
-  bool wantsNewResource = false;
+
+  // Drop the just-created asset into rename mode so the user can either
+  // accept the default name (Enter), discard rename (Escape — file keeps the
+  // default), or replace the highlighted text by typing. This sidesteps the
+  // need for a "new asset name" dialog: the rename overlay already does
+  // exactly the right UX.
+  auto enterRenameForPath = [&](const std::string &absPath) {
+    renamePath = absPath;
+    std::string stem = fs::path(absPath).stem().string();
+    if (stem.empty()) stem = fs::path(absPath).filename().string();
+    std::strncpy(renameBuffer, stem.c_str(), sizeof(renameBuffer) - 1);
+    renameBuffer[sizeof(renameBuffer) - 1] = '\0';
+  };
+  auto enterRenameForUUID = [&](uint64_t uuid) {
+    if (!uuid) return;
+    ctx.selAssetUUID = uuid;
+    auto* entry = ctx.project->getAssets().getEntryByUUID(uuid);
+    if (!entry) return;
+    enterRenameForPath(entry->path);
+  };
 
   auto runImportTo = [&](const fs::path &targetAbsDir, const std::vector<Utils::FilePicker::Options::Filter> &filters) {
     fs::create_directories(targetAbsDir);
@@ -275,7 +278,7 @@ void Editor::AssetsBrowser::draw() {
     );
   };
 
-  auto createBlankPrefab = [&](const fs::path &dir) {
+  auto createBlankPrefab = [&](const fs::path &dir) -> fs::path {
     fs::create_directories(dir);
     auto pickName = [&](){
       for (int i = 0; i < 1000; ++i) {
@@ -304,11 +307,7 @@ void Editor::AssetsBrowser::draw() {
       ctx.project->getPath(), fullPath.filename().string()
     );
     ctx.project->getAssets().reload();
-
-    if (ctx.editorScene) {
-      auto* entry = ctx.project->getAssets().getByPath(fullPath.string());
-      if (entry) ctx.editorScene->openPrefabEditor(entry->getUUID());
-    }
+    return fullPath;
   };
 
   auto drawCreateMenu = [&]() {
@@ -325,8 +324,14 @@ void Editor::AssetsBrowser::draw() {
       };
       std::string name = pickFreeName();
       std::error_code ec;
-      fs::create_directories(assetsCurAbs  / name, ec);
+      fs::path newDirA = assetsCurAbs  / name;
+      fs::create_directories(newDirA, ec);
       fs::create_directories(scriptsCurAbs / name, ec);
+      // Drop the new folder card into rename mode. The folder card resolves
+      // its id to the assets-side path when both sides exist (which they do
+      // after the pair of create_directories calls above), so renamePath
+      // matches the card id and the InputText overlay appears next frame.
+      enterRenameForPath(newDirA.string());
     }
 
     ImGui::Separator();
@@ -340,7 +345,10 @@ void Editor::AssetsBrowser::draw() {
     }
 
     if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " New Prefab")) {
-      createBlankPrefab(assetsCurAbs);
+      fs::path created = createBlankPrefab(assetsCurAbs);
+      if (auto* entry = ctx.project->getAssets().getByPath(created.string())) {
+        enterRenameForUUID(entry->getUUID());
+      }
     }
 
     if (ImGui::MenuItem(ICON_MDI_DATABASE_EDIT " New Resource Type")) {
@@ -355,7 +363,7 @@ void Editor::AssetsBrowser::draw() {
         findFreeName(), currentDir
       );
       if (newUUID) {
-        ctx.selAssetUUID = newUUID;
+        enterRenameForUUID(newUUID);
       } else {
         Editor::Noti::add(Editor::Noti::Type::ERROR,
           "Failed to create resource type.");
@@ -374,27 +382,53 @@ void Editor::AssetsBrowser::draw() {
         return "Material_X";
       };
       uint64_t newUUID = ctx.project->getAssets().createMaterial(findFreeName());
-      if (newUUID && ctx.editorScene) {
-        ctx.selAssetUUID = newUUID;
-        ctx.editorScene->openMaterialEditor(newUUID);
-      } else if (!newUUID) {
+      if (newUUID) {
+        enterRenameForUUID(newUUID);
+      } else {
         Editor::Noti::add(Editor::Noti::Type::ERROR,
           "Failed to create material asset.");
       }
     }
 
+    auto findFreeScriptName = [&](const std::string &base, const char* ext) {
+      for (int i = 0; i < 1000; ++i) {
+        std::string n = (i == 0) ? base : (base + "_" + std::to_string(i + 1));
+        if (!fs::exists(scriptsCurAbs / (n + ext))) return n;
+      }
+      return base;
+    };
+    auto findFreeAssetRootName = [&](const std::string &base, const char* ext) {
+      fs::path root = fs::path(ctx.project->getPath()) / "assets";
+      for (int i = 0; i < 1000; ++i) {
+        std::string n = (i == 0) ? base : (base + "_" + std::to_string(i + 1));
+        if (!fs::exists(root / (n + ext))) return n;
+      }
+      return base;
+    };
+
     if (ImGui::BeginMenu(ICON_MDI_FILE_DOCUMENT_PLUS_OUTLINE " New Script")) {
-      if (ImGui::MenuItem("Object Script")) {
-        newScriptDir = currentDir; scriptName = "New_Script"; scriptType = 0;
-        wantsNewScript = true;
-      }
-      if (ImGui::MenuItem("Global Script")) {
-        newScriptDir = currentDir; scriptName = "New_Script"; scriptType = 1;
-        wantsNewScript = true;
-      }
+      auto createScriptKind = [&](bool isGlobal, const std::string &base) {
+        std::string name = findFreeScriptName(base, ".cpp");
+        if (ctx.project->getAssets().createScript(name, isGlobal, currentDir)) {
+          // Look up the new entry by path so we use the AssetManager's
+          // normalized string (the filesystem iterator may format it
+          // differently to our locally-constructed string, and the rename
+          // overlay matches by exact string equality).
+          fs::path constructed = scriptsCurAbs / (name + ".cpp");
+          if (auto* entry = ctx.project->getAssets().getByPath(constructed.string())) {
+            enterRenameForUUID(entry->getUUID());
+          }
+        } else {
+          Editor::Noti::add(Editor::Noti::Type::ERROR, "Failed to create script.");
+        }
+      };
+      if (ImGui::MenuItem("Object Script")) createScriptKind(false, "NewScript");
+      if (ImGui::MenuItem("Global Script")) createScriptKind(true,  "NewGlobalScript");
       if (ImGui::MenuItem("Node Graph")) {
-        newScriptDir = currentDir; scriptName = "New_Graph";  scriptType = 2;
-        wantsNewScript = true;
+        std::string name = findFreeAssetRootName("NewGraph", ".p64graph");
+        uint64_t uuid = ctx.project->getAssets().createNodeGraph(name);
+        if (uuid) enterRenameForUUID(uuid);
+        else Editor::Noti::add(Editor::Noti::Type::ERROR, "Failed to create node graph.");
       }
       ImGui::EndMenu();
     }
@@ -405,10 +439,19 @@ void Editor::AssetsBrowser::draw() {
         if (ImGui::BeginMenu(ICON_MDI_DATABASE_PLUS " New Resource Instance")) {
           for (const auto &typeEntry : resourceTypes) {
             if (ImGui::MenuItem(typeEntry.name.c_str())) {
-              newResourceDir = currentDir;
-              newResourceName = "New_" + fs::path(typeEntry.name).stem().string();
-              newResourceTypeUUID = typeEntry.getUUID();
-              wantsNewResource = true;
+              std::string baseName = "New" + fs::path(typeEntry.name).stem().string();
+              auto findFree = [&]() {
+                for (int i = 0; i < 1000; ++i) {
+                  std::string n = (i == 0) ? baseName : (baseName + "_" + std::to_string(i + 1));
+                  if (!fs::exists(assetsCurAbs / (n + ".p64res"))) return n;
+                }
+                return baseName;
+              };
+              uint64_t uuid = ctx.project->getAssets().createResourceInstance(
+                findFree(), typeEntry.getUUID(), currentDir);
+              if (uuid) enterRenameForUUID(uuid);
+              else Editor::Noti::add(Editor::Noti::Type::ERROR,
+                "Failed to create resource instance.");
             }
           }
           ImGui::EndMenu();
@@ -958,7 +1001,8 @@ void Editor::AssetsBrowser::draw() {
     if (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2_px, 0));
     if (ImGui::InputText("##renameInput", renameBuffer, sizeof(renameBuffer),
-                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+                         ImGuiInputTextFlags_EnterReturnsTrue
+                         | ImGuiInputTextFlags_AutoSelectAll)) {
       runRenameCommit();
     }
     ImGui::PopStyleVar();
@@ -1316,9 +1360,13 @@ void Editor::AssetsBrowser::draw() {
       const auto &scene = *scPtr;
       auto activeScene = ctx.project->getScenes().getLoadedScene();
 
+      // Only the user's explicit click highlights the card. The currently
+      // loaded scene used to share the same highlight, but that conflated
+      // "what's open" with "what I just clicked" and made the browser feel
+      // unresponsive on click. isLoaded still drives liveName so an unsaved
+      // rename of the open scene shows up in its card.
       bool isLoaded = activeScene && (activeScene->getId() == scene.id);
       bool isUserSel = (selectedSceneId == scene.id);
-      bool isHighlighted = isLoaded || isUserSel;
       const auto &liveName = isLoaded ? activeScene->getName() : scene.name;
       const auto &displayName = liveName.empty() ? "(unnamed)" : liveName;
 
@@ -1334,7 +1382,7 @@ void Editor::AssetsBrowser::draw() {
         displayName,
         "Scene",
         SCENE_TYPE_COLOR,
-        isHighlighted,
+        isUserSel,
         1.0f,
         nullptr
       );
@@ -1685,82 +1733,7 @@ void Editor::AssetsBrowser::draw() {
     drawCreateMenu();
     ImGui::EndPopup();
   }
-  if (wantsNewScript) ImGui::OpenPopup("NewScript");
-  if (wantsNewResource) ImGui::OpenPopup("NewResource");
-
   ImGui::Dummy({0, 10_px});
-
-  ImGui::SetNextWindowSize(ImVec2(250_px, 0));
-  if (ImGui::BeginPopup("NewScript"))
-  {
-    ImTable::start("SCRIPT");
-
-    ImTable::add("Type");
-    const char* scriptTypes[] = {"Object Script", "Global Script", "Node Graph"};
-    ImGui::Combo("##ScriptType", &scriptType, scriptTypes, IM_ARRAYSIZE(scriptTypes));
-
-    ImTable::add("Name");
-    ImGui::InputText("##ScriptName", &scriptName);
-
-    ImTable::end();
-    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - 112_px);
-    if (ImGui::Button("Create"))
-    {
-      bool res{false};
-      if (scriptType == 0) res = ctx.project->getAssets().createScript(scriptName, false, newScriptDir);
-      if (scriptType == 1) res = ctx.project->getAssets().createScript(scriptName, true,  newScriptDir);
-      if (scriptType == 2) res = ctx.project->getAssets().createNodeGraph(scriptName) != 0;
-
-      if (res) {
-        ImGui::CloseCurrentPopup();
-      } else {
-        Editor::Noti::add(
-          Editor::Noti::Type::ERROR,
-          "Failed to create script. File Name may not contain any of [/, \\, :, *, ?, \", <, >, |]."
-        );
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel")) {
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-
-  ImGui::SetNextWindowSize(ImVec2(280_px, 0));
-  if (ImGui::BeginPopup("NewResource"))
-  {
-    auto *typeEntry = ctx.project->getAssets().getEntryByUUID(newResourceTypeUUID);
-
-    ImTable::start("RESOURCE");
-    ImTable::add("Type");
-    ImGui::TextUnformatted(typeEntry ? typeEntry->name.c_str() : "(missing)");
-    ImTable::add("Name");
-    ImGui::InputText("##ResName", &newResourceName);
-    ImTable::end();
-
-    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - 112_px);
-    if (ImGui::Button("Create"))
-    {
-      auto uuid = ctx.project->getAssets().createResourceInstance(
-        newResourceName, newResourceTypeUUID, newResourceDir
-      );
-      if (uuid) {
-        ctx.selAssetUUID = uuid;
-        ImGui::CloseCurrentPopup();
-      } else {
-        Editor::Noti::add(
-          Editor::Noti::Type::ERROR,
-          "Failed to create resource instance. Name may not contain any of [/, \\, :, *, ?, \", <, >, |] and the file must not already exist."
-        );
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel")) {
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
 
   ImGui::EndChild();
 
