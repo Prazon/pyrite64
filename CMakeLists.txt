@@ -291,6 +291,13 @@ add_executable(pyrite64 src/main.cpp
         src/project/component/types/compSprite2D.cpp
         src/project/component/types/compLabel2D.cpp
         src/project/component/types/compProgressBar2D.cpp
+        src/project/component/types/compPanel2D.cpp
+        src/project/component/types/compNinePatch2D.cpp
+        src/project/component/types/compHBoxLayout.cpp
+        src/project/component/types/compVBoxLayout.cpp
+        src/project/component/types/compButton2D.cpp
+        src/project/component/widgetSize.cpp
+        src/editor/pages/parts/assets/widgetBlueprintEditor.cpp
         src/project/component/types/compPrimitive.cpp
         src/editor/pages/parts/createProjectOverlay.cpp
         src/editor/globalActions.cpp
