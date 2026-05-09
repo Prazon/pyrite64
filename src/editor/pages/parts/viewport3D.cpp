@@ -1086,7 +1086,37 @@ void Editor::Viewport3D::draw()
     (float)fb.getHeight() / ctx.prefs.renderFactorAA
   });
 
-  // SPBF64 fork: Picture-in-Picture preview thumbnail in the bottom-right
+  // Capture hover + drag-drop target against the viewport image NOW, before
+  // any per-component overlay submits its own ImGui items (e.g. Path's
+  // per-control-point InvisibleButtons). IsItemHovered / BeginDragDropTarget
+  // both reference the last-submitted item, so deferring this until after
+  // overlays would steal hover/drop from the viewport and break right-click
+  // camera fly while a Path is selected for authoring.
+  isMouseHover = ImGui::IsItemHovered();
+
+  if (ImGui::BeginDragDropTarget())
+  {
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET"))
+    {
+      uint64_t prefabUUID = *((uint64_t*)payload->Data);
+      auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID);
+      if(prefab) {
+        UndoRedo::getHistory().markChanged("Add Prefab");
+        auto newObj = scene->addPrefabInstance(prefabUUID);
+        if (newObj) {
+          // place in front of camera view
+          glm::vec3 camForward = camera.rot * glm::vec3{0,0,-1};
+          glm::vec3 camPos = camera.pos;
+          newObj->pos.resolve(newObj->propOverrides) = camPos + camForward * 150.0f;
+
+          getSelection().set(newObj->uuid);
+        }
+      }
+    }
+    ImGui::EndDragDropTarget();
+  }
+
+  // Picture-in-Picture preview thumbnail in the bottom-right
   // corner of the viewport when a Camera component is selected. Drawn before
   // the per-component overlays so SpriteBillboard/etc icons sit on top of it
   // if they happen to project into the corner.
@@ -1132,30 +1162,6 @@ void Editor::Viewport3D::draw()
                           uniGlobal.cameraMat, uniGlobal.projMat, vpRect);
     });
   }
-
-  if (ImGui::BeginDragDropTarget())
-  {
-    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET"))
-    {
-      uint64_t prefabUUID = *((uint64_t*)payload->Data);
-      auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID);
-      if(prefab) {
-        UndoRedo::getHistory().markChanged("Add Prefab");
-        auto newObj = scene->addPrefabInstance(prefabUUID);
-        if (newObj) {
-          // place in front of camera view
-          glm::vec3 camForward = camera.rot * glm::vec3{0,0,-1};
-          glm::vec3 camPos = camera.pos;
-          newObj->pos.resolve(newObj->propOverrides) = camPos + camForward * 150.0f;
-
-          getSelection().set(newObj->uuid);
-        }
-      }
-    }
-    ImGui::EndDragDropTarget();
-  }
-
-  isMouseHover = ImGui::IsItemHovered();
 
   if (selectionDragging) {
     glm::vec2 rectMin = glm::min(selectionStart, selectionEnd);
