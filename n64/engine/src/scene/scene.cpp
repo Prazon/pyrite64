@@ -13,6 +13,7 @@
 #include <malloc.h>
 
 #include "scene/globalState.h"
+#include "scene/widgetFocus.h"
 #include "collision/meshCollider.h"
 #include "vi/swapChain.h"
 #include "lib/memory.h"
@@ -155,6 +156,13 @@ void P64::Scene::update(float deltaTime)
   if(held.l && pressed.d_up) {
     Debug::Overlay::toggle();
   }
+
+  // Reset the focusable registry at the start of each frame so widgets
+  // can re-announce themselves cleanly during the per-component update
+  // pass below. Component update sequence is: Object update -> component
+  // update; buttons register inside their update() and only the focused
+  // one reads input this frame.
+  P64::WidgetFocus::beginFrame();
 
   // reset metrics
   ticksActorUpdate = 0;

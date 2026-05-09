@@ -27,6 +27,7 @@
 #include "parts/assets/prefabEventGraphEditor.h"
 #include "parts/assets/prefabFunctionCodeEditor.h"
 #include "parts/assets/materialEditor.h"
+#include "parts/assets/widgetBlueprintEditor.h"
 #include "../../project/compile/compileErrors.h"
 
 namespace
@@ -168,6 +169,17 @@ void Editor::Scene::openMaterialEditor(uint64_t assetUUID, ImGuiID dockTarget)
   auto editor = std::make_shared<MaterialEditor>(assetUUID);
   if (dockTarget) editor->setFirstDockTarget(dockTarget);
   materialEditors[assetUUID] = std::move(editor);
+}
+
+void Editor::Scene::openWidgetBlueprintEditor(uint64_t assetUUID, ImGuiID dockTarget)
+{
+  auto it = widgetEditors.find(assetUUID);
+  if (it != widgetEditors.end()) {
+    it->second->focus();
+    return;
+  }
+  (void)dockTarget; // dockTarget honored on first draw via defDockId arg
+  widgetEditors[assetUUID] = std::make_shared<WidgetBlueprintEditor>(assetUUID);
 }
 
 void Editor::Scene::openPrefabEventGraphEditor(uint64_t prefabAssetUUID, ImGuiID dockTarget)
@@ -641,6 +653,17 @@ void Editor::Scene::draw()
       materialEditors.erase(it);
     }
   }
+
+  // Widget blueprint editors. Lifecycle parallel to material editors but
+  // without a GPU framebuffer of their own (pure ImGui-drawn 2D canvas), so
+  // immediate erase is safe; no pendingErase queue needed.
+  std::vector<uint64_t> delWidgetUUIDs{};
+  for(auto &[uuid, editor] : widgetEditors) {
+    if (!editor->draw(dockSpaceID)) {
+      delWidgetUUIDs.push_back(uuid);
+    }
+  }
+  for(auto &uuid : delWidgetUUIDs) widgetEditors.erase(uuid);
 
   // SPBF64 fork: graph + inspector now take an explicit scene + selection.
   // Here we drive them with the project's active scene and the main selection.

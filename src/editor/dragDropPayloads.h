@@ -11,8 +11,16 @@
 namespace Editor::DragDrop
 {
   // ImGui drag-drop "type" strings. Max 32 chars (ImGui limit).
-  inline constexpr const char* TYPE_PREFAB_VAR  = "P64_VAR";
-  inline constexpr const char* TYPE_PREFAB_FUNC = "P64_FUNC";
+  inline constexpr const char* TYPE_PREFAB_VAR    = "P64_VAR";
+  inline constexpr const char* TYPE_PREFAB_FUNC   = "P64_FUNC";
+  // WidgetBlueprintEditor palette source. Canvas-mode Viewport2D consumes
+  // this and spawns a fresh Object with the requested component attached.
+  inline constexpr const char* TYPE_WIDGET_PALETTE = "P64_WIDGET_PAL";
+
+  struct WidgetPalettePayload
+  {
+    uint32_t componentID{0};
+  };
 
   struct PrefabVarPayload
   {

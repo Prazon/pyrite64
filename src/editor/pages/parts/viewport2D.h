@@ -1,16 +1,17 @@
 /**
-* Editor 2D viewport — Godot-style screen-space canvas preview.
+* Editor 2D viewport (Godot-style screen-space canvas preview).
 *
-* Sibling tab to the existing 3D-Viewport. Walks the active scene tree,
-* and for every Object whose `isCanvas2D` ancestry chain qualifies it as a
-* 2D node, paints a stand-in for each of its 2D components (Sprite2D /
-* Label2D / ProgressBar2D) using ImGui's draw list. No GPU pass — the
-* preview is intentionally a 1:1 representation of what `rdpq_*` would
-* paint at runtime, drawn into the editor's existing ImGui surface.
+* Sibling tab to the existing 3D-Viewport. Walks a bound Scene tree and for
+* every Object whose `isCanvas2D` ancestry chain qualifies it as a 2D node,
+* paints a stand-in for each of its 2D components using ImGui's draw list.
+* No GPU pass.
 *
-* Picking + drag-to-move route through the host's Selection / UndoRedo so
-* the panel composes with the inspector and undo stack the same way the
-* 3D viewport does.
+* Picking + drag-to-move route through the bound Selection / UndoRedo so the
+* panel composes with the inspector and undo stack the same way the 3D
+* viewport does. A single Viewport2D instance is bound to a Scene + Selection
+* at construction (mirrors Viewport3D), so per-asset editors (e.g. a widget
+* blueprint) get their own isolated viewport without sharing state with the
+* main scene viewport.
 */
 #pragma once
 #include <cstdint>
@@ -23,7 +24,20 @@ namespace Editor
   class Viewport2D
   {
     private:
-      // View transform — origin in window coords + zoom multiplier. Pan via
+      // External-owned bindings. Lifetime guaranteed by the host editor (the
+      // outer Scene editor for the main viewport, a per-asset editor for
+      // blueprint canvases). Null fallback only for the legacy default ctor.
+      Project::Scene     *boundScene{nullptr};
+      Project::Selection *boundSelection{nullptr};
+
+      // Canvas-mode authoring affordances. When true, the viewport paints a
+      // checkerboard backdrop behind the framebuffer rect, hides the safe-
+      // area inset (irrelevant for widget authoring), and accepts widget-
+      // palette drops to spawn new objects. Defaults to false so the main
+      // 2D viewport keeps its existing scene-preview behavior.
+      bool canvasMode{false};
+
+      // View transform: origin in window coords + zoom multiplier. Pan via
       // middle-drag, zoom via Ctrl+wheel. Defaults centered the canvas in
       // the panel on first frame (recomputed when the panel is bigger or
       // smaller than the canvas).
@@ -40,7 +54,7 @@ namespace Editor
       // Pan state.
       bool   panActive{false};
 
-      // Hover info — the topmost 2D object under the cursor this frame.
+      // Hover info: the topmost 2D object under the cursor this frame.
       uint32_t hoveredUUID{0};
 
       // Cached framebuffer dims of the active scene; refreshed each draw.
@@ -57,7 +71,7 @@ namespace Editor
                        Project::Object &obj, ImDrawList *dl,
                        bool inCanvas, ImVec2 anchorOffset);
 
-      // Single-component paint — dispatched by component id. Updates an
+      // Single-component paint, dispatched by component id. Updates an
       // optional bounding box used for hover hit-testing and the selection
       // overlay rectangle.
       void paintComponent(Project::Object &obj, int compId, void *data,
@@ -65,7 +79,16 @@ namespace Editor
                           ImVec2 *outMin, ImVec2 *outMax);
 
     public:
+      // Default ctor: binds to the global ctx scene + selection (existing
+      // main 2D-Viewport behavior).
       Viewport2D();
+
+      // Asset-editor ctor: binds to a private scene + selection so a widget
+      // blueprint canvas can render only its own subtree.
+      Viewport2D(Project::Scene &scene, Project::Selection &selection);
+
+      void setCanvasMode(bool v) { canvasMode = v; }
+      bool isCanvasMode() const { return canvasMode; }
 
       void draw();
   };

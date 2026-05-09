@@ -16,7 +16,9 @@
 #include "../../../project/scene/sceneManager.h"
 #include "../../../project/assetManager.h"
 #include "../../../project/selection.h"
+#include "../../../project/scene/object.h"
 #include "../../undoRedo.h"
+#include "../../dragDropPayloads.h"
 
 #include <algorithm>
 #include <cstring>
@@ -37,6 +39,10 @@ namespace
 }
 
 Editor::Viewport2D::Viewport2D() {}
+
+Editor::Viewport2D::Viewport2D(Project::Scene &scene, Project::Selection &selection)
+  : boundScene{&scene}, boundSelection{&selection}
+{}
 
 ImVec2 Editor::Viewport2D::canvasToScreen(ImVec2 c) const {
   return ImVec2(origin.x + c.x * zoom, origin.y + c.y * zoom);
@@ -119,31 +125,40 @@ void Editor::Viewport2D::paintObject(
 
 void Editor::Viewport2D::draw()
 {
-  auto *scene = ctx.project ? ctx.project->getScenes().getLoadedScene() : nullptr;
-  if (!scene) {
+  // Resolve scene + selection bindings. Default-constructed Viewport2D falls
+  // back to the project's loaded scene + main selection for backward
+  // compatibility with the outer scene editor's 2D-Viewport tab.
+  Project::Scene *scene = boundScene
+    ? boundScene
+    : (ctx.project ? ctx.project->getScenes().getLoadedScene() : nullptr);
+  Project::Selection *selPtr = boundSelection ? boundSelection : &ctx.mainSelection;
+
+  if (!scene || !selPtr) {
     ImGui::TextDisabled("(no scene loaded)");
     return;
   }
+  Project::Selection &selection = *selPtr;
+
   fbW = scene->conf.fbWidth;
   fbH = scene->conf.fbHeight;
   if (fbW <= 0) fbW = 320;
   if (fbH <= 0) fbH = 240;
 
-  auto &selection = ctx.mainSelection;
-
   if (ImGui::SmallButton("Reset View")) {
     originInit = false;
-    zoom = 2.0f;
+    zoom = canvasMode ? 3.0f : 2.0f;
   }
   ImGui::SameLine();
-  ImGui::TextDisabled("zoom %.2fx  |  hover: %s",
-    zoom, hoveredUUID ? "yes" : "no");
+  ImGui::TextDisabled("zoom %.2fx  |  hover: %s%s",
+    zoom, hoveredUUID ? "yes" : "no",
+    canvasMode ? "  |  CANVAS" : "");
 
   ImVec2 canvasTL = ImGui::GetCursorScreenPos();
   ImVec2 canvasSize = ImGui::GetContentRegionAvail();
   if (canvasSize.x < 10.0f || canvasSize.y < 10.0f) return;
 
   if (!originInit) {
+    if (canvasMode) zoom = 3.0f;
     origin.x = canvasTL.x + (canvasSize.x - fbW * zoom) * 0.5f;
     origin.y = canvasTL.y + (canvasSize.y - fbH * zoom) * 0.5f;
     originInit = true;
@@ -152,6 +167,38 @@ void Editor::Viewport2D::draw()
   ImGui::InvisibleButton("##v2dCanvas", canvasSize,
     ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
   bool hovered = ImGui::IsItemHovered();
+
+  // Canvas-mode palette drop: spawn a new widget Object under the blueprint
+  // root at the drop position. Wired here (rather than on a per-Object
+  // target like the SceneGraph drop) so users can drop into empty canvas
+  // space and land at the cursor, matching UMG's Designer behavior.
+  if (canvasMode && ImGui::BeginDragDropTarget()) {
+    if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload(
+          Editor::DragDrop::TYPE_WIDGET_PALETTE)) {
+      const auto *pl = (const Editor::DragDrop::WidgetPalettePayload*)payload->Data;
+      auto &root = scene->getRootObject();
+      Project::Object *canvasRoot = root.children.empty()
+        ? nullptr : root.children.front().get();
+      if (canvasRoot) {
+        auto child = scene->addObject(*canvasRoot);
+        if (child) {
+          ImVec2 mp = ImGui::GetMousePos();
+          ImVec2 mpC = screenToCanvas(mp);
+          glm::vec3 p = child->pos.value;
+          p.x = std::round(mpC.x);
+          p.y = std::round(mpC.y);
+          p.z = 0.0f;
+          child->pos.value = p;
+          child->name = "Widget";
+          child->addComponent((int)pl->componentID);
+          selection.set(child->uuid);
+          Editor::UndoRedo::getHistory().markChanged("Add Widget");
+        }
+      }
+    }
+    ImGui::EndDragDropTarget();
+  }
+
   ImDrawList *dl = ImGui::GetWindowDrawList();
 
   ImVec2 bgTL = canvasTL;
@@ -160,15 +207,39 @@ void Editor::Viewport2D::draw()
 
   ImVec2 fbTL = canvasToScreen({0.0f, 0.0f});
   ImVec2 fbBR = canvasToScreen({(float)fbW, (float)fbH});
-  dl->AddRectFilled(fbTL, fbBR, IM_COL32(40, 40, 48, 255));
-  dl->AddRect(fbTL, fbBR, IM_COL32(120, 120, 130, 200), 0.0f, 0, 1.0f);
 
-  // 10% safe-area inset, NTSC convention.
-  float insetX = fbW * 0.1f;
-  float insetY = fbH * 0.1f;
-  ImVec2 saTL = canvasToScreen({insetX, insetY});
-  ImVec2 saBR = canvasToScreen({fbW - insetX, fbH - insetY});
-  dl->AddRect(saTL, saBR, IM_COL32(120, 200, 80, 80), 0.0f, 0, 1.0f);
+  if (canvasMode) {
+    // Checkerboard inside the framebuffer rect: makes alpha visible and
+    // signals "this is the screen" without committing to a particular
+    // backdrop color. 8-pixel cells (in canvas space) read clearly across
+    // the typical 2x..6x zoom range.
+    constexpr int CELL = 8;
+    int cellsX = (fbW + CELL - 1) / CELL;
+    int cellsY = (fbH + CELL - 1) / CELL;
+    for (int cy = 0; cy < cellsY; ++cy) {
+      for (int cx = 0; cx < cellsX; ++cx) {
+        bool dark = ((cx + cy) & 1) != 0;
+        ImU32 col = dark ? IM_COL32(36, 36, 40, 255) : IM_COL32(54, 54, 60, 255);
+        ImVec2 a = canvasToScreen({(float)(cx * CELL),       (float)(cy * CELL)});
+        float bx = std::min((float)((cx + 1) * CELL), (float)fbW);
+        float by = std::min((float)((cy + 1) * CELL), (float)fbH);
+        ImVec2 b = canvasToScreen({bx, by});
+        dl->AddRectFilled(a, b, col);
+      }
+    }
+    dl->AddRect(fbTL, fbBR, IM_COL32(220, 180, 80, 255), 0.0f, 0, 2.0f);
+  } else {
+    dl->AddRectFilled(fbTL, fbBR, IM_COL32(40, 40, 48, 255));
+    dl->AddRect(fbTL, fbBR, IM_COL32(120, 120, 130, 200), 0.0f, 0, 1.0f);
+
+    // 10% safe-area inset, NTSC convention. Hidden in canvas mode because
+    // widget authors commonly intend to fill the whole framebuffer.
+    float insetX = fbW * 0.1f;
+    float insetY = fbH * 0.1f;
+    ImVec2 saTL = canvasToScreen({insetX, insetY});
+    ImVec2 saBR = canvasToScreen({fbW - insetX, fbH - insetY});
+    dl->AddRect(saTL, saBR, IM_COL32(120, 200, 80, 80), 0.0f, 0, 1.0f);
+  }
 
   hoveredUUID = 0;
 
@@ -229,7 +300,7 @@ void Editor::Viewport2D::draw()
       ImVec2 mp = ImGui::GetMousePos();
       float dx = (mp.x - dragMouseStart.x) / zoom;
       float dy = (mp.y - dragMouseStart.y) / zoom;
-      // Snap to integer pixels — N64 framebuffer has no subpixel.
+      // Snap to integer pixels (N64 framebuffer has no subpixel).
       auto p = o->pos.resolve(o->propOverrides);
       p.x = std::round(dragObjStartPos.x + dx);
       p.y = std::round(dragObjStartPos.y + dy);

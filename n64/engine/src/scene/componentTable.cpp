@@ -25,6 +25,11 @@
 #include "scene/components/label2D.h"
 #include "scene/components/progressBar2D.h"
 #include "scene/components/path.h"
+#include "scene/components/panel2D.h"
+#include "scene/components/ninePatch2D.h"
+#include "scene/components/hboxLayout.h"
+#include "scene/components/vboxLayout.h"
+#include "scene/components/button2D.h"
 
 // some template magic to auto-detect if a function exists in a component
 #define HAS_FUNC_TPL(NAME_HAS, NAME_GET, FUNC) \
@@ -81,5 +86,10 @@ namespace P64
     SET_COMP(ProgressBar2D),
     SET_COMP(PaperSprite),
     SET_COMP(Path),
+    SET_COMP(Panel2D),
+    SET_COMP(NinePatch2D),
+    SET_COMP(HBoxLayout),
+    SET_COMP(VBoxLayout),
+    SET_COMP(Button2D),
   };
 }

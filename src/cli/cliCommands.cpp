@@ -87,6 +87,21 @@ namespace
     return nullptr;
   }
 
+  // Prefab-or-Widget resolver: widgets share the prefab on-disk shape, so
+  // every prefab-* CLI command should also accept .p64widget assets. Use
+  // this in place of resolveAsset(..., FileType::PREFAB) for the prefab
+  // editing commands; CLI users invoking widget-* aliases get the same
+  // behavior, and direct prefab-* invocations still keep working on
+  // .prefab files because the resolver also accepts those.
+  Project::AssetManagerEntry *resolvePrefabOrWidget(
+    Project::Project &proj,
+    const std::string &key
+  ) {
+    if (auto *e = resolveAsset(proj, key, Project::FileType::PREFAB)) return e;
+    if (auto *e = resolveAsset(proj, key, Project::FileType::WIDGET_BLUEPRINT)) return e;
+    return nullptr;
+  }
+
   const char *fileTypeName(Project::FileType t)
   {
     switch (t) {
@@ -103,6 +118,7 @@ namespace
       case Project::FileType::RESOURCE_TYPE:     return "resourceType";
       case Project::FileType::RESOURCE_INSTANCE: return "resourceInstance";
       case Project::FileType::MATERIAL:          return "material";
+      case Project::FileType::WIDGET_BLUEPRINT:  return "widgetBlueprint";
       default: return "?";
     }
   }
@@ -476,7 +492,7 @@ namespace
     if (a.asset.empty() || a.name.empty()) {
       emitErr("--asset and --name are required"); return 1;
     }
-    auto *src = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *src = resolvePrefabOrWidget(project, a.asset);
     if (!src || !src->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
     fs::path srcP{src->path};
     fs::path destDir = a.dir.empty() ? srcP.parent_path()
@@ -506,7 +522,7 @@ namespace
     if (a.parent.empty() || a.name.empty()) {
       emitErr("--parent and --name are required"); return 1;
     }
-    auto *parent = resolveAsset(project, a.parent, Project::FileType::PREFAB);
+    auto *parent = resolvePrefabOrWidget(project, a.parent);
     if (!parent || !parent->prefab) { emitErr("parent prefab not found: " + a.parent); return 1; }
 
     fs::path destDir = a.dir.empty() ? fs::path(parent->path).parent_path()
@@ -535,7 +551,7 @@ namespace
   int cmdPrefabDescribe(const CLI::Commands::Args &a, Project::Project &project)
   {
     if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
-    auto *e = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
     nlohmann::json out;
     out["uuid"] = e->prefab->uuid.value;
@@ -564,7 +580,7 @@ namespace
     if (a.asset.empty() || a.name.empty()) {
       emitErr("--asset and --name are required"); return 1;
     }
-    auto *e = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
     auto *parent = findObjectByPath(&e->prefab->obj, a.parent);
     if (!parent) { emitErr("parent path not found: " + a.parent); return 1; }
@@ -576,7 +592,7 @@ namespace
     parent->children.push_back(child);
     savePrefabAt(e->path, *e->prefab);
     project.getAssets().reload();
-    auto *fresh = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *fresh = resolvePrefabOrWidget(project, a.asset);
     nlohmann::json out;
     out["addedObject"] = a.name;
     out["uuid"] = child->uuid;
@@ -590,7 +606,7 @@ namespace
     if (a.asset.empty() || a.path.empty()) {
       emitErr("--asset and --path are required"); return 1;
     }
-    auto *e = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
     Project::Object *parent = nullptr;
     size_t idx = 0;
@@ -602,7 +618,7 @@ namespace
     project.getAssets().reload();
     nlohmann::json out;
     out["removedPath"] = a.path;
-    auto *fresh = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *fresh = resolvePrefabOrWidget(project, a.asset);
     if (fresh && fresh->prefab) out["obj"] = fresh->prefab->obj.serialize();
     emitJSON(out);
     return 0;
@@ -613,7 +629,7 @@ namespace
     if (a.asset.empty() || a.field.empty() || a.value.empty()) {
       emitErr("--asset, --field, --value are required (--field one of pos|rot|scale|name|enabled)"); return 1;
     }
-    auto *e = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
     auto *target = findObjectByPath(&e->prefab->obj, a.path);
     if (!target) { emitErr("path not found: " + a.path); return 1; }
@@ -651,7 +667,7 @@ namespace
     project.getAssets().reload();
     nlohmann::json out;
     out["updated"] = a.field;
-    auto *fresh = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *fresh = resolvePrefabOrWidget(project, a.asset);
     if (fresh && fresh->prefab) {
       auto *t = findObjectByPath(&fresh->prefab->obj, a.path);
       if (t) out["obj"] = t->serialize();
@@ -665,7 +681,7 @@ namespace
     if (a.asset.empty() || a.comp.empty()) {
       emitErr("--asset and --comp are required"); return 1;
     }
-    auto *e = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
     auto *target = findObjectByPath(&e->prefab->obj, a.path);
     if (!target) { emitErr("path not found: " + a.path); return 1; }
@@ -676,7 +692,7 @@ namespace
     project.getAssets().reload();
     nlohmann::json out;
     out["added"] = Project::Component::TABLE[compId].name;
-    auto *fresh = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *fresh = resolvePrefabOrWidget(project, a.asset);
     if (fresh && fresh->prefab) {
       auto *t = findObjectByPath(&fresh->prefab->obj, a.path);
       if (t) out["obj"] = t->serialize();
@@ -690,7 +706,7 @@ namespace
     if (a.asset.empty() || a.comp.empty()) {
       emitErr("--asset and --comp are required"); return 1;
     }
-    auto *e = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
     auto *target = findObjectByPath(&e->prefab->obj, a.path);
     if (!target) { emitErr("path not found: " + a.path); return 1; }
@@ -701,7 +717,7 @@ namespace
     project.getAssets().reload();
     nlohmann::json out;
     out["removed"] = a.comp;
-    auto *fresh = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *fresh = resolvePrefabOrWidget(project, a.asset);
     if (fresh && fresh->prefab) {
       auto *t = findObjectByPath(&fresh->prefab->obj, a.path);
       if (t) out["obj"] = t->serialize();
@@ -715,7 +731,7 @@ namespace
     if (a.asset.empty() || a.comp.empty() || a.field.empty() || a.value.empty()) {
       emitErr("--asset, --comp, --field, --value are required"); return 1;
     }
-    auto *e = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
     auto *target = findObjectByPath(&e->prefab->obj, a.path);
     if (!target) { emitErr("path not found: " + a.path); return 1; }
@@ -735,7 +751,7 @@ namespace
     project.getAssets().reload();
     nlohmann::json out;
     out["updated"] = a.field;
-    auto *fresh = resolveAsset(project, a.asset, Project::FileType::PREFAB);
+    auto *fresh = resolvePrefabOrWidget(project, a.asset);
     if (fresh && fresh->prefab) {
       auto *t = findObjectByPath(&fresh->prefab->obj, a.path);
       if (t) out["obj"] = t->serialize();
@@ -910,6 +926,19 @@ namespace
     emitJSON(out);
     return 0;
   }
+
+  int cmdWidgetCreate(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.name.empty()) { emitErr("--name is required"); return 1; }
+    uint64_t uuid = project.getAssets().createWidgetBlueprint(a.name);
+    if (uuid == 0) { emitErr("createWidgetBlueprint failed (name conflict?)"); return 1; }
+    auto *e = project.getAssets().getEntryByUUID(uuid);
+    nlohmann::json out;
+    out["created"] = a.name + ".p64widget";
+    if (e) out["asset"] = serializeAssetEntry(*e, false);
+    emitJSON(out);
+    return 0;
+  }
 }
 
 namespace CLI::Commands
@@ -943,6 +972,16 @@ namespace CLI::Commands
     {"resource-set-prop",       cmdResourceSetProp},
     {"graph-create",            cmdGraphCreate},
     {"material-create",         cmdMaterialCreate},
+    {"widget-create",           cmdWidgetCreate},
+    // Widget structural editing reuses the prefab commands (widgets share
+    // the prefab on-disk shape; resolvePrefabOrWidget accepts either type).
+    {"widget-describe",         cmdPrefabDescribe},
+    {"widget-add-object",       cmdPrefabAddObject},
+    {"widget-remove-object",    cmdPrefabRemoveObject},
+    {"widget-add-component",    cmdPrefabAddComponent},
+    {"widget-remove-component", cmdPrefabRemoveComponent},
+    {"widget-set-prop",         cmdPrefabSetProp},
+    {"widget-set-transform",    cmdPrefabSetTransform},
   };
 
   bool isExtendedCmd(const std::string &cmd)

@@ -311,14 +311,21 @@ namespace
           dragDropTask.isInsert = true;
         }
       }
-      // Drop a prefab asset to spawn a new instance as a child of this node.
-      // Allowed on root too (then it lands at top level), matching Unity's
-      // hierarchy panel behavior.
+      // Drop a prefab or widget-blueprint asset to spawn a new instance as a
+      // child of this node. Allowed on root too (then it lands at top level),
+      // matching Unity's hierarchy panel behavior. Widgets are structurally
+      // identical to prefabs so the same instancing path handles both.
       if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET")) {
-        uint64_t prefabUUID = *((uint64_t*)payload->Data);
-        if (auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID)) {
-          Editor::UndoRedo::getHistory().markChanged("Add Prefab");
-          auto newObj = scene.addPrefabInstance(prefabUUID, &obj);
+        uint64_t assetUUID = *((uint64_t*)payload->Data);
+        auto *entry = ctx.project->getAssets().getEntryByUUID(assetUUID);
+        bool isPrefabLike = entry && entry->prefab
+          && (entry->type == Project::FileType::PREFAB
+              || entry->type == Project::FileType::WIDGET_BLUEPRINT);
+        if (isPrefabLike) {
+          const char *label = (entry->type == Project::FileType::WIDGET_BLUEPRINT)
+            ? "Add Widget Instance" : "Add Prefab";
+          Editor::UndoRedo::getHistory().markChanged(label);
+          auto newObj = scene.addPrefabInstance(assetUUID, &obj);
           if (newObj) selection.set(newObj->uuid);
         }
       }

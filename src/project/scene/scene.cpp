@@ -4,6 +4,7 @@
 */
 #include "scene.h"
 #include "object.h"
+#include "../assetManager.h"
 #include "../../utils/json.h"
 #include "../../context.h"
 #include "../../utils/hash.h"
@@ -174,8 +175,16 @@ std::shared_ptr<Project::Object> Project::Scene::addObject(Object&parent, std::s
 
 std::shared_ptr<Project::Object> Project::Scene::addPrefabInstance(uint64_t prefabUUID, Object *parent)
 {
-  auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID);
-  if (!prefab)return nullptr;
+  // Accept both PREFAB and WIDGET_BLUEPRINT here: widgets share the Prefab
+  // on-disk shape, and instancing them into a scene is structurally identical
+  // (UMG-style "drop a HUD into the level"). The FileType discriminator
+  // continues to keep them separate for asset browsing and editor dispatch.
+  auto *entry = ctx.project->getAssets().getEntryByUUID(prefabUUID);
+  if (!entry || !entry->prefab) return nullptr;
+  if (entry->type != FileType::PREFAB && entry->type != FileType::WIDGET_BLUEPRINT) {
+    return nullptr;
+  }
+  auto prefab = entry->prefab;
 
   Object &targetParent = parent ? *parent : root;
   auto obj = std::make_shared<Object>(targetParent);

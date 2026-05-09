@@ -61,6 +61,7 @@ namespace
     ChipDef{ "Res. Types",  ICON_MDI_DATABASE_OUTLINE,         FileType::RESOURCE_TYPE,     false },
     ChipDef{ "Resources",   ICON_MDI_DATABASE_EDIT_OUTLINE,    FileType::RESOURCE_INSTANCE, false },
     ChipDef{ "Materials",   ICON_MDI_PALETTE_SWATCH,           FileType::MATERIAL,          false },
+    ChipDef{ "Widgets",     ICON_MDI_VIEW_DASHBOARD_OUTLINE,   FileType::WIDGET_BLUEPRINT,  false },
   };
 
   // Color the asset card with a thin stripe between icon and label so users can
@@ -72,6 +73,7 @@ namespace
   {
     switch (t) {
       case FileType::PREFAB:            return IM_COL32(0x1F, 0x8C, 0xFF, 0xFF); // blue
+      case FileType::WIDGET_BLUEPRINT:  return IM_COL32(0xFF, 0x8C, 0xC8, 0xFF); // pink
       case FileType::IMAGE:             return IM_COL32(0xFF, 0x32, 0x32, 0xFF); // red
       case FileType::MODEL_3D:          return IM_COL32(0xC8, 0x3C, 0xFF, 0xFF); // purple
       case FileType::AUDIO:
@@ -105,6 +107,7 @@ namespace
       case FileType::CODE_OBJ:          return "Object Script";
       case FileType::CODE_GLOBAL:       return "Global Script";
       case FileType::PREFAB:            return "Prefab";
+      case FileType::WIDGET_BLUEPRINT:  return "Widget";
       case FileType::NODE_GRAPH:        return "Node Graph";
       case FileType::MUSIC_XM:          return "Music";
       case FileType::RESOURCE_TYPE:     return "Resource Type";
@@ -371,6 +374,24 @@ void Editor::AssetsBrowser::draw() {
       } else {
         Editor::Noti::add(Editor::Noti::Type::ERROR,
           "Failed to create resource type.");
+      }
+    }
+
+    if (ImGui::MenuItem(ICON_MDI_VIEW_DASHBOARD_OUTLINE " New Widget Blueprint")) {
+      fs::path widgetRoot = fs::path(ctx.project->getPath()) / "assets";
+      auto findFreeName = [&]() -> std::string {
+        for (int i = 1; i < 1000; ++i) {
+          std::string n = (i == 1) ? "Widget" : ("Widget_" + std::to_string(i));
+          if (!fs::exists(widgetRoot / (n + ".p64widget"))) return n;
+        }
+        return "Widget_X";
+      };
+      uint64_t newUUID = ctx.project->getAssets().createWidgetBlueprint(findFreeName());
+      if (newUUID) {
+        enterRenameForUUID(newUUID);
+      } else {
+        Editor::Noti::add(Editor::Noti::Type::ERROR,
+          "Failed to create widget blueprint.");
       }
     }
 
@@ -1553,7 +1574,8 @@ void Editor::AssetsBrowser::draw() {
       case FileType::AUDIO:       iconTxt = ICON_MDI_MUSIC;                    break;
       case FileType::MUSIC_XM:    iconTxt = ICON_MDI_PIANO;                    break;
       case FileType::FONT:        iconTxt = ICON_MDI_FORMAT_FONT;              break;
-      case FileType::PREFAB:      iconTxt = ICON_MDI_PACKAGE_VARIANT_CLOSED;   break;
+      case FileType::PREFAB:           iconTxt = ICON_MDI_PACKAGE_VARIANT_CLOSED; break;
+      case FileType::WIDGET_BLUEPRINT: iconTxt = ICON_MDI_VIEW_DASHBOARD_OUTLINE; break;
       case FileType::CODE_OBJ:    iconTxt = ICON_MDI_LANGUAGE_CPP;             break;
       case FileType::CODE_GLOBAL: iconTxt = ICON_MDI_SCRIPT_OUTLINE;           break;
       case FileType::NODE_GRAPH:  iconTxt = ICON_MDI_GRAPH_OUTLINE;            break;
@@ -1611,6 +1633,9 @@ void Editor::AssetsBrowser::draw() {
           handled = true;
         } else if (asset.type == FileType::PREFAB) {
           ctx.editorScene->openPrefabEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::WIDGET_BLUEPRINT) {
+          ctx.editorScene->openWidgetBlueprintEditor(asset.getUUID());
           handled = true;
         } else if (asset.type == FileType::MATERIAL) {
           ctx.editorScene->openMaterialEditor(asset.getUUID());

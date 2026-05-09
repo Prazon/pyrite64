@@ -30,6 +30,7 @@ namespace Editor
   class PrefabEventGraphEditor;
   class PrefabFunctionCodeEditor;
   class MaterialEditor;
+  class WidgetBlueprintEditor;
 
   class Scene
   {
@@ -55,6 +56,9 @@ namespace Editor
       // Per-asset .p64mat material editors. Lifecycle parallel to the
       // model/image editors above — keyed on the asset's UUID for de-dupe.
       std::map<uint64_t, std::shared_ptr<MaterialEditor>> materialEditors{};
+      // Per-asset .p64widget editors (WYSIWYG canvas tab for HUD/menu
+      // authoring). Lifecycle mirrors the prefab/material editors above.
+      std::map<uint64_t, std::shared_ptr<WidgetBlueprintEditor>> widgetEditors{};
 
       // Material thumbnail cache (browser-wide). Each entry owns its own
       // tiny offscreen viewport so the framebuffer texture is stable across
@@ -148,6 +152,10 @@ namespace Editor
       // focus the existing window. dockTarget is honoured the same way as
       // the prefab event graph opener.
       void openMaterialEditor(uint64_t assetUUID, ImGuiID dockTarget = 0);
+      // Open the widget blueprint editor (.p64widget). Idempotent: re-opens
+      // focus the existing window. Same dock-target convention as the other
+      // asset editors above.
+      void openWidgetBlueprintEditor(uint64_t assetUUID, ImGuiID dockTarget = 0);
 
       // Material thumbnail cache accessor — used by MaterialEditor::save()
       // to invalidate a saved material's thumbnail and by AssetsBrowser to

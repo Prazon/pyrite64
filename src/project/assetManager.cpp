@@ -128,6 +128,11 @@ namespace
     } else if (ext == ".prefab") {
       type = Project::FileType::PREFAB;
       outPath = changeExt(outPath, ".pf");
+    } else if (ext == ".p64widget") {
+      // Widget blueprints share the prefab on-disk shape and are inlined into
+      // scenes the same way prefab instances are; no per-asset ROM artifact.
+      type = Project::FileType::WIDGET_BLUEPRINT;
+      outPath = changeExt(outPath, ".pf");
     } else if (ext == ".p64graph") {
       type = Project::FileType::NODE_GRAPH;
       outPath = changeExt(outPath, ".pg");
@@ -314,6 +319,7 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
     } break;
 
     case FileType::PREFAB:
+    case FileType::WIDGET_BLUEPRINT:
     {
       entry.prefab = std::make_shared<Prefab>();
       entry.prefab->deserialize(Utils::FS::loadTextFile(path));
@@ -453,7 +459,8 @@ void Project::AssetManager::reload() {
         }
       }
 
-      if (assetEntry.type == FileType::PREFAB) {
+      if (assetEntry.type == FileType::PREFAB
+          || assetEntry.type == FileType::WIDGET_BLUEPRINT) {
         reloadEntry(assetEntry, path.string());
         if (assetEntry.prefab) {
           assetEntry.conf.uuid = assetEntry.prefab->uuid.value;
@@ -745,11 +752,14 @@ bool Project::AssetManager::pollWatch()
 
     if (entry->type == FileType::IMAGE
       || entry->type == FileType::PREFAB
+      || entry->type == FileType::WIDGET_BLUEPRINT
       || entry->type == FileType::RESOURCE_INSTANCE
       || entry->type == FileType::MATERIAL)
     {
       reloadEntry(*entry, entry->path);
-      if (entry->type == FileType::PREFAB && entry->prefab) {
+      if ((entry->type == FileType::PREFAB
+           || entry->type == FileType::WIDGET_BLUEPRINT)
+          && entry->prefab) {
         entry->conf.uuid = entry->prefab->uuid.value;
       }
       if (entry->type == FileType::RESOURCE_INSTANCE && entry->resource && entry->resource->uuid != 0) {
@@ -840,7 +850,10 @@ void Project::AssetManager::save()
   std::vector<uint64_t> prefabsToSave{dirtyPrefabs.begin(), dirtyPrefabs.end()};
   for (auto uuid : prefabsToSave) {
     auto entry = getEntryByUUID(uuid);
-    if (!entry || entry->type != FileType::PREFAB || !entry->prefab) {
+    bool isPrefabLike = entry
+      && (entry->type == FileType::PREFAB
+          || entry->type == FileType::WIDGET_BLUEPRINT);
+    if (!isPrefabLike || !entry->prefab) {
       dirtyPrefabs.erase(uuid);
       savedPrefabState.erase(uuid);
       continue;
@@ -859,6 +872,7 @@ void Project::AssetManager::save()
       || entry->type == FileType::CODE_OBJ
       || entry->type == FileType::CODE_GLOBAL
       || entry->type == FileType::PREFAB
+      || entry->type == FileType::WIDGET_BLUEPRINT
       || entry->type == FileType::MATERIAL)
     {
       dirtyAssetMeta.erase(uuid);
@@ -895,7 +909,10 @@ void Project::AssetManager::save()
 void Project::AssetManager::markPrefabDirty(uint64_t uuid)
 {
   auto entry = getEntryByUUID(uuid);
-  if (!entry || entry->type != FileType::PREFAB || !entry->prefab) {
+  bool isPrefabLike = entry
+    && (entry->type == FileType::PREFAB
+        || entry->type == FileType::WIDGET_BLUEPRINT);
+  if (!isPrefabLike || !entry->prefab) {
     return;
   }
 
@@ -913,6 +930,7 @@ void Project::AssetManager::markAssetMetaDirty(uint64_t uuid)
     || entry->type == FileType::CODE_OBJ
     || entry->type == FileType::CODE_GLOBAL
     || entry->type == FileType::PREFAB
+    || entry->type == FileType::WIDGET_BLUEPRINT
     || entry->type == FileType::MATERIAL)
   {
     return;
@@ -1017,6 +1035,26 @@ uint64_t Project::AssetManager::createNodeGraph(const std::string &name)
   reload();
 
   auto entry = getByName(name + ".p64graph");
+  return entry ? entry->getUUID() : 0;
+}
+
+uint64_t Project::AssetManager::createWidgetBlueprint(const std::string &name)
+{
+  if (name.empty()) return 0;
+  if (name.find_first_of("/\\:*?\"<>|") != std::string::npos) return 0;
+
+  auto assetPath = getAssetPath(project);
+  auto filePath = assetPath / (name + ".p64widget");
+  if (fs::exists(filePath)) return 0;
+
+  ::Project::Prefab widget{};
+  widget.uuid.value = (uint32_t)Utils::Hash::randomU64();
+  widget.obj.name = name;
+  widget.obj.isCanvas2D = true;
+
+  Utils::FS::saveTextFile(filePath, widget.serialize());
+  reload();
+  auto entry = getByPath(filePath.string());
   return entry ? entry->getUUID() : 0;
 }
 

@@ -78,6 +78,16 @@ namespace Project::Component
     ImVec2 *outMin, ImVec2 *outMax
   );
 
+  // Intrinsic 2D size used by HBox/VBox layout containers. Returns the
+  // component's width/height in canvas pixels. Mirrors the engine-side
+  // widgetSize() dispatch in n64/engine/include/scene/widgetSize.h so the
+  // canvas preview lays children out exactly the way the runtime will.
+  // Optional — non-sized components leave this null and contribute (0,0).
+  typedef void(*FuncCompWidgetSize)(
+    Object&, Entry &entry,
+    int *outW, int *outH
+  );
+
   struct CompInfo
   {
     int id{};
@@ -96,6 +106,7 @@ namespace Project::Component
     FuncCompGetAABB funcGetAABB{};
     FuncCompDrawOverlay funcDrawOverlay{};
     FuncCompDraw2D      funcDraw2D{};
+    FuncCompWidgetSize  funcWidgetSize{};
   };
 
   #define MAKE_COMP(name) \
@@ -115,6 +126,7 @@ namespace Project::Component
         const glm::vec4 &viewportRect); \
       void draw2D(Object&, Entry &entry, ImDrawList *drawList, \
         ImVec2 originScreen, float zoom, ImVec2 *outMin, ImVec2 *outMax); \
+      void widgetSize(Object&, Entry &entry, int *outW, int *outH); \
     }
 
   MAKE_COMP(Code)
@@ -154,6 +166,11 @@ namespace Project::Component
   MAKE_COMP(Sprite2D)
   MAKE_COMP(Label2D)
   MAKE_COMP(ProgressBar2D)
+  MAKE_COMP(Panel2D)
+  MAKE_COMP(NinePatch2D)
+  MAKE_COMP(HBoxLayout)
+  MAKE_COMP(VBoxLayout)
+  MAKE_COMP(Button2D)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -342,6 +359,7 @@ namespace Project::Component
       .funcBuild = Sprite2D::build,
       .funcGetAABB = nullptr,
       .funcDraw2D = Sprite2D::draw2D,
+      .funcWidgetSize = Sprite2D::widgetSize,
     },
     CompInfo{
       .id = 15,
@@ -366,6 +384,7 @@ namespace Project::Component
       .funcBuild = ProgressBar2D::build,
       .funcGetAABB = nullptr,
       .funcDraw2D = ProgressBar2D::draw2D,
+      .funcWidgetSize = ProgressBar2D::widgetSize,
     },
     CompInfo{
       .id = 17,
@@ -391,6 +410,69 @@ namespace Project::Component
       .funcBuild = Path::build,
       .funcGetAABB = nullptr,
       .funcDrawOverlay = Path::drawOverlay,
+    },
+    CompInfo{
+      .id = 19,
+      .icon = ICON_MDI_RECTANGLE_OUTLINE " ",
+      .name = "Panel (2D)",
+      .funcInit = Panel2D::init,
+      .funcDraw = Panel2D::draw,
+      .funcSerialize = Panel2D::serialize,
+      .funcDeserialize = Panel2D::deserialize,
+      .funcBuild = Panel2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Panel2D::draw2D,
+      .funcWidgetSize = Panel2D::widgetSize,
+    },
+    CompInfo{
+      .id = 20,
+      .icon = ICON_MDI_BORDER_ALL_VARIANT " ",
+      .name = "Nine Patch (2D)",
+      .funcInit = NinePatch2D::init,
+      .funcDraw = NinePatch2D::draw,
+      .funcSerialize = NinePatch2D::serialize,
+      .funcDeserialize = NinePatch2D::deserialize,
+      .funcBuild = NinePatch2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = NinePatch2D::draw2D,
+      .funcWidgetSize = NinePatch2D::widgetSize,
+    },
+    CompInfo{
+      .id = 21,
+      .icon = ICON_MDI_VIEW_COLUMN " ",
+      .name = "HBox Layout",
+      .funcInit = HBoxLayout::init,
+      .funcDraw = HBoxLayout::draw,
+      .funcSerialize = HBoxLayout::serialize,
+      .funcDeserialize = HBoxLayout::deserialize,
+      .funcBuild = HBoxLayout::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = HBoxLayout::draw2D,
+    },
+    CompInfo{
+      .id = 22,
+      .icon = ICON_MDI_VIEW_AGENDA " ",
+      .name = "VBox Layout",
+      .funcInit = VBoxLayout::init,
+      .funcDraw = VBoxLayout::draw,
+      .funcSerialize = VBoxLayout::serialize,
+      .funcDeserialize = VBoxLayout::deserialize,
+      .funcBuild = VBoxLayout::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = VBoxLayout::draw2D,
+    },
+    CompInfo{
+      .id = 23,
+      .icon = ICON_MDI_GESTURE_TAP " ",
+      .name = "Button (2D)",
+      .funcInit = Button2D::init,
+      .funcDraw = Button2D::draw,
+      .funcSerialize = Button2D::serialize,
+      .funcDeserialize = Button2D::deserialize,
+      .funcBuild = Button2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Button2D::draw2D,
+      .funcWidgetSize = Button2D::widgetSize,
     },
   };
 

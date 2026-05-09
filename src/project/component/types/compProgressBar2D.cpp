@@ -136,6 +136,13 @@ namespace Project::Component::ProgressBar2D
     (void)obj;
   }
 
+  void widgetSize(Object &, Entry &entry, int *outW, int *outH)
+  {
+    Data &data = *static_cast<Data*>(entry.data.get());
+    if (outW) *outW = data.width.value;
+    if (outH) *outH = data.height.value;
+  }
+
   void draw(Object &obj, Entry &entry)
   {
     Data &data = *static_cast<Data*>(entry.data.get());

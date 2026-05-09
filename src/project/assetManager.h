@@ -48,6 +48,7 @@ namespace Project
     RESOURCE_TYPE,     // .h header in P64::Asset::C… namespace, defines a Data struct
     RESOURCE_INSTANCE, // .p64res json file, holds field values for one RESOURCE_TYPE
     MATERIAL,          // .p64mat material asset (node-graph driven)
+    WIDGET_BLUEPRINT,  // .p64widget HUD/menu blueprint (a 2D-only Prefab variant)
 
     _SIZE
   };
@@ -180,6 +181,18 @@ namespace Project
         return entry->prefab;
       }
 
+      // WidgetBlueprint share the Prefab on-disk shape; FileType discriminates
+      // them so widget assets don't show up in 3D prefab pickers and vice
+      // versa. The same `entry->prefab` field is reused since the structures
+      // are identical.
+      std::shared_ptr<Prefab> getWidgetByUUID(uint64_t uuid) {
+        auto entry = getEntryByUUID(uuid);
+        if (!entry || entry->type != FileType::WIDGET_BLUEPRINT) {
+          return nullptr;
+        }
+        return entry->prefab;
+      }
+
       const std::shared_ptr<Renderer::Texture> &getFallbackTexture();
 
       // Walks all prefab assets and resolves variants against their parents
@@ -205,6 +218,11 @@ namespace Project
       // empty graph (one Output node) and a default-constructed compiled
       // Material. Returns the new asset's UUID, or 0 on failure.
       uint64_t createMaterial(const std::string &name);
+      // Creates a fresh .p64widget under <project>/assets with a single
+      // canvas root Object (isCanvas2D=true). Same on-disk format as Prefab
+      // so the existing serializer can be reused. Returns the new asset's
+      // UUID, or 0 on failure.
+      uint64_t createWidgetBlueprint(const std::string &name);
       uint64_t createResourceInstance(const std::string &name, uint64_t typeUuid, const std::string &subDir = {});
       // Creates an editor-authored RESOURCE_TYPE schema (.p64restype) under
       // <project>/assets/<subDir>/<name>.p64restype with no fields. Returns
