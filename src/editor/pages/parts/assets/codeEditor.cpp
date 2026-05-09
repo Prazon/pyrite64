@@ -8,6 +8,8 @@
 #include <fstream>
 #include <sstream>
 
+#include "assetEditorDocking.h"
+#include "../assetInspector.h"
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
 #include "../../../../utils/logger.h"
@@ -41,6 +43,7 @@ Editor::CodeEditor::CodeEditor(uint64_t uuid) : assetUUID(uuid)
   editor->SetPalette(TextEditor::GetDarkPalette());
   editor->SetShowWhitespaces(false);
   editor->SetTabSize(4);
+  editor->SetLineSpacing(1.35f);
 
   loadFromDisk();
 }
@@ -53,6 +56,7 @@ Editor::CodeEditor::CodeEditor(uint64_t syntheticUUID, std::string absolutePath)
   editor->SetPalette(TextEditor::GetDarkPalette());
   editor->SetShowWhitespaces(false);
   editor->SetTabSize(4);
+  editor->SetLineSpacing(1.35f);
 
   // Display name = filename (asset->name analogue) so the tab label reads
   // naturally for files that have no AssetManagerEntry.
@@ -127,30 +131,23 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
   // spawn-as-its-own-OS-window default.
   winName = baseTitle + "###CodeEditorWin_" + std::to_string(assetUUID);
 
-  // Dock as a sibling tab of Scene Editor; OS chrome on undock — see
-  // PrefabEditor::draw for rationale.
-  ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
-  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
-  ImGui::SetNextWindowClass(&cls);
-
   // Caller-supplied first-frame dock override wins over the loop-passed
   // default. PrefabEditor uses this to drop function source tabs next to
-  // its viewport. Use Always when the override is in play so a stale
-  // imgui.ini entry from when this file was previously opened standalone
-  // doesn't keep it floating; FirstUseEver is fine for the loop-passed
-  // default since that path doesn't have to fight prior layout state.
+  // its viewport. Use Always + DockBuilderDockWindow when the override is in
+  // play so a stale imgui.ini entry from when this file was previously
+  // opened standalone doesn't keep it floating.
   if (firstDockTarget && !firstDockApplied) {
-    // Seed the docking layout directly. SetNextWindowDockID alone loses to
-    // a stale imgui.ini entry that already placed this winName into another
-    // node when the file was previously opened standalone — the loaded
-    // Window record wins on the very first frame. DockBuilderDockWindow
-    // mutates the layout before the window registers, which beats both.
+    // SetNextWindowDockID alone loses to a stale imgui.ini entry that
+    // already placed this winName into another node when the file was
+    // previously opened standalone — the loaded Window record wins on the
+    // very first frame. DockBuilderDockWindow mutates the layout before the
+    // window registers, which beats both.
     ImGui::DockBuilderDockWindow(winName.c_str(), firstDockTarget);
     ImGui::SetNextWindowDockID(firstDockTarget, ImGuiCond_Always);
     firstDockApplied = true;
-  } else if (defDockId) {
-    ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+    firstDockFrame = false;
+  } else {
+    Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
   }
 
   auto *mvp = ImGui::GetMainViewport();
@@ -182,6 +179,27 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
       saveToDisk();
     }
+  }
+
+  // Path-opened editors (synthetic UUIDs not in the AssetManager) have no
+  // asset metadata to inspect — render full width. UUID-backed editors get
+  // the AssetInspector strip on the right.
+  bool showInspector = pathOverride.empty();
+
+  ImVec2 outerAvail = ImGui::GetContentRegionAvail();
+  float splitterW   = 6_px;
+  float minRightW   = 220_px;
+  float minLeftW    = 240_px;
+  float rightW      = showInspector
+    ? std::clamp(outerAvail.x * assetSplitFrac, minRightW,
+                 std::max(minRightW, outerAvail.x - minLeftW - splitterW))
+    : 0.0f;
+  float leftW       = showInspector
+    ? std::max(minLeftW, outerAvail.x - splitterW - rightW)
+    : 0.0f;
+
+  if (showInspector) {
+    ImGui::BeginChild("##codeLeft", ImVec2(leftW, 0), ImGuiChildFlags_None);
   }
 
   // Toolbar
@@ -238,6 +256,41 @@ bool Editor::CodeEditor::draw(ImGuiID defDockId)
     }
 
     ImGui::EndPopup();
+  }
+
+  if (showInspector) {
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+    ImGui::InvisibleButton("##codeAssetSplit", ImVec2(splitterW, -1));
+    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+      assetSplitDragging = true;
+      float dx = ImGui::GetIO().MouseDelta.x;
+      if (outerAvail.x > splitterW * 2) {
+        assetSplitFrac -= dx / (outerAvail.x - splitterW);
+        assetSplitFrac = std::clamp(assetSplitFrac, 0.18f, 0.55f);
+      }
+    } else {
+      assetSplitDragging = false;
+    }
+    if (ImGui::IsItemHovered() || assetSplitDragging) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+    {
+      ImVec2 a = ImGui::GetItemRectMin();
+      ImVec2 b = ImGui::GetItemRectMax();
+      ImU32 col = ImGui::GetColorU32(assetSplitDragging ? ImGuiCol_SeparatorActive : ImGuiCol_Separator);
+      ImGui::GetWindowDrawList()->AddRectFilled(
+        {(a.x + b.x) * 0.5f - 1.0f, a.y},
+        {(a.x + b.x) * 0.5f + 1.0f, b.y},
+        col
+      );
+    }
+
+    ImGui::SameLine();
+    ImGui::BeginChild("##codeInspector", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    Editor::AssetInspector::draw(assetUUID);
+    ImGui::EndChild();
   }
 
   ImGui::End();

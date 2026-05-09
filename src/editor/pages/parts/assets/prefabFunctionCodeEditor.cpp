@@ -27,6 +27,7 @@ Editor::PrefabFunctionCodeEditor::PrefabFunctionCodeEditor(
   editor->SetPalette(TextEditor::GetDarkPalette());
   editor->SetShowWhitespaces(false);
   editor->SetTabSize(4);
+  editor->SetLineSpacing(1.35f);
   loadFromDisk();
 }
 
