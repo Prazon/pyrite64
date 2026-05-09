@@ -44,8 +44,10 @@ namespace Project::MaterialGraph
       // the v1 (transcribe-only) compile model.
       void compile(::Project::Assets::Material &out);
 
-      // Seed an empty graph with one Output sink. Used the first time a
-      // .p64mat is created so the user opens it to a non-blank canvas.
+      // Seed an empty graph with a working flat-colour pipeline:
+      // Colors (Prim grey) and ColorCombiner (PRIM solid) wired into
+      // Output. Used the first time a .p64mat is created so the user
+      // opens it to a previewable, immediately-editable material.
       void seedDefaults();
   };
 }

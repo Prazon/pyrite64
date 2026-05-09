@@ -99,7 +99,31 @@ namespace Project::MaterialGraph
 
   void Graph::seedDefaults()
   {
-    addNode(TYPE_OUTPUT, ImVec2{420.0f, 60.0f});
+    // The RDP default combiner samples a texture, so a Colors node alone
+    // would produce no visible colour. Wire a PRIM-solid CC to the Output
+    // too, so a fresh material previews as a flat colour the user can edit.
+    auto outputNode = addNode(TYPE_OUTPUT,         ImVec2{460.0f, 60.0f});
+    auto ccNode     = addNode(TYPE_COLOR_COMBINER, ImVec2{60.0f, 40.0f});
+    auto colorsNode = addNode(TYPE_COLORS,         ImVec2{60.0f, 260.0f});
+
+    // PRIM solid: D=3 picks Prim / Prim-alpha; A,B,C use the "0" slots
+    // from N64::CC::NAMES_* in ccMapping.h.
+    glm::ivec4 cc0Color{8, 8, 16, 3};
+    glm::ivec4 cc0Alpha{7, 7,  7, 3};
+    nlohmann::json ccJ;
+    ccJ["cc"] = N64::CC::packCC(cc0Color, cc0Alpha, cc0Color, cc0Alpha);
+    ccNode->deserialize(ccJ);
+
+    nlohmann::json colJ;
+    colJ["setPrim"] = true;
+    colJ["prim"]    = {0.8f, 0.8f, 0.8f, 1.0f};
+    colJ["setEnv"]  = false;
+    colJ["env"]     = {0.5f, 0.5f, 0.5f, 1.0f};
+    colorsNode->deserialize(colJ);
+
+    // Output IN pins in declaration order: 0 Color Combiner, 3 Colors.
+    ccNode->getOuts()[0]->createLink(outputNode->getIns()[0].get());
+    colorsNode->getOuts()[0]->createLink(outputNode->getIns()[3].get());
   }
 
   bool Graph::deserialize(const std::string &jsonData)
