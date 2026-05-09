@@ -48,7 +48,7 @@ namespace
   // by the same enum the header defines so callers can index chips[CHIP_X]
   // and CHIP_DEFS[CHIP_X] without drift.
   constexpr std::array<ChipDef, ChipKind::CHIP_COUNT> CHIP_DEFS = {
-    ChipDef{ "Scenes",      ICON_MDI_EARTH_BOX,                FileType::UNKNOWN,    false },
+    ChipDef{ "Scenes",      ICON_MDI_MOVIE_OPEN_OUTLINE,       FileType::UNKNOWN,    false },
     ChipDef{ "Prefabs",     ICON_MDI_PACKAGE_VARIANT_CLOSED,   FileType::PREFAB,     false },
     ChipDef{ "Images",      ICON_MDI_FILE_IMAGE_OUTLINE,       FileType::IMAGE,      false },
     ChipDef{ "Models",      ICON_MDI_CUBE_OUTLINE,             FileType::MODEL_3D,   false },
@@ -375,7 +375,7 @@ void Editor::AssetsBrowser::draw() {
 
     ImGui::Separator();
 
-    if (ImGui::MenuItem(ICON_MDI_EARTH_BOX_PLUS " New Scene")) {
+    if (ImGui::MenuItem(ICON_MDI_MOVIE_OPEN_PLUS_OUTLINE " New Scene")) {
       ctx.project->getScenes().add();
       const auto &after = ctx.project->getScenes().getEntries();
       if (!after.empty() && !currentDir.empty()) {
@@ -785,7 +785,7 @@ void Editor::AssetsBrowser::draw() {
           ImGui::EndTabItem();
         }
       };
-      tabItem(ICON_MDI_EARTH_BOX " Scenes",                 TAB_SCENES);
+      tabItem(ICON_MDI_MOVIE_OPEN_OUTLINE " Scenes",        TAB_SCENES);
       tabItem(ICON_MDI_FILE_IMAGE_OUTLINE " Assets",        TAB_ASSETS);
       tabItem(ICON_MDI_LANGUAGE_CPP " Scripts",             TAB_SCRIPTS);
       tabItem(ICON_MDI_PACKAGE_VARIANT_CLOSED " Prefabs",   TAB_PREFABS);
@@ -1465,7 +1465,10 @@ void Editor::AssetsBrowser::draw() {
         ctx.selAssetUUID = 0;
       }
       if (isDblClick) {
-        ctx.project->getScenes().loadScene(scene.id);
+        // Defer the actual swap until after this frame's draw completes -
+        // doing it inline would free the live Scene while the rest of the
+        // editor (Object/Graph/Layers panels, EditScope) still holds it.
+        ctx.project->getScenes().requestLoad(scene.id);
         ctx.project->conf.sceneIdLastOpened = scene.id;
         ctx.project->saveConfig();
       }

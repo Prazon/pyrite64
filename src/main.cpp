@@ -463,6 +463,10 @@ int main(int argc, char** argv)
         } else {
           ctx.editorScene->draw();
         }
+        // Apply any deferred scene swap requested during draw (e.g. asset
+        // browser double-click). Must run after EditScope has ended so the
+        // outgoing Scene isn't bound to a dangling reference.
+        ctx.project->getScenes().processPendingLoad();
       } else {
         editorMain.draw();
       }

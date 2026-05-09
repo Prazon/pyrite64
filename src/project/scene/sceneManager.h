@@ -31,6 +31,11 @@ namespace Project
       std::vector<SceneEntry> entries{};
       Project *project;
       Scene *loadedScene{nullptr};
+      // -1 = no pending swap. Set by requestLoad(); consumed at end of frame
+      // by processPendingLoad() so we never free the live Scene mid-draw.
+      int pendingLoadId{-1};
+
+      void loadSceneInternal(int id, bool saveCurrent);
 
     public:
       SceneManager(Project *pr) : project{pr} {
@@ -48,6 +53,16 @@ namespace Project
       void duplicate(int id);
 
       void loadScene(int id);
+
+      // Defer a scene swap until the current draw frame finishes. Safe to call
+      // from inside ImGui draw code (e.g. asset browser double-click).
+      void requestLoad(int id);
+
+      // Run any pending swap requested via requestLoad(). Prompts to save when
+      // the active scene's undo history is dirty. Call once per frame, after
+      // the editor's draw() has returned and any EditScope has ended.
+      void processPendingLoad();
+
       [[nodiscard]] Scene* getLoadedScene() const { return loadedScene; }
 
       // Re-read a scene from disk, replacing the in-memory copy when it is

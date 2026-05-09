@@ -6,6 +6,8 @@
 #include "../project.h"
 #include <filesystem>
 
+#include <SDL3/SDL.h>
+
 #include "../../context.h"
 #include "../../utils/fs.h"
 #include "../../utils/json.h"
@@ -134,17 +136,64 @@ void Project::SceneManager::duplicate(int id)
 }
 
 void Project::SceneManager::loadScene(int id) {
+  loadSceneInternal(id, true);
+}
+
+void Project::SceneManager::loadSceneInternal(int id, bool saveCurrent) {
   if (loadedScene) {
-    loadedScene->save();
-    auto p = fs::path{getScenePath(project)} / std::to_string(loadedScene->getId()) / "scene.json";
-    project->noteSelfWrite(p.string());
+    if (saveCurrent) {
+      loadedScene->save();
+      auto p = fs::path{getScenePath(project)} / std::to_string(loadedScene->getId()) / "scene.json";
+      project->noteSelfWrite(p.string());
+    }
     delete loadedScene;
+    loadedScene = nullptr;
     reload(); // ensure names are up to date in case the loaded scene was renamed
   }
   //if we load a scene we should clear the undo history
   Editor::UndoRedo::getHistory().clear();
+  // Object pointers reseat on load; any selection from the previous scene
+  // would now point at freed objects (or, on same-id reload, at fresh
+  // copies that won't match what the user had highlighted).
+  ctx.mainSelection.clear();
 
   loadedScene = new Scene(id, project->getPath());
+}
+
+void Project::SceneManager::requestLoad(int id) {
+  pendingLoadId = id;
+}
+
+void Project::SceneManager::processPendingLoad() {
+  if (pendingLoadId < 0) return;
+  int target = pendingLoadId;
+  pendingLoadId = -1;
+
+  bool saveCurrent = true;
+  if (loadedScene && Editor::UndoRedo::getHistory().isDirty()) {
+    const SDL_MessageBoxButtonData buttons[] = {
+      { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Save" },
+      { 0,                                       2, "Discard" },
+      { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 3, "Cancel" },
+    };
+    SDL_MessageBoxData mb{};
+    mb.flags = SDL_MESSAGEBOX_WARNING;
+    mb.window = ctx.window;
+    mb.title = "Unsaved Changes";
+    mb.message = "The current scene has unsaved changes. Save before opening another scene?";
+    mb.numbuttons = SDL_arraysize(buttons);
+    mb.buttons = buttons;
+
+    int btn = -1;
+    if (!SDL_ShowMessageBox(&mb, &btn)) {
+      // Dialog itself failed; bail rather than silently dropping work.
+      return;
+    }
+    if (btn == 3 || btn == -1) return; // Cancel
+    saveCurrent = (btn == 1);
+  }
+
+  loadSceneInternal(target, saveCurrent);
 }
 
 void Project::SceneManager::reloadFromDisk(int id)
