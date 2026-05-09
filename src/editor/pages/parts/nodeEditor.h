@@ -25,6 +25,7 @@ namespace Editor
       uint64_t highlightNodeUUID{0};
       float    highlightSecondsLeft{0.0f};
       bool     forceFocusNextFrame{false};
+      bool     firstDockFrame{true};
 
     public:
       NodeEditor(uint64_t assetUUID);

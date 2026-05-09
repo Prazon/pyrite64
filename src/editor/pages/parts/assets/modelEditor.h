@@ -24,6 +24,7 @@ namespace Editor
       float    previewSplitFrac{0.55f};
       bool     splitDragging{false};
       bool     forceFocusNextFrame{true};
+      bool     firstDockFrame{true};
 
     public:
       explicit ModelEditor(uint64_t assetUUID) : assetUUID(assetUUID) {}

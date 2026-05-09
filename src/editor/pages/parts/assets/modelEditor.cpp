@@ -9,6 +9,7 @@
 #include "libdragon.h"
 #include "ccMapping.h"
 #include "textureEditor.h"
+#include "assetEditorDocking.h"
 #include "../../../../context.h"
 #include "../../../imgui/helper.h"
 #include "../../editorScene.h"
@@ -128,14 +129,10 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
   winName = model->name
     + "###ModelEditorWin_" + std::to_string(assetUUID);
 
-  // Dock as a sibling tab of Scene Editor; OS chrome on undock — see
-  // PrefabEditor::draw for rationale.
-  ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
-  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
-  ImGui::SetNextWindowClass(&cls);
-
-  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  // Dock as a sibling tab of Scene Editor on first open; let undocked
+  // floating instances merge into the main viewport when over it (see
+  // assetEditorDocking.h).
+  Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);

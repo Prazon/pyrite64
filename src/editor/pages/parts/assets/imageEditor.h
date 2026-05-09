@@ -28,6 +28,7 @@ namespace Editor
       // Force focus on first appearance so the window doesn't open silently
       // behind another tab in a saved dock node.
       bool   forceFocusNextFrame{true};
+      bool   firstDockFrame{true};
 
       // Sprite slicing overlay state — purely visualization in v1, not persisted
       bool   sliceShow{false};

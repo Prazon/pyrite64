@@ -5,6 +5,7 @@
 #include "nodeEditor.h"
 
 #include "imgui.h"
+#include "assets/assetEditorDocking.h"
 #include "IconsMaterialDesignIcons.h"
 #include "../../../context.h"
 #include "../../../utils/logger.h"
@@ -119,16 +120,10 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
     ImGui::SetNextWindowSize({800,600}, ImGuiCond_Once);
   }
 
-  // Dock as a sibling tab of Scene Editor; OS chrome on undock — see
-  // PrefabEditor::draw for rationale. Stable ###suffix keeps saved
-  // position/dock state across asset renames and invalidates legacy
-  // imgui.ini entries that had no ### at all.
-  ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
-  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
-  ImGui::SetNextWindowClass(&cls);
-
-  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  // Dock as a sibling tab of Scene Editor on first open. Stable ###suffix
+  // keeps saved position/dock state across asset renames and invalidates
+  // legacy imgui.ini entries that had no ### at all.
+  Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(

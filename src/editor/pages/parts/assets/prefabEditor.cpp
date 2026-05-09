@@ -9,6 +9,7 @@
 #include "imgui_internal.h"
 #include "IconsMaterialDesignIcons.h"
 
+#include "assetEditorDocking.h"
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
 #include "../../../../utils/hash.h"
@@ -183,15 +184,8 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
 
   // Dock as a sibling tab of "Scene Editor" in the outer top region on
   // first open — so focusing this editor swaps the upper area instead of
-  // squeezing into the same panel as the 3D-Viewport. NoAutoMerge +
-  // cleared NoDecoration only matter when the user drags the tab out into
-  // its own OS window: full native chrome (title bar / resize / maximize).
-  ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
-  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
-  ImGui::SetNextWindowClass(&cls);
-
-  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  // squeezing into the same panel as the 3D-Viewport.
+  Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);

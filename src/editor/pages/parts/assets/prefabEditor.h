@@ -55,6 +55,7 @@ namespace Editor
       Viewport3D viewport{scene, selection};
 
       bool forceFocusNextFrame{true};
+      bool firstDockFrame{true};
       // Last-saved JSON of the prefab subtree; used for dirty detection.
       std::string savedJSON{};
       // Last-saved serialized form of the variables list, for dirty tracking

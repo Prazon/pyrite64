@@ -10,6 +10,7 @@
 #include "json.hpp"
 #include "IconsMaterialDesignIcons.h"
 
+#include "assetEditorDocking.h"
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
 #include "../../../../utils/logger.h"
@@ -129,17 +130,13 @@ bool Editor::MaterialEditor::draw(ImGuiID defDockId)
     + (isDirty() ? " *" : "");
   winName = title + "###MaterialEditorWin_" + std::to_string(assetUUID);
 
-  ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
-  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
-  ImGui::SetNextWindowClass(&cls);
-
   if (firstDockTarget && !firstDockApplied) {
     ImGui::DockBuilderDockWindow(winName.c_str(), firstDockTarget);
     ImGui::SetNextWindowDockID(firstDockTarget, ImGuiCond_Always);
     firstDockApplied = true;
-  } else if (defDockId) {
-    ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+    firstDockFrame = false;
+  } else {
+    Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
   }
 
   if (!isInit) {

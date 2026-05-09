@@ -34,6 +34,7 @@ namespace Editor
 
       ImGuiID firstDockTarget{0};
       bool   firstDockApplied{false};
+      bool   firstDockFrame{true};
 
       // Unreal-style left preview / right graph layout. previewSplitFrac is
       // the fraction of the editor's content width given to the left pane

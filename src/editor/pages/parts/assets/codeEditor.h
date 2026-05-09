@@ -35,6 +35,7 @@ namespace Editor
       // viewport instead of the outer Scene-Editor strip.
       ImGuiID firstDockTarget{0};
       bool   firstDockApplied{false};
+      bool   firstDockFrame{true};
 
       // Last text we wrote / loaded. Used to decide if the buffer is dirty.
       std::string savedText{};

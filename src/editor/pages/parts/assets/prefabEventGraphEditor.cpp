@@ -6,6 +6,7 @@
 #include "json.hpp"
 #include "IconsMaterialDesignIcons.h"
 
+#include "assetEditorDocking.h"
 #include <unordered_set>
 
 #include "../../../../context.h"
@@ -168,13 +169,6 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
   // multi-viewport support landed.
   winName = title + "###PrefabEventGraphWin_" + std::to_string(assetUUID);
 
-  // Dock as a sibling tab of Scene Editor; OS chrome on undock — see
-  // PrefabEditor::draw for rationale.
-  ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
-  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
-  ImGui::SetNextWindowClass(&cls);
-
   // First-frame dock override wins over the loop-passed default. Lets the
   // PrefabEditor host its event graph as a sibling tab of its viewport.
   // DockBuilderDockWindow + SetNextWindowDockID(Always) together beat any
@@ -185,8 +179,9 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
     ImGui::DockBuilderDockWindow(winName.c_str(), firstDockTarget);
     ImGui::SetNextWindowDockID(firstDockTarget, ImGuiCond_Always);
     firstDockApplied = true;
-  } else if (defDockId) {
-    ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+    firstDockFrame = false;
+  } else {
+    Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
   }
 
   if (!isInit) {

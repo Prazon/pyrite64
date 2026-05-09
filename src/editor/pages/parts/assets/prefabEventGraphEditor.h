@@ -32,6 +32,7 @@ namespace Editor
       // landing on the outer Scene-Editor strip).
       ImGuiID firstDockTarget{0};
       bool   firstDockApplied{false};
+      bool   firstDockFrame{true};
 
       // Reveal-from-Compile-Errors state. Set by requestFocusNode(); the next
       // draw frame consumes pendingFocusNodeUUID — it pans the canvas to

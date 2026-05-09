@@ -35,6 +35,7 @@ namespace Editor
       // CodeEditor (DockBuilderDockWindow + SetNextWindowDockID(Always)).
       ImGuiID firstDockTarget{0};
       bool   firstDockApplied{false};
+      bool   firstDockFrame{true};
 
       // Snapshot of the slice last loaded/saved — drives the dirty marker.
       std::string savedText{};

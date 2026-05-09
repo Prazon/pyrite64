@@ -5,6 +5,7 @@
 */
 #include "imageEditor.h"
 
+#include "assetEditorDocking.h"
 #include "../../../../context.h"
 #include "../../../imgui/helper.h"
 #include "imgui_internal.h"
@@ -66,14 +67,7 @@ bool Editor::ImageEditor::draw(ImGuiID defDockId)
   winName = "Image: " + asset->name
     + "###ImageEditorWin_" + std::to_string(assetUUID);
 
-  // Dock as a sibling tab of Scene Editor; OS chrome on undock — see
-  // PrefabEditor::draw for rationale.
-  ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
-  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
-  ImGui::SetNextWindowClass(&cls);
-
-  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);

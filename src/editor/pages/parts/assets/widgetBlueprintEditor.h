@@ -47,6 +47,7 @@ namespace Editor
       Viewport2D viewport{scene, selection};
 
       bool forceFocusNextFrame{true};
+      bool firstDockFrame{true};
       // Last-saved JSON of the widget subtree; used for dirty detection.
       std::string savedJSON{};
 

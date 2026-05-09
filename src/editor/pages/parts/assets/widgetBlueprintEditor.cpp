@@ -13,6 +13,7 @@
 #include "imgui_internal.h"
 #include "IconsMaterialDesignIcons.h"
 
+#include "assetEditorDocking.h"
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
 #include "../../../../utils/logger.h"
@@ -186,12 +187,7 @@ bool Editor::WidgetBlueprintEditor::draw(ImGuiID defDockId)
     + displayName + (isDirty() ? " *" : "");
   winName = baseTitle + "###WidgetBPEditorWin_" + std::to_string(assetUUID);
 
-  ImGuiWindowClass cls{};
-  cls.ViewportFlagsOverrideSet   = ImGuiViewportFlags_NoAutoMerge;
-  cls.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration;
-  ImGui::SetNextWindowClass(&cls);
-
-  if (defDockId) ImGui::SetNextWindowDockID(defDockId, ImGuiCond_FirstUseEver);
+  Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
 
   auto *mvp = ImGui::GetMainViewport();
   ImGui::SetNextWindowSize(DEF_WIN_SIZE, ImGuiCond_FirstUseEver);
