@@ -30,6 +30,12 @@ namespace Build
 
   bool buildProject(const std::string &path);
 
+  // Regenerate just <project>/src/p64/assetTable.h from the current asset
+  // manager state. Light alternative to a full buildProject when the editor's
+  // file watcher detects an asset add/remove and we want the generated header
+  // to stay in sync without compiling.
+  bool regenerateAssetTable(Project::Project &project);
+
   struct CleanArgs
   {
     bool code{true};

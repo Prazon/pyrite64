@@ -387,7 +387,12 @@ int main(int argc, char** argv)
 
       Utils::FilePicker::poll();
       if (ctx.project) {
-        ctx.project->getAssets().pollWatch();
+        if (ctx.project->getAssets().pollWatch()) {
+          // Keep the generated path -> idx header in sync with assets/ between
+          // full builds, so user code (and tooling that greps the header) sees
+          // newly added assets without waiting for a rebuild.
+          Build::regenerateAssetTable(*ctx.project);
+        }
         ctx.project->pollExternalChanges();
       }
 

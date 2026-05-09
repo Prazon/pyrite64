@@ -51,6 +51,52 @@ void Build::SceneCtx::addAsset(const Project::AssetManagerEntry &entry)
   stringOffset += entry.romPath.size() + 1;
 }
 
+bool Build::regenerateAssetTable(Project::Project &project)
+{
+  // Mirror the iteration order and skip rules of buildProject's main asset
+  // loop so the indices we emit match what the next full build will produce.
+  // Only file-path-addressable entries from the asset manager show up here;
+  // synthesized entries that buildProject appends later (e.g. t3dm collision
+  // sub-assets) come after these, so 0..N-1 stay stable.
+  std::string assetFileMap{};
+  size_t idx = 0;
+  for (auto &typed : project.getAssets().getEntries()) {
+    for (auto &entry : typed) {
+      if (entry.conf.exclude
+        || entry.type == AT::UNKNOWN
+        || entry.type == AT::CODE_OBJ
+        || entry.type == AT::CODE_GLOBAL
+        || entry.type == AT::RESOURCE_TYPE
+      ) continue;
+
+      if (entry.romPath.size() > 5) {
+        auto outNameNoPrefix = entry.romPath.substr(5); // strip "rom:/"
+        assetFileMap += "if(path == \"" + outNameNoPrefix + "\")return "
+          + std::to_string(idx) + ";\n";
+      }
+      ++idx;
+    }
+  }
+
+  auto assetTableCode = Utils::replaceAll(
+    Utils::FS::loadTextFile("data/scripts/assetTable.h"),
+    "{{ASSET_MAP}}", assetFileMap
+  );
+
+  auto outPath = project.getPath() + "/src/p64/assetTable.h";
+  // Skip the write when the on-disk header already matches. Avoids touching
+  // the file's mtime on every watcher tick (which would re-trigger downstream
+  // file watchers and add VCS churn) and keeps the no-op case truly cheap.
+  if (fs::exists(outPath)) {
+    auto existing = Utils::FS::loadTextFile(outPath);
+    if (existing == assetTableCode) {
+      return false;
+    }
+  }
+  Utils::FS::saveTextFile(outPath, assetTableCode);
+  return true;
+}
+
 bool Build::buildProject(const std::string &configPath)
 {
   Project::Project project{configPath};
