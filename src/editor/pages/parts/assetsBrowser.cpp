@@ -1012,6 +1012,28 @@ void Editor::AssetsBrowser::draw() {
       createBlankPrefab(assetsCurAbs);
     }
 
+    if (ImGui::MenuItem(ICON_MDI_DATABASE_EDIT " New Resource Type")) {
+      // Editor-authored .p64restype: empty schema, freshly-minted uuid, lives
+      // under the current virtual directory. Auto-select so the user lands in
+      // the AssetInspector ready to start adding fields.
+      auto findFreeName = [&]() -> std::string {
+        for (int i = 1; i < 1000; ++i) {
+          std::string n = (i == 1) ? "ResourceType" : ("ResourceType_" + std::to_string(i));
+          if (!fs::exists(assetsCurAbs / (n + ".p64restype"))) return n;
+        }
+        return "ResourceType_X";
+      };
+      uint64_t newUUID = ctx.project->getAssets().createResourceType(
+        findFreeName(), currentDir
+      );
+      if (newUUID) {
+        ctx.selAssetUUID = newUUID;
+      } else {
+        Editor::Noti::add(Editor::Noti::Type::ERROR,
+          "Failed to create resource type.");
+      }
+    }
+
     if (ImGui::MenuItem(ICON_MDI_PALETTE_SWATCH " New Material")) {
       // createMaterial() writes into <project>/assets/ directly (matching
       // the existing createNodeGraph contract — current sub-dir isn't

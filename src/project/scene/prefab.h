@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "object.h"
+#include "varDef.h"
 #include "../../utils/prop.h"
 #include "../component/components.h"
 #include "glm/vec3.hpp"
@@ -17,29 +18,11 @@ namespace Project
 {
   class Scene;
 
-  // Prefab class variables (Blueprint-actor style). Each variable has a
-  // stable uuid (so renames don't break per-instance overrides), a name,
-  // a type, and a default value. typeKind values are persisted to disk —
-  // do not renumber.
-  enum class PrefabVarKind : uint8_t {
-    INT       = 0,  // int32_t
-    FLOAT     = 1,
-    BOOL      = 2,
-    VEC3      = 3,
-    QUAT      = 4,
-    OBJECT_REF = 5, // any P64::Object*, stored as uint64_t object uuid
-    PREFAB_REF = 6, // typed Object*, typeArg = prefab uuid
-    ASSET_REF  = 7, // reserved for future asset-uuid refs
-  };
-
-  struct PrefabVarDef
-  {
-    uint64_t uuid{};            // stable id used as key in instance override maps
-    std::string name{};
-    PrefabVarKind kind{PrefabVarKind::INT};
-    uint64_t typeArg{0};        // PREFAB_REF: target prefab uuid; ASSET_REF: asset-type tag
-    GenericValue defaultValue{};
-  };
+  // Prefab class variables (Blueprint-actor style). The kind enum and
+  // definition struct are shared with editor-authored Resource type fields.
+  // Aliases preserve the historical names used throughout the prefab code.
+  using PrefabVarKind = VarKind;
+  using PrefabVarDef = VarDef;
 
   class Prefab
   {

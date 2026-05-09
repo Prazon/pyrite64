@@ -16,6 +16,7 @@
 #include "assets/materialAsset.h"
 #include "assets/model3d.h"
 #include "assets/resourceInstance.h"
+#include "assets/resourceType.h"
 #include "scene/prefab.h"
 #include "tiny3d/tools/gltf_importer/src/structs.h"
 
@@ -86,6 +87,10 @@ namespace Project
     std::shared_ptr<Renderer::N64Mesh> mesh3D{};
     std::shared_ptr<Prefab> prefab{nullptr};
     std::shared_ptr<Resource::Instance> resource{nullptr};
+    // Set only for editor-authored RESOURCE_TYPE assets (.p64restype). When
+    // null on a RESOURCE_TYPE entry, the type is header-authored and `params`
+    // holds the parsed C++ struct schema.
+    std::shared_ptr<Resource::Type> resourceType{nullptr};
     std::shared_ptr<Assets::MaterialAsset> materialAsset{nullptr};
     AssetConf conf{};
     Utils::CPP::Struct params{};
@@ -201,5 +206,9 @@ namespace Project
       // Material. Returns the new asset's UUID, or 0 on failure.
       uint64_t createMaterial(const std::string &name);
       uint64_t createResourceInstance(const std::string &name, uint64_t typeUuid, const std::string &subDir = {});
+      // Creates an editor-authored RESOURCE_TYPE schema (.p64restype) under
+      // <project>/assets/<subDir>/<name>.p64restype with no fields. Returns
+      // the new asset's UUID, or 0 on validation/IO failure.
+      uint64_t createResourceType(const std::string &name, const std::string &subDir = {});
   };
 }

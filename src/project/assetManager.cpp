@@ -134,6 +134,10 @@ namespace
     } else if (ext == ".p64res") {
       type = Project::FileType::RESOURCE_INSTANCE;
       outPath = changeExt(outPath, ".res");
+    } else if (ext == ".p64restype") {
+      // Editor-authored resource type schema. No ROM artifact of its own;
+      // RESOURCE_INSTANCE assets that reference it produce the binary blob.
+      type = Project::FileType::RESOURCE_TYPE;
     } else if (ext == ".p64mat") {
       // Material assets resolve at editor build time — they don't emit a
       // ROM blob themselves (the model that references them stamps the
@@ -321,6 +325,19 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
       entry.resource->deserialize(Utils::FS::loadTextFile(path));
     } break;
 
+    case FileType::RESOURCE_TYPE:
+    {
+      // Only editor-authored types (.p64restype) get reloaded here;
+      // header-authored types live under the code path and are seeded once
+      // in buildCodeEntry, never re-parsed via reloadEntry.
+      auto ext = fs::path{path}.extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+      if (ext == ".p64restype") {
+        entry.resourceType = std::make_shared<Resource::Type>();
+        entry.resourceType->deserialize(Utils::FS::loadTextFile(path));
+      }
+    } break;
+
     case FileType::MATERIAL:
     {
       entry.materialAsset = std::make_shared<Assets::MaterialAsset>();
@@ -460,6 +477,19 @@ void Project::AssetManager::reload() {
           // the conf uuid that buildAssetEntry generated, and persist.
           assetEntry.resource->uuid = assetEntry.conf.uuid;
           Utils::FS::saveTextFile(assetEntry.path, assetEntry.resource->serialize());
+        }
+      }
+
+      if (assetEntry.type == FileType::RESOURCE_TYPE) {
+        // Editor-authored .p64restype: load schema and align uuids.
+        // Header-authored .h types come in via buildCodeEntry below and
+        // skip this branch (resourceType stays null).
+        reloadEntry(assetEntry, path.string());
+        if (assetEntry.resourceType && assetEntry.resourceType->uuid != 0) {
+          assetEntry.conf.uuid = assetEntry.resourceType->uuid;
+        } else if (assetEntry.resourceType) {
+          assetEntry.resourceType->uuid = assetEntry.conf.uuid;
+          Utils::FS::saveTextFile(assetEntry.path, assetEntry.resourceType->serialize());
         }
       }
 
@@ -1011,6 +1041,40 @@ uint64_t Project::AssetManager::createMaterial(const std::string &name)
   asset.compiled.isCustom.value = true;
 
   Utils::FS::saveTextFile(filePath, asset.serialize());
+  reload();
+  auto entry = getByPath(filePath.string());
+  return entry ? entry->getUUID() : 0;
+}
+
+uint64_t Project::AssetManager::createResourceType(
+  const std::string &name, const std::string &subDir)
+{
+  if (name.empty()) return 0;
+  if (name.find_first_of("/\\:*?\"<>|") != std::string::npos) return 0;
+
+  auto assetPath = getAssetPath(project);
+  fs::path dirPath = assetPath;
+  if (!subDir.empty()) {
+    fs::path relPath{subDir};
+    if (!relPath.is_absolute()) {
+      relPath = relPath.lexically_normal();
+      bool hasParent = false;
+      for (const auto &part : relPath) {
+        if (part == "..") { hasParent = true; break; }
+      }
+      if (!hasParent) dirPath /= relPath;
+    }
+  }
+  fs::create_directories(dirPath);
+
+  auto filePath = dirPath / (name + ".p64restype");
+  if (fs::exists(filePath)) return 0;
+
+  Resource::Type type{};
+  type.uuid = Utils::Hash::randomU64();
+  type.name = name;
+  Utils::FS::saveTextFile(filePath, type.serialize());
+
   reload();
   auto entry = getByPath(filePath.string());
   return entry ? entry->getUUID() : 0;

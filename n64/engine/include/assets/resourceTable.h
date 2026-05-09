@@ -18,4 +18,35 @@ namespace P64::Resources
   // never call them directly.
   void callOnLoad(uint32_t assetIdx, void* data);
   void callOnUnload(uint32_t assetIdx, void* data);
+
+  // Editor-authored resource accessors. Resolve a field on a RESOURCE_INSTANCE
+  // by the stable uuid the editor minted when the field was added. Returns
+  // nullptr / 0 / false when:
+  //   - assetIdx is out of range or not a resource
+  //   - the resource type is header-authored (use the Data* cast instead)
+  //   - the type defines no field with that uuid
+  // Loads the asset on first access via the standard AssetManager path.
+  //
+  // VarKind values must agree with the editor's enum (see project/scene/varDef.h).
+  enum FieldKind : uint8_t {
+    INT        = 0,
+    FLOAT      = 1,
+    BOOL       = 2,
+    VEC3       = 3,
+    QUAT       = 4,
+    OBJECT_REF = 5,
+    PREFAB_REF = 6,
+    ASSET_REF  = 7,
+  };
+
+  // Raw byte pointer at the field's offset inside the loaded blob. Honours
+  // big-endian on-wire layout the resource builder emitted.
+  void* getFieldPtr(uint32_t assetIdx, uint64_t fieldUuid);
+
+  int32_t  getS32 (uint32_t assetIdx, uint64_t fieldUuid);
+  float    getF32 (uint32_t assetIdx, uint64_t fieldUuid);
+  bool     getBool(uint32_t assetIdx, uint64_t fieldUuid);
+  // Asset/object/prefab refs are stored as the asset-table index they resolve
+  // to at build time (0 = null, 0xFFFFFFFF = unresolved at build time).
+  uint32_t getRef (uint32_t assetIdx, uint64_t fieldUuid);
 }

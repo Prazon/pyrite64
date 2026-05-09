@@ -21,6 +21,18 @@ std::string Project::Resource::Instance::serialize() const
   }
   builder.doc["values"] = std::move(valuesObj);
 
+  // Editor-authored instances persist uuid-keyed values alongside the legacy
+  // string map so a single .p64res can roundtrip through either schema source.
+  if (!uuidValues.empty()) {
+    auto uuidObj = nlohmann::json::object();
+    for (const auto &[k, v] : uuidValues) {
+      // JSON object keys are strings; convert uint64 to decimal so it
+      // roundtrips losslessly without surprising float precision.
+      uuidObj[std::to_string(k)] = v.serialize();
+    }
+    builder.doc["uuidValues"] = std::move(uuidObj);
+  }
+
   return builder.toString();
 }
 
@@ -37,6 +49,17 @@ void Project::Resource::Instance::deserialize(const std::string &json)
     for (const auto &[k, v] : doc["values"].items()) {
       if (v.is_string()) values[k] = v.get<std::string>();
       else values[k] = v.dump();
+    }
+  }
+
+  uuidValues.clear();
+  if (doc.contains("uuidValues") && doc["uuidValues"].is_object()) {
+    for (const auto &[k, v] : doc["uuidValues"].items()) {
+      uint64_t key = 0;
+      try { key = std::stoull(k); } catch (...) { continue; }
+      GenericValue gv{};
+      gv.deserialize(v.is_string() ? v.get<std::string>() : v.dump());
+      uuidValues[key] = std::move(gv);
     }
   }
 }

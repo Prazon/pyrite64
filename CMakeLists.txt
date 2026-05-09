@@ -259,6 +259,8 @@ add_executable(pyrite64 src/main.cpp
         src/project/prefabFunctions.cpp
         src/project/assets/resourceInstance.h
         src/project/assets/resourceInstance.cpp
+        src/project/assets/resourceType.h
+        src/project/assets/resourceType.cpp
         src/utils/hash.cpp
         src/utils/prop.cpp
         src/build/textureBuilder.cpp
@@ -314,6 +316,8 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/prefabEventGraphEditor.cpp
         src/editor/pages/parts/assets/prefabFunctionCodeEditor.h
         src/editor/pages/parts/assets/prefabFunctionCodeEditor.cpp
+        src/editor/pages/parts/assets/resourceTypeEditor.h
+        src/editor/pages/parts/assets/resourceTypeEditor.cpp
         src/editor/pages/parts/assets/assetPreviewViewport.h
         src/editor/pages/parts/assets/assetPreviewViewport.cpp
         src/project/assets/material.h
