@@ -24,6 +24,7 @@
 #include "scene/components/sprite2D.h"
 #include "scene/components/label2D.h"
 #include "scene/components/progressBar2D.h"
+#include "scene/components/path.h"
 
 // some template magic to auto-detect if a function exists in a component
 #define HAS_FUNC_TPL(NAME_HAS, NAME_GET, FUNC) \
@@ -79,5 +80,6 @@ namespace P64
     SET_COMP(Label2D),
     SET_COMP(ProgressBar2D),
     SET_COMP(PaperSprite),
+    SET_COMP(Path),
   };
 }

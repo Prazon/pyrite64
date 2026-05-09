@@ -285,6 +285,7 @@ add_executable(pyrite64 src/main.cpp
         src/project/component/types/compAnimModel.cpp
         src/project/component/types/compSpriteBillboard.cpp
         src/project/component/types/compPaperSprite.cpp
+        src/project/component/types/compPath.cpp
         src/project/component/types/compSprite2D.cpp
         src/project/component/types/compLabel2D.cpp
         src/project/component/types/compProgressBar2D.cpp

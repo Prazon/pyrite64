@@ -149,6 +149,7 @@ namespace Project::Component
   MAKE_COMP(AnimModel)
   MAKE_COMP(SpriteBillboard)
   MAKE_COMP(PaperSprite)
+  MAKE_COMP(Path)
   MAKE_COMP(Primitive)
   MAKE_COMP(Sprite2D)
   MAKE_COMP(Label2D)
@@ -377,6 +378,19 @@ namespace Project::Component
       .funcDeserialize = PaperSprite::deserialize,
       .funcBuild = PaperSprite::build,
       .funcGetAABB = nullptr,
+    },
+    CompInfo{
+      .id = 18,
+      .icon = ICON_MDI_VECTOR_POLYLINE " ",
+      .name = "Path",
+      .funcInit = Path::init,
+      .funcDraw = Path::draw,
+      .funcDraw3D = Path::draw3D,
+      .funcSerialize = Path::serialize,
+      .funcDeserialize = Path::deserialize,
+      .funcBuild = Path::build,
+      .funcGetAABB = nullptr,
+      .funcDrawOverlay = Path::drawOverlay,
     },
   };
 
