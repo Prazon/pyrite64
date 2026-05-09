@@ -19,6 +19,7 @@
 #include "scene/components/nodeGraph.h"
 #include "scene/components/animModel.h"
 #include "scene/components/spriteBillboard.h"
+#include "scene/components/paperSprite.h"
 #include "scene/components/primitive.h"
 #include "scene/components/sprite2D.h"
 #include "scene/components/label2D.h"
@@ -77,5 +78,6 @@ namespace P64
     SET_COMP(Sprite2D),
     SET_COMP(Label2D),
     SET_COMP(ProgressBar2D),
+    SET_COMP(PaperSprite),
   };
 }

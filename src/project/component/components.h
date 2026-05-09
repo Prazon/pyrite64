@@ -148,6 +148,7 @@ namespace Project::Component
   MAKE_COMP(NodeGraph)
   MAKE_COMP(AnimModel)
   MAKE_COMP(SpriteBillboard)
+  MAKE_COMP(PaperSprite)
   MAKE_COMP(Primitive)
   MAKE_COMP(Sprite2D)
   MAKE_COMP(Label2D)
@@ -364,6 +365,18 @@ namespace Project::Component
       .funcBuild = ProgressBar2D::build,
       .funcGetAABB = nullptr,
       .funcDraw2D = ProgressBar2D::draw2D,
+    },
+    CompInfo{
+      .id = 17,
+      .icon = ICON_MDI_STICKER_OUTLINE " ",
+      .name = "Paper Sprite",
+      .funcInit = PaperSprite::init,
+      .funcDraw = PaperSprite::draw,
+      .funcDraw3D = PaperSprite::draw3D,
+      .funcSerialize = PaperSprite::serialize,
+      .funcDeserialize = PaperSprite::deserialize,
+      .funcBuild = PaperSprite::build,
+      .funcGetAABB = nullptr,
     },
   };
 
