@@ -1469,10 +1469,19 @@ void Editor::AssetsBrowser::draw() {
     }
   }
 
-  // Folders
+  // Folders. Unreal-style rule: hide folder cards whenever the user has
+  // narrowed the view (search box has text, or any chip is toggled off in
+  // unified mode). Folder navigation stays available via the left tree.
+  // This also dodges a font-atlas glitch where rapidly toggling chips
+  // would leave folder glyphs partially transparent for one frame.
+  bool everythingShown = searchFilter.empty();
+  if (everythingShown && !splitMode) {
+    for (int i = 0; i < ChipKind::CHIP_COUNT; ++i) {
+      if (!activeChips[i]) { everythingShown = false; break; }
+    }
+  }
   for (const auto &folder : folders) {
-    if (!searchFilter.empty() && folder.find(searchFilter) == std::string::npos) continue;
-
+    if (!everythingShown) continue;
     checkLineBreak();
     std::string virtChild = joinDir(currentDir, folder);
     std::string folderId  = "folder://" + virtChild;
