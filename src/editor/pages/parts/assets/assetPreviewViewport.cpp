@@ -120,6 +120,40 @@ void Editor::AssetPreviewViewport::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, R
   SDL_EndGPURenderPass(rp);
 }
 
+void Editor::AssetPreviewViewport::setFraming(float margin, float minFrac, float maxFrac)
+{
+  frameMargin  = std::max(0.5f, margin);
+  minZoomFrac  = std::max(0.0f, minFrac);
+  maxZoomFrac  = std::max(0.0f, maxFrac);
+  framed       = false; // reframe with the new margin next render
+}
+
+void Editor::AssetPreviewViewport::clampCameraDistance()
+{
+  if (minZoomFrac <= 0.0f && maxZoomFrac <= 0.0f) return;
+  if (!hasMesh || !meshPtr || !meshPtr->isLoaded()) return;
+
+  auto aabb = meshPtr->getAABB();
+  glm::vec3 halfExt = aabb.getHalfExtend() * MESH_RENDER_SCALE;
+  float radius = glm::length(halfExt);
+  if (radius < 0.001f) return;
+
+  glm::vec3 toCam = camera.pos - camera.pivot;
+  float dist = glm::length(toCam);
+  if (dist < 0.001f) return;
+
+  float minDist = (minZoomFrac > 0.0f) ? radius * minZoomFrac : 0.0f;
+  float maxDist = (maxZoomFrac > 0.0f) ? radius * maxZoomFrac : 1e30f;
+
+  if (dist < minDist) {
+    camera.pos = camera.pivot + (toCam / dist) * minDist;
+    camera.zoomSpeed = 0.0f;
+  } else if (dist > maxDist) {
+    camera.pos = camera.pivot + (toCam / dist) * maxDist;
+    camera.zoomSpeed = 0.0f;
+  }
+}
+
 void Editor::AssetPreviewViewport::renderHeadless(ImVec2 size)
 {
   if (size.x < 64.0f) size.x = 64.0f;
@@ -139,12 +173,14 @@ void Editor::AssetPreviewViewport::renderHeadless(ImVec2 size)
     glm::vec3 halfExt = aabb.getHalfExtend() * MESH_RENDER_SCALE;
     float radius = glm::length(halfExt);
     if (radius > 0.001f) {
-      camera.focus(center, std::max(radius * 2.4f, 100.0f));
+      camera.focus(center, std::max(radius * frameMargin, 100.0f));
       framed = true;
     }
   }
+  clampCameraDistance();
 
   camera.update();
+  clampCameraDistance();
   drewThisFrame = true;
 }
 
@@ -178,10 +214,11 @@ void Editor::AssetPreviewViewport::draw(ImVec2 size)
     if (radius > 0.001f) {
       // FOV is 70°; place camera ~2.4 radii away so the bounding sphere
       // fits comfortably with some margin.
-      camera.focus(center, std::max(radius * 2.4f, 100.0f));
+      camera.focus(center, std::max(radius * frameMargin, 100.0f));
       framed = true;
     }
   }
+  clampCameraDistance();
 
   ImVec2 cursor = ImGui::GetCursorScreenPos();
   cursor.x = floorf(cursor.x);
@@ -224,5 +261,6 @@ void Editor::AssetPreviewViewport::draw(ImVec2 size)
   }
 
   camera.update();
+  clampCameraDistance();
   drewThisFrame = true;
 }

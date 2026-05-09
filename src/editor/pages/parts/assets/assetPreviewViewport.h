@@ -47,7 +47,16 @@ namespace Editor
       bool      drewThisFrame{false};
       glm::vec2 mouseStart{};
 
+      // Distance multipliers measured in mesh-AABB radii. frameMargin is
+      // the auto-frame distance; minZoomFrac / maxZoomFrac are the dolly
+      // bounds. A zero zoom-frac disables that side of the clamp (model
+      // previews want free zoom; material previews override these).
+      float     frameMargin{2.4f};
+      float     minZoomFrac{0.0f};
+      float     maxZoomFrac{0.0f};
+
       void onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::Scene& renderScene);
+      void clampCameraDistance();
 
     public:
       AssetPreviewViewport();
@@ -67,6 +76,11 @@ namespace Editor
       // ImGui layout. Skips orbit/zoom interaction. Used by thumbnail
       // consumers that just want the rendered texture, not an inline image.
       void renderHeadless(ImVec2 size);
+
+      // Tighten or relax the auto-frame distance and dolly bounds. All values
+      // are in mesh-AABB radii. Pass 0 to either zoom-frac to disable that
+      // side of the clamp (the default — same behaviour as before).
+      void setFraming(float margin, float minFrac, float maxFrac);
 
       // Texture handle for the most recent render. Stable across frames
       // (SDL_GPU textures persist), so thumbnail consumers can keep

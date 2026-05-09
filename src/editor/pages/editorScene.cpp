@@ -488,6 +488,7 @@ void Editor::Scene::draw()
   // runs. Same hazard for both: each owns a GPU framebuffer.
   pendingModelEditorErase.clear();
   pendingPrefabEditorErase.clear();
+  pendingMaterialEditorErase.clear();
 
   std::vector<uint64_t> delUUIDs{};
   for(auto &[uuid, editor] : modelEditors) {
@@ -623,16 +624,23 @@ void Editor::Scene::draw()
   }
   for(auto &uuid : delFnCodeUUIDs) prefabFunctionCodeEditors.erase(uuid);
 
-  // Material asset editors. Same lifecycle as the prefab event graph
-  // editors above — a closed window drops its editor; dirty material
-  // graphs are silently discarded for now (Save button is explicit).
+  // Material asset editors. The editor owns a preview framebuffer (GPU
+  // texture referenced by ImGui's draw list this frame), so erase paths
+  // route through pendingMaterialEditorErase to defer destruction by one
+  // frame — same hazard as ModelEditor / PrefabEditor above.
   std::vector<uint64_t> delMaterialUUIDs{};
   for(auto &[uuid, editor] : materialEditors) {
     if (!editor->draw(dockSpaceID)) {
       delMaterialUUIDs.push_back(uuid);
     }
   }
-  for(auto &uuid : delMaterialUUIDs) materialEditors.erase(uuid);
+  for(auto &uuid : delMaterialUUIDs) {
+    auto it = materialEditors.find(uuid);
+    if (it != materialEditors.end()) {
+      pendingMaterialEditorErase.push_back(std::move(it->second));
+      materialEditors.erase(it);
+    }
+  }
 
   // SPBF64 fork: graph + inspector now take an explicit scene + selection.
   // Here we drive them with the project's active scene and the main selection.

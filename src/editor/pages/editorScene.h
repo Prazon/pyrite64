@@ -78,6 +78,11 @@ namespace Editor
       // ImGui's draw list — built earlier in the same frame — gets rendered,
       // causing a use-after-free / hard crash.
       std::vector<std::shared_ptr<ModelEditor>> pendingModelEditorErase{};
+      // MaterialEditor owns a MaterialPreviewViewport whose framebuffer GPU
+      // texture is still in this frame's draw list when the user closes the
+      // window. Defer its destruction by one frame for the same reason as
+      // pendingModelEditorErase / pendingPrefabEditorErase.
+      std::vector<std::shared_ptr<MaterialEditor>> pendingMaterialEditorErase{};
       PreferenceOverlay prefOverlay{};
       ProjectSettings projectSettings{};
       AssetsBrowser assetsBrowser{};

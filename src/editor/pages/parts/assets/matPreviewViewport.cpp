@@ -60,6 +60,10 @@ bool Editor::MaterialPreviewViewport::ensureHost()
     hostMesh->fromT3DM(*hostModel, assets);
 
     viewport.setMesh(0, hostMesh, hostModel.get());
+    // Material previews want a tight, bounded view: framed close (1.6 radii)
+    // so the cube actually fills the cell, and zoom locked to [1.05, 3.5]
+    // radii so users can't dolly inside the cube or shrink it to a dot.
+    viewport.setFraming(1.6f, 1.05f, 3.5f);
     hostLoaded = true;
     return true;
   } catch (const std::exception &e) {
