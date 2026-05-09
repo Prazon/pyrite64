@@ -110,6 +110,7 @@ Rendering caveats carried from libdragon work that still apply when authoring en
 - Don't echo this fork's branding/icon changes into upstream PRs — the blue-tinted icon (`32d37e8`) and inline branding (`a82fbea`) are intentional fork markers.
 - Editor UX work should draw on Unreal/Godot/GameMaker conventions where they conflict with the current Pyrite UX — that's the explicit point of this fork. Call out the parallel in commit messages so the design intent survives.
 - LFS: `*.blend`, `*.wav`, `*.mp3`, `*.mp4` are LFS-tracked. PNG/TTF/JPG were intentionally untracked from LFS in `a82fbea` — don't re-add them.
+- LFS mirroring: this fork's LFS endpoint also hosts the objects upstream still LFS-tracks (TTFs etc.), so a clone of `Prazon/pyrite64` can resolve everything via `git lfs pull` even when working off `upstream/main`. After upstream adds new LFS files, re-sync from a context where SSH auth to GitHub works for git-lfs: `git lfs fetch upstream --all && git lfs push --all origin`.
 - Submodules are pinned in `.gitmodules`; after pulling run `git submodule update --init --recursive`.
 
 ## When debugging a runtime issue
