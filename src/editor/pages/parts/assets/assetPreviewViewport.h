@@ -62,5 +62,15 @@ namespace Editor
       void clear();
 
       void draw(ImVec2 size);
+
+      // Renders into the framebuffer at the requested size without consuming
+      // ImGui layout. Skips orbit/zoom interaction. Used by thumbnail
+      // consumers that just want the rendered texture, not an inline image.
+      void renderHeadless(ImVec2 size);
+
+      // Texture handle for the most recent render. Stable across frames
+      // (SDL_GPU textures persist), so thumbnail consumers can keep
+      // displaying it without triggering a fresh render.
+      SDL_GPUTexture* getTexture() const;
   };
 }

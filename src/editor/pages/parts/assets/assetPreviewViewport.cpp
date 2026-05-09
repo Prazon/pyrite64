@@ -120,6 +120,39 @@ void Editor::AssetPreviewViewport::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, R
   SDL_EndGPURenderPass(rp);
 }
 
+void Editor::AssetPreviewViewport::renderHeadless(ImVec2 size)
+{
+  if (size.x < 64.0f) size.x = 64.0f;
+  if (size.y < 64.0f) size.y = 64.0f;
+  size.x = floorf(size.x);
+  size.y = floorf(size.y);
+
+  fb.resize((uint32_t)size.x, (uint32_t)size.y);
+  camera.screenSize = {size.x, size.y};
+
+  if (hasMesh && meshPtr && !meshPtr->isLoaded()) {
+    framed = false;
+  }
+  if (hasMesh && !framed && meshPtr && meshPtr->isLoaded()) {
+    auto aabb = meshPtr->getAABB();
+    glm::vec3 center  = aabb.getCenter()    * MESH_RENDER_SCALE;
+    glm::vec3 halfExt = aabb.getHalfExtend() * MESH_RENDER_SCALE;
+    float radius = glm::length(halfExt);
+    if (radius > 0.001f) {
+      camera.focus(center, std::max(radius * 2.4f, 100.0f));
+      framed = true;
+    }
+  }
+
+  camera.update();
+  drewThisFrame = true;
+}
+
+SDL_GPUTexture* Editor::AssetPreviewViewport::getTexture() const
+{
+  return fb.getTexture();
+}
+
 void Editor::AssetPreviewViewport::draw(ImVec2 size)
 {
   if (size.x < 64.0f) size.x = 64.0f;

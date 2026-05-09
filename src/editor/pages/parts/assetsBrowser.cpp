@@ -147,6 +147,10 @@ void Editor::AssetsBrowser::draw() {
   auto &scenes   = ctx.project->getScenes().getEntries();
   auto &assetMgr = ctx.project->getAssets();
 
+  // Reset the material thumbnail cache's per-frame render budget so at most
+  // MAX_PER_FRAME materials kick off a re-render this draw.
+  if (ctx.editorScene) ctx.editorScene->getMatThumbnails().newFrame();
+
   const bool splitMode = (ctx.prefs.contentBrowserMode == Editor::ContentBrowserMode::Split);
 
   // In Split mode each tab keeps its own nav state, so currentDir aliases
@@ -1558,6 +1562,17 @@ void Editor::AssetsBrowser::draw() {
     }
     if (asset.texture) {
       icon = ImTextureRef(asset.texture->getGPUTex());
+    }
+
+    // Materials get a 3D thumbnail (cube + the compiled material) cached
+    // per UUID. First sighting renders headless; subsequent frames just
+    // sample the framebuffer texture. Falls back to the palette glyph
+    // until the first render completes.
+    if (asset.type == FileType::MATERIAL && asset.materialAsset && ctx.editorScene) {
+      auto* matTex = ctx.editorScene->getMatThumbnails().fetch(
+        asset.getUUID(), {imageSize, imageSize}, asset.materialAsset->compiled
+      );
+      if (matTex) icon = ImTextureRef(matTex);
     }
 
     bool isSelected = (ctx.selAssetUUID == asset.getUUID());

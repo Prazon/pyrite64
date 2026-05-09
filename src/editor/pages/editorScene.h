@@ -17,6 +17,7 @@
 #include "parts/sceneInspector.h"
 #include "parts/viewport2D.h"
 #include "parts/viewport3D.h"
+#include "parts/assets/matThumbnailCache.h"
 
 namespace Project::Compile { struct Error; }
 
@@ -54,6 +55,11 @@ namespace Editor
       // Per-asset .p64mat material editors. Lifecycle parallel to the
       // model/image editors above — keyed on the asset's UUID for de-dupe.
       std::map<uint64_t, std::shared_ptr<MaterialEditor>> materialEditors{};
+
+      // Material thumbnail cache (browser-wide). Each entry owns its own
+      // tiny offscreen viewport so the framebuffer texture is stable across
+      // frames. Saving a material in MaterialEditor invalidates its entry.
+      MaterialThumbnailCache matThumbnails{};
 
       // Defer-destroy list: PrefabEditor owns a Viewport3D whose framebuffer
       // GPU texture is referenced by ImGui's draw list for the current frame.
@@ -137,6 +143,11 @@ namespace Editor
       // focus the existing window. dockTarget is honoured the same way as
       // the prefab event graph opener.
       void openMaterialEditor(uint64_t assetUUID, ImGuiID dockTarget = 0);
+
+      // Material thumbnail cache accessor — used by MaterialEditor::save()
+      // to invalidate a saved material's thumbnail and by AssetsBrowser to
+      // fetch / display them.
+      MaterialThumbnailCache& getMatThumbnails() { return matThumbnails; }
       // Open a slice editor showing only the named P64_NODE function from
       // <project>/src/user/<prefabName>.cpp. Idempotent — re-opens focus
       // the existing window. dockTarget, when nonzero, becomes the

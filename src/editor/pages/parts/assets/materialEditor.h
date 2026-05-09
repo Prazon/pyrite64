@@ -18,6 +18,7 @@
 #include "imgui.h"
 
 #include "../../../../project/materialGraph/graph.h"
+#include "matPreviewViewport.h"
 
 namespace Editor
 {
@@ -34,13 +35,16 @@ namespace Editor
       ImGuiID firstDockTarget{0};
       bool   firstDockApplied{false};
 
-      // Bottom-pinned preview pane shows the compiled Material's prim/env
-      // colour swatches and a flag-state dump. A full 3D preview comes
-      // later — wiring AssetPreviewViewport here would need a host mesh
-      // and a way to swap the material per-frame, which is more plumbing
-      // than v1 needs to ship a working asset workflow.
-      float previewSplitFrac{0.40f};
+      // Unreal-style left preview / right graph layout. previewSplitFrac is
+      // the fraction of the editor's content width given to the left pane
+      // (3D preview on top, compiled-state summary below).
+      float previewSplitFrac{0.35f};
       bool  splitDragging{false};
+
+      // Live 3D preview applied to a polygonal host cube. setMaterial() each
+      // frame stamps compiledCache into the host's per-part material slots so
+      // graph edits show up live.
+      MaterialPreviewViewport preview{};
 
       // Compiled cache so the preview doesn't re-walk the graph every
       // frame — recomputed on edit and after deserialize.

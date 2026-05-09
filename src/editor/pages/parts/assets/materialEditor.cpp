@@ -15,6 +15,7 @@
 #include "../../../../utils/logger.h"
 #include "../../../../project/materialGraph/nodes/baseNode.h"
 #include "../../../imgui/helper.h"
+#include "../../editorScene.h"
 
 namespace
 {
@@ -174,87 +175,93 @@ bool Editor::MaterialEditor::draw(ImGuiID defDockId)
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save();
   }
 
-  // Bottom-pinned preview pane + top graph canvas. Mirrors ModelEditor's
-  // splitter layout so the ergonomics carry over.
+  // Unreal-style layout: 3D preview on the left, graph on the right.
+  // previewSplitFrac is the fraction of width allotted to the left pane.
   ImVec2 fullAvail = ImGui::GetContentRegionAvail();
-  float splitterH = 6_px;
-  float bottomH = std::max(80_px, (fullAvail.y - splitterH) * previewSplitFrac);
-  float topH = std::max(120_px, fullAvail.y - splitterH - bottomH);
+  float splitterW = 6_px;
+  float leftW  = std::max(180_px, (fullAvail.x - splitterW) * previewSplitFrac);
+  float rightW = std::max(240_px, fullAvail.x - splitterW - leftW);
+  (void)rightW;
 
-  // Top: graph canvas.
-  ImGui::BeginChild("##matGraphCanvas", ImVec2(0, topH), ImGuiChildFlags_None);
-  ImVec2 canvasSize = ImGui::GetContentRegionAvail();
-  graph.graph.setSize(canvasSize);
-  graph.graph.update();
+  recompileCache();
+
+  // Left pane: 3D preview (top) + compiled-state summary (bottom).
+  ImGui::BeginChild("##matPreviewPane", ImVec2(leftW, 0), ImGuiChildFlags_Borders);
+
+  ImGui::TextDisabled("Live Preview");
+
+  // 3D viewport takes ~60% of the left pane vertically; the compiled-state
+  // readout sits beneath it. The minimum keeps the preview from collapsing
+  // when the user shrinks the editor window.
+  float paneAvailY = ImGui::GetContentRegionAvail().y;
+  float previewW   = ImGui::GetContentRegionAvail().x;
+  float previewH   = std::max(120_px, paneAvailY * 0.60f);
+
+  preview.setMaterial(compiledCache);
+  preview.draw(ImVec2(previewW, previewH));
+
+  ImGui::Separator();
+  ImGui::TextDisabled("Compiled Values");
+
+  // Prim/env colour swatches still help confirm "the right colour came out
+  // of the graph" at a glance, even with the 3D preview above.
+  ImVec4 prim{compiledCache.primColor.value.x, compiledCache.primColor.value.y,
+              compiledCache.primColor.value.z, compiledCache.primColor.value.w};
+  ImVec4 env{ compiledCache.envColor.value.x,  compiledCache.envColor.value.y,
+              compiledCache.envColor.value.z,  compiledCache.envColor.value.w};
+  ImGui::TextUnformatted("Prim Color");
+  ImGui::ColorButton("##primSw", prim, ImGuiColorEditFlags_AlphaBar, ImVec2(-1, 22_px));
+  ImGui::TextUnformatted("Env Color");
+  ImGui::ColorButton("##envSw", env, ImGuiColorEditFlags_AlphaBar, ImVec2(-1, 22_px));
+
+  ImGui::Separator();
+
+  // Compact flag-state dump.
+  ImGui::Text("CC:    %s",   compiledCache.ccSet.value        ? "set" : "default");
+  ImGui::Text("Blend: %s",   compiledCache.blenderSet.value   ? "set" : "default");
+  ImGui::Text("Z:     %s",   compiledCache.zmodeSet.value     ? "set" : "default");
+  ImGui::Text("AA:    %s",   compiledCache.aaSet.value        ? "set" : "default");
+  ImGui::Text("AClip: %s",   compiledCache.alphaCompSet.value ? "set" : "default");
+  ImGui::Text("Tex0:  %s",   compiledCache.tex0.set.value     ? "bound" : "(none)");
+  ImGui::Text("Tex1:  %s",   compiledCache.tex1.set.value     ? "bound" : "(none)");
+  ImGui::Text("VFX:   %d",   compiledCache.vertexFX.value);
+  ImGui::Text("Flags: 0x%X", compiledCache.drawFlags.value);
+
   ImGui::EndChild();
 
-  // Splitter.
-  ImGui::InvisibleButton("##matSplit", ImVec2(-1, splitterH));
+  // Vertical splitter.
+  ImGui::SameLine();
+  ImGui::InvisibleButton("##matSplit", ImVec2(splitterW, -1));
   if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
     splitDragging = true;
-    float dy = ImGui::GetIO().MouseDelta.y;
-    if (fullAvail.y > splitterH * 2) {
-      previewSplitFrac -= dy / (fullAvail.y - splitterH);
-      previewSplitFrac = std::clamp(previewSplitFrac, 0.15f, 0.85f);
+    float dx = ImGui::GetIO().MouseDelta.x;
+    if (fullAvail.x > splitterW * 2) {
+      previewSplitFrac += dx / (fullAvail.x - splitterW);
+      previewSplitFrac = std::clamp(previewSplitFrac, 0.15f, 0.70f);
     }
   } else {
     splitDragging = false;
   }
   if (ImGui::IsItemHovered() || splitDragging) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
   }
   {
     ImVec2 a = ImGui::GetItemRectMin();
     ImVec2 b = ImGui::GetItemRectMax();
     ImU32 col = ImGui::GetColorU32(splitDragging ? ImGuiCol_SeparatorActive : ImGuiCol_Separator);
     ImGui::GetWindowDrawList()->AddRectFilled(
-      {a.x, (a.y + b.y) * 0.5f - 1.0f},
-      {b.x, (a.y + b.y) * 0.5f + 1.0f},
+      {(a.x + b.x) * 0.5f - 1.0f, a.y},
+      {(a.x + b.x) * 0.5f + 1.0f, b.y},
       col
     );
   }
 
-  // Bottom: live preview + compiled summary. Recompile on every frame
-  // is cheap (graph is small) and means edits show up immediately.
-  ImGui::BeginChild("##matPreviewPane", ImVec2(0, bottomH), ImGuiChildFlags_Borders);
-  recompileCache();
-
-  ImGui::TextDisabled("Live Preview");
+  // Right pane: graph canvas takes the remaining width.
   ImGui::SameLine();
-  ImGui::TextDisabled("(compiled values shown below)");
-
-  ImGui::Columns(2, "##matPreviewCols", true);
-  ImGui::SetColumnWidth(0, 220_px);
-
-  // Left column: a colour swatch sampling primColor/envColor — useful when
-  // those drive the CC. The on-device renderer can do far more than this
-  // can show, but a swatch is enough to confirm "yes, picking the right
-  // green made the green show up".
-  ImVec4 prim{compiledCache.primColor.value.x, compiledCache.primColor.value.y,
-              compiledCache.primColor.value.z, compiledCache.primColor.value.w};
-  ImVec4 env{ compiledCache.envColor.value.x,  compiledCache.envColor.value.y,
-              compiledCache.envColor.value.z,  compiledCache.envColor.value.w};
-  ImGui::TextUnformatted("Prim Color");
-  ImGui::ColorButton("##primSw", prim, ImGuiColorEditFlags_AlphaBar, ImVec2(180_px, 28_px));
-  ImGui::TextUnformatted("Env Color");
-  ImGui::ColorButton("##envSw", env, ImGuiColorEditFlags_AlphaBar, ImVec2(180_px, 28_px));
-
-  ImGui::NextColumn();
-
-  // Right column: dump of the compiled Material's flag-state — easiest
-  // way to see what the graph actually produced before there's a real
-  // 3D preview wired in.
-  ImGui::Text("Color Combiner: %s",  compiledCache.ccSet.value      ? "set" : "default");
-  ImGui::Text("Blender:        %s",  compiledCache.blenderSet.value ? "set" : "default");
-  ImGui::Text("Z-Mode:         %s",  compiledCache.zmodeSet.value   ? "set" : "default");
-  ImGui::Text("AA:             %s",  compiledCache.aaSet.value      ? "set" : "default");
-  ImGui::Text("Alpha-Clip:     %s",  compiledCache.alphaCompSet.value ? "set" : "default");
-  ImGui::Text("Tex0:           %s",  compiledCache.tex0.set.value   ? "bound" : "(none)");
-  ImGui::Text("Tex1:           %s",  compiledCache.tex1.set.value   ? "bound" : "(none)");
-  ImGui::Text("Vertex FX:      %d",  compiledCache.vertexFX.value);
-  ImGui::Text("Draw Flags:     0x%X", compiledCache.drawFlags.value);
-
-  ImGui::Columns(1);
+  ImGui::BeginChild("##matGraphCanvas", ImVec2(0, 0), ImGuiChildFlags_None);
+  ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+  graph.graph.setSize(canvasSize);
+  graph.graph.update();
   ImGui::EndChild();
 
   ImGui::End();
@@ -291,6 +298,12 @@ void Editor::MaterialEditor::save()
         ctx.project->getAssets().reloadAssetByUUID(e.getUUID());
       }
     }
+  }
+
+  // Invalidate the asset browser's thumbnail so it re-renders with the new
+  // compiled state next frame.
+  if (ctx.editorScene) {
+    ctx.editorScene->getMatThumbnails().invalidate(assetUUID);
   }
 
   Utils::Logger::log("Saved Material: " + asset->name);

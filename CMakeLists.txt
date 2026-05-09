@@ -330,6 +330,10 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/textureEditor.cpp
         src/editor/pages/parts/assets/matInstanceEditor.h
         src/editor/pages/parts/assets/matInstanceEditor.cpp
+        src/editor/pages/parts/assets/matPreviewViewport.h
+        src/editor/pages/parts/assets/matPreviewViewport.cpp
+        src/editor/pages/parts/assets/matThumbnailCache.h
+        src/editor/pages/parts/assets/matThumbnailCache.cpp
         src/editor/pages/parts/assets/materialEditor.h
         src/editor/pages/parts/assets/materialEditor.cpp
         src/project/assets/materialAsset.h
