@@ -4,9 +4,14 @@
 */
 #include "layerInspector.h"
 #include "../../../context.h"
+#include "../../../project/scene/scene.h"
+#include "../../../project/scene/object.h"
+#include "../../../project/component/components.h"
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "../../imgui/helper.h"
+
+#include <functional>
 
 #define __LIBDRAGON_N64SYS_H 1
 #define PhysicalAddr(a) (uint64_t)(a)
@@ -18,7 +23,30 @@ namespace
 {
   int ctxLayerIndex = -1;
 
-  void drawLayers(std::vector<Project::LayerConf> &layers, const std::string &layerName)
+  // Walks the active scene and lets every component patch its stored
+  // layer index in response to a layer-table mutation. Family selects which
+  // table changed (3D / Ptx / 2D); components that don't reference that
+  // family no-op. Used by Delete / Duplicate / Reset below to keep mesh and
+  // sprite components from pointing at the wrong (or removed) layer.
+  void remapSceneLayerRefs(Project::Component::LayerFamily family,
+                            const std::function<int(int)> &remap)
+  {
+    auto scene = ctx.project->getScenes().getLoadedScene();
+    if(!scene) return;
+    for(auto &[uuid, obj] : scene->objectsMap) {
+      if(!obj) continue;
+      for(auto &entry : obj->components) {
+        const auto &info = Project::Component::TABLE[entry.id];
+        if(info.funcRemapLayer) {
+          info.funcRemapLayer(*obj, entry, family, remap);
+        }
+      }
+    }
+  }
+
+  void drawLayers(std::vector<Project::LayerConf> &layers,
+                  const std::string &layerName,
+                  Project::Component::LayerFamily family)
   {
     ImGui::Text("%s", layerName.c_str());
     ImGui::SameLine();
@@ -90,10 +118,22 @@ namespace
       if(ImGui::MenuItem(ICON_MDI_CONTENT_COPY " Duplicate")) {
         auto clone = layers[ctxLayerIndex];
         clone.name.value += " Copy";
-        layers.insert(layers.begin() + ctxLayerIndex + 1, clone);
+        const int insertedAt = ctxLayerIndex + 1;
+        layers.insert(layers.begin() + insertedAt, clone);
+        remapSceneLayerRefs(family, [insertedAt](int v) {
+          return v >= insertedAt ? v + 1 : v;
+        });
       }
       if(layers.size() > 1 && ImGui::MenuItem(ICON_MDI_TRASH_CAN_OUTLINE " Delete")) {
-        layers.erase(layers.begin() + ctxLayerIndex);
+        const int deleted = ctxLayerIndex;
+        layers.erase(layers.begin() + deleted);
+        // References to the deleted layer fall back to layer 0 (always
+        // present); higher indices shift down by one to track the vector.
+        remapSceneLayerRefs(family, [deleted](int v) {
+          if(v == deleted) return 0;
+          if(v > deleted) return v - 1;
+          return v;
+        });
       }
       ImGui::EndPopup();
     }
@@ -107,13 +147,14 @@ void Editor::LayerInspector::draw() {
   auto scene = ctx.project->getScenes().getLoadedScene();
   if(!scene)return;
 
-  drawLayers(scene->conf.layers3D, "3D Layers");
+  using LF = Project::Component::LayerFamily;
+  drawLayers(scene->conf.layers3D,  "3D Layers",       LF::Layer3D);
   ImGui::Dummy({0, 2});
 
-  drawLayers(scene->conf.layersPtx, "Particle Layers");
+  drawLayers(scene->conf.layersPtx, "Particle Layers", LF::LayerPtx);
   ImGui::Dummy({0, 2});
 
-  drawLayers(scene->conf.layers2D, "2D Layers");
+  drawLayers(scene->conf.layers2D,  "2D Layers",       LF::Layer2D);
   ImGui::Dummy({0, 2});
 
   std::string resetLabel = "Reset";
@@ -121,6 +162,15 @@ void Editor::LayerInspector::draw() {
   ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(resetLabel.c_str()).x) * 0.5f - 4);
   if (ImGui::Button(resetLabel.c_str())) {
     scene->resetLayers();
+    // resetLayers() shrinks every layer table to its defaults, so any
+    // existing component reference can now be out of bounds. Clamp into
+    // the new range; out-of-range indices fall back to layer 0.
+    auto clamp = [](int maxN) {
+      return [maxN](int v) { return (v < 0 || v >= maxN) ? 0 : v; };
+    };
+    remapSceneLayerRefs(LF::Layer3D,  clamp((int)scene->conf.layers3D.size()));
+    remapSceneLayerRefs(LF::LayerPtx, clamp((int)scene->conf.layersPtx.size()));
+    remapSceneLayerRefs(LF::Layer2D,  clamp((int)scene->conf.layers2D.size()));
   }
 
 }

@@ -408,4 +408,16 @@ namespace Project::Component::SpriteBillboard
       drawList->AddCircle({screenX, screenY}, 4.0f, IM_COL32(255, 255, 255, 220), 0, 1.5f);
     }
   }
+
+  void remapLayer(Object &obj, Entry &entry, LayerFamily family,
+                  const std::function<int(int)> &remap)
+  {
+    if(family != LayerFamily::Layer2D) return;
+    Data &data = *static_cast<Data*>(entry.data.get());
+    data.layerIdx2D.value = remap(data.layerIdx2D.value);
+    auto it = obj.propOverrides.find(data.layerIdx2D.id);
+    if(it != obj.propOverrides.end()) {
+      it->second.set<int32_t>(remap(it->second.get<int32_t>()));
+    }
+  }
 }

@@ -4,6 +4,7 @@
 */
 #pragma once
 #include <array>
+#include <functional>
 #include <memory>
 #include <SDL3/SDL_gpu.h>
 
@@ -82,10 +83,27 @@ namespace Project::Component
   // component's width/height in canvas pixels. Mirrors the engine-side
   // widgetSize() dispatch in n64/engine/include/scene/widgetSize.h so the
   // canvas preview lays children out exactly the way the runtime will.
-  // Optional — non-sized components leave this null and contribute (0,0).
+  // Optional - non-sized components leave this null and contribute (0,0).
   typedef void(*FuncCompWidgetSize)(
     Object&, Entry &entry,
     int *outW, int *outH
+  );
+
+  // Identifies which scene-config layer table a component's draw-layer
+  // index points into. Components carrying a per-instance layer index
+  // declare their family so layerInspector can patch references when the
+  // user adds, removes, duplicates, or resets layers.
+  enum class LayerFamily : int { Layer3D = 0, LayerPtx = 1, Layer2D = 2 };
+
+  // Remap a component's stored layer index (and any per-Object override of
+  // it) when the scene's layer table changes. `family` is the table that
+  // changed; components ignore calls for families they don't reference.
+  // `remap` is the index transform: identity for unaffected indices, a
+  // shift for insert/delete, or a clamp for reset.
+  typedef void(*FuncCompRemapLayer)(
+    Object &obj, Entry &entry,
+    LayerFamily family,
+    const std::function<int(int)> &remap
   );
 
   struct CompInfo
@@ -107,6 +125,7 @@ namespace Project::Component
     FuncCompDrawOverlay funcDrawOverlay{};
     FuncCompDraw2D      funcDraw2D{};
     FuncCompWidgetSize  funcWidgetSize{};
+    FuncCompRemapLayer  funcRemapLayer{};
   };
 
   #define MAKE_COMP(name) \
@@ -127,6 +146,8 @@ namespace Project::Component
       void draw2D(Object&, Entry &entry, ImDrawList *drawList, \
         ImVec2 originScreen, float zoom, ImVec2 *outMin, ImVec2 *outMax); \
       void widgetSize(Object&, Entry &entry, int *outW, int *outH); \
+      void remapLayer(Object&, Entry &entry, LayerFamily family, \
+        const std::function<int(int)> &remap); \
     }
 
   MAKE_COMP(Code)
@@ -194,7 +215,8 @@ namespace Project::Component
       .funcSerialize = Model::serialize,
       .funcDeserialize = Model::deserialize,
       .funcBuild = Model::build,
-      .funcGetAABB = Model::getAABB
+      .funcGetAABB = Model::getAABB,
+      .funcRemapLayer = Model::remapLayer,
     },
     CompInfo{
       .id = 2,
@@ -307,7 +329,8 @@ namespace Project::Component
       .funcSerialize = AnimModel::serialize,
       .funcDeserialize = AnimModel::deserialize,
       .funcBuild = AnimModel::build,
-      .funcGetAABB = AnimModel::getAABB
+      .funcGetAABB = AnimModel::getAABB,
+      .funcRemapLayer = AnimModel::remapLayer,
     },
     CompInfo{
       .id = 11,
@@ -332,6 +355,7 @@ namespace Project::Component
       .funcDeserialize = SpriteBillboard::deserialize,
       .funcBuild = SpriteBillboard::build,
       .funcGetAABB = nullptr,
+      .funcRemapLayer = SpriteBillboard::remapLayer,
       // funcDrawOverlay intentionally null: SpriteBillboard now renders as a
       // textured 3D quad via the billboard pipeline in draw3D, not as an
       // ImGui screen-space overlay.
@@ -347,6 +371,7 @@ namespace Project::Component
       .funcDeserialize = Primitive::deserialize,
       .funcBuild = Primitive::build,
       .funcGetAABB = nullptr,
+      .funcRemapLayer = Primitive::remapLayer,
     },
     CompInfo{
       .id = 14,
@@ -397,6 +422,7 @@ namespace Project::Component
       .funcDeserialize = PaperSprite::deserialize,
       .funcBuild = PaperSprite::build,
       .funcGetAABB = nullptr,
+      .funcRemapLayer = PaperSprite::remapLayer,
     },
     CompInfo{
       .id = 18,

@@ -232,4 +232,16 @@ namespace Project::Component::AnimModel
     aabb.max *= (float)0xFFFF;
     return aabb;
   }
+
+  void remapLayer(Object &obj, Entry &entry, LayerFamily family,
+                  const std::function<int(int)> &remap)
+  {
+    if(family != LayerFamily::Layer3D) return;
+    Data &data = *static_cast<Data*>(entry.data.get());
+    data.layerIdx.value = remap(data.layerIdx.value);
+    auto it = obj.propOverrides.find(data.layerIdx.id);
+    if(it != obj.propOverrides.end()) {
+      it->second.set<int32_t>(remap(it->second.get<int32_t>()));
+    }
+  }
 }
