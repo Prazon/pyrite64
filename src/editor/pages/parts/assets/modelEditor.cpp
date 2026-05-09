@@ -4,6 +4,8 @@
 */
 #include "modelEditor.h"
 
+#include <filesystem>
+
 #include "libdragon.h"
 #include "ccMapping.h"
 #include "textureEditor.h"
@@ -14,7 +16,7 @@
 
 namespace
 {
-  ImVec2 DEF_WIN_SIZE{400, 400};
+  ImVec2 DEF_WIN_SIZE{520, 620};
 
   constexpr auto Z_MODES = "None\0Read\0Write\0Read+Write\0";
   constexpr auto AA_MODES = "None\0Standard\0Reduced\0";
@@ -119,7 +121,11 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
   // Stable ImGui ID via ###suffix so renaming the asset (display title) doesn't
   // throw away the window's saved position/dock state. The Win suffix also
   // invalidates pre-multi-viewport imgui.ini entries that had no ### at all.
-  winName = "Model: " + model->name
+  // Plain asset filename (no "Model:" prefix, no icon glyphs): the title
+  // string is also what the SDL backend pushes to the OS title bar when the
+  // window is undocked, and unrenderable icon glyphs surface there as
+  // square placeholder boxes.
+  winName = model->name
     + "###ModelEditorWin_" + std::to_string(assetUUID);
 
   // Dock as a sibling tab of Scene Editor; OS chrome on undock — see
@@ -148,7 +154,6 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
 
   bool isOpen = true;
   ImGui::Begin(winName.c_str(), &isOpen);
-  ImGui::Text("Model: %s", model->name.c_str());
 
   // SPBF64 fork: keep the preview viewport's mesh in sync with the asset.
   // Rebind if the UUID changed OR if mesh3D was null at first bind and is
@@ -214,36 +219,112 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
   std::string matToRemove{};
   for(auto &entry : model->model.materials)
   {
-    auto label = "Material: " + entry.first;
-    ImGui::PushID(label.c_str());
-    if (ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
-    {
-      auto &mat = entry.second;
+    auto &mat = entry.second;
 
+    // Lookup the bound material asset (if any) up front so the collapsing
+    // header can show what's wired and the thumbnail row has it in scope.
+    uint64_t curAssetRef = 0;
+    if (model->conf.data.contains("materialAssetRefs")
+      && model->conf.data["materialAssetRefs"].contains(entry.first))
+    {
+      curAssetRef = model->conf.data["materialAssetRefs"][entry.first].get<uint64_t>();
+    }
+    Project::AssetManagerEntry* boundAssetEntry =
+      curAssetRef != 0 ? assetManager.getEntryByUUID(curAssetRef) : nullptr;
+
+    // Header summarises the current binding so collapsed slots are still
+    // informative (Unreal does the same in the Details panel). The ###id
+    // suffix keeps the open/close state stable as the visible binding
+    // text changes.
+    std::string headerLabel = "Material: " + entry.first;
+    if (boundAssetEntry) {
+      headerLabel += "  >  " + boundAssetEntry->name;
+    } else if (mat.isCustom.value) {
+      headerLabel += "  >  (inline override)";
+    } else {
+      headerLabel += "  >  (default)";
+    }
+    headerLabel += "###Slot_" + entry.first;
+
+    ImGui::PushID(("MaterialSlot_" + entry.first).c_str());
+    if (ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+    {
       // Per-slot material-asset binding. When set, the asset's compiled
       // Material wins over the inline override at model-load time (see
       // AssetManager::reloadEntry FileType::MATERIAL handling). Mutually
       // exclusive with the inline Override toggle: enabling one disables
       // the other so the runtime path is unambiguous.
-      uint64_t curAssetRef = 0;
-      if (model->conf.data.contains("materialAssetRefs")
-        && model->conf.data["materialAssetRefs"].contains(entry.first))
-      {
-        curAssetRef = model->conf.data["materialAssetRefs"][entry.first].get<uint64_t>();
+      auto &matAssets = assetManager.getTypeEntries(Project::FileType::MATERIAL);
+      uint64_t beforeRef = curAssetRef;
+
+      // Thumbnail tile (left). Falls back to a palette-icon button when
+      // nothing is bound, and accepts material-asset drops in either state.
+      ImVec2 tileSize{56_px, 56_px};
+      ImGui::PushID("##binding");
+      SDL_GPUTexture* tileTex = nullptr;
+      if (boundAssetEntry && boundAssetEntry->materialAsset && ctx.editorScene) {
+        tileTex = ctx.editorScene->getMatThumbnails().fetch(
+          curAssetRef, tileSize, boundAssetEntry->materialAsset->compiled);
+      }
+      bool tileClicked = false;
+      if (tileTex) {
+        tileClicked = ImGui::ImageButton("##tile", ImTextureRef(tileTex), tileSize);
+      } else {
+        ImGui::PushStyleColor(ImGuiCol_Button,
+          ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+        tileClicked = ImGui::Button(ICON_MDI_PALETTE_SWATCH "##tile_empty", tileSize);
+        ImGui::PopStyleColor();
+      }
+      if (ImGui::BeginDragDropTarget()) {
+        if (auto* p = ImGui::AcceptDragDropPayload("ASSET")) {
+          uint64_t dropUUID = *(uint64_t*)p->Data;
+          auto* dropEntry = assetManager.getEntryByUUID(dropUUID);
+          if (dropEntry && dropEntry->type == Project::FileType::MATERIAL) {
+            curAssetRef = dropUUID;
+          }
+        }
+        ImGui::EndDragDropTarget();
+      }
+      if (tileClicked && curAssetRef != 0 && ctx.editorScene) {
+        ctx.editorScene->openMaterialEditor(curAssetRef);
       }
 
-      auto &matAssets = assetManager.getTypeEntries(Project::FileType::MATERIAL);
-      ImTable::start("General", nullptr, labelWidth);
-      ImTable::add("Material Asset");
-
-      // ImTable::addAssetVecComboBox expects a list with .getId()/.getName().
-      // matAssets entries already satisfy that. We mutate curAssetRef
-      // directly and write back to conf.data on change.
-      uint64_t before = curAssetRef;
+      // Right of tile: stacked combo + action buttons.
+      ImGui::SameLine();
+      ImGui::BeginGroup();
+      ImGui::TextDisabled("Material Asset");
+      ImGui::SetNextItemWidth(-1.0f);
       ImTable::addAssetVecComboBox<Project::AssetManagerEntry>(
-        "##matAsset", matAssets, curAssetRef
+        "", matAssets, curAssetRef
       );
-      if (curAssetRef != before) {
+      if (ImGui::Button(ICON_MDI_PLUS " New")) {
+        namespace fs = std::filesystem;
+        fs::path matRoot = fs::path(ctx.project->getPath()) / "assets";
+        std::string base = "Material";
+        std::string chosen = base + "_X";
+        for (int i = 1; i < 1000; ++i) {
+          std::string n = (i == 1) ? base : (base + "_" + std::to_string(i));
+          if (!fs::exists(matRoot / (n + ".p64mat"))) { chosen = n; break; }
+        }
+        uint64_t newUUID = assetManager.createMaterial(chosen);
+        if (newUUID) curAssetRef = newUUID;
+      }
+      ImGui::SameLine();
+      ImGui::BeginDisabled(curAssetRef == 0);
+      if (ImGui::Button(ICON_MDI_CLOSE " Clear")) {
+        curAssetRef = 0;
+      }
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      ImGui::BeginDisabled(curAssetRef == 0);
+      if (ImGui::Button(ICON_MDI_PENCIL " Edit") && ctx.editorScene && curAssetRef != 0) {
+        ctx.editorScene->openMaterialEditor(curAssetRef);
+      }
+      ImGui::EndDisabled();
+      ImGui::EndGroup();
+      ImGui::PopID();
+
+      if (curAssetRef != beforeRef) {
         if (curAssetRef == 0) {
           if (model->conf.data.contains("materialAssetRefs")) {
             model->conf.data["materialAssetRefs"].erase(entry.first);
@@ -253,8 +334,8 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
             model->conf.data["materialAssetRefs"] = nlohmann::json::object();
           }
           model->conf.data["materialAssetRefs"][entry.first] = curAssetRef;
-          // Asset wins over inline — flip the override off so the user
-          // doesn't see a stale inline panel below.
+          // Asset wins over inline. Drop any previous override panel state
+          // so the user doesn't see a stale inline section below.
           mat.isCustom.value = false;
           model->conf.data["materials"].erase(entry.first);
         }
@@ -262,18 +343,10 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
         needsReload = true;
       }
 
-      // "Open Material Editor" shortcut — keeps the round-trip cheap when
-      // the user is iterating on both model slot and material content.
-      if (curAssetRef != 0 && ctx.editorScene) {
-        ImTable::add("");
-        if (ImGui::Button(ICON_MDI_PENCIL " Open Material Editor")) {
-          ctx.editorScene->openMaterialEditor(curAssetRef);
-        }
-      }
-
-      if(ImTable::addProp("Override", mat.isCustom))
-      {
-        if(mat.isCustom.value) {
+      ImGui::Spacing();
+      ImTable::start("Override", nullptr, labelWidth);
+      if (ImTable::addProp("Override", mat.isCustom)) {
+        if (mat.isCustom.value) {
           // Enabling inline override while a material asset is set would
           // make the runtime path ambiguous; clear the asset ref first.
           if (curAssetRef != 0 && model->conf.data.contains("materialAssetRefs")) {
@@ -286,6 +359,9 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
         assetManager.markAssetMetaDirty(model->getUUID());
       }
       ImTable::end();
+      if (mat.isCustom.value) {
+        ImGui::TextDisabled(ICON_MDI_PENCIL " Editing inline override (saved on this model)");
+      }
 
       if(!mat.isCustom.value)
       {
