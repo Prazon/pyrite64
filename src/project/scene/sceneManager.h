@@ -76,6 +76,12 @@ namespace Project
       // Refreshes the entry cache so the browser sees the move immediately.
       void setSceneRelPath(int id, const std::string &newRelPath);
 
+      // Update a scene's display name. Patches in-memory if the scene is
+      // currently loaded; otherwise edits scene.json directly. Refreshes
+      // the entry cache so the content browser shows the new name without
+      // requiring a reload.
+      void setSceneName(int id, const std::string &newName);
+
       // Rewrite relPath on every scene whose path equals or is nested under
       // `oldPrefix`, replacing that prefix with `newPrefix`. Used by folder
       // rename. Empty `oldPrefix` is treated as no-op.

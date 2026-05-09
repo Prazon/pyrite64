@@ -255,6 +255,37 @@ void Project::SceneManager::setSceneRelPath(int id, const std::string &newRelPat
   }
 }
 
+void Project::SceneManager::setSceneName(int id, const std::string &newName)
+{
+  auto scenesPath = getScenePath(project);
+  auto sceneJsonPath = fs::path{scenesPath} / std::to_string(id) / "scene.json";
+
+  if (loadedScene && loadedScene->getId() == id) {
+    loadedScene->conf.name.value = newName;
+    loadedScene->save();
+    project->noteSelfWrite(sceneJsonPath.string());
+  } else {
+    if (!fs::exists(sceneJsonPath)) return;
+    try {
+      auto doc = Utils::JSON::loadFile(sceneJsonPath);
+      if (!doc.is_object()) return;
+      if (!doc.contains("conf") || !doc["conf"].is_object()) doc["conf"] = nlohmann::json::object();
+      doc["conf"]["name"] = newName;
+      Utils::FS::saveTextFile(sceneJsonPath.string(), doc.dump(2));
+      project->noteSelfWrite(sceneJsonPath.string());
+    } catch (...) {
+      return;
+    }
+  }
+
+  for (auto &e : entries) {
+    if (e.id == id) {
+      e.name = newName;
+      break;
+    }
+  }
+}
+
 void Project::SceneManager::renameSceneFolder(const std::string &oldPrefix, const std::string &newPrefix)
 {
   if (oldPrefix.empty()) return;

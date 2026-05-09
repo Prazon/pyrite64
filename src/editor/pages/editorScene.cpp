@@ -470,10 +470,10 @@ void Editor::Scene::draw()
   ImGui::Begin("Scene Editor", nullptr, ImGuiWindowFlags_NoCollapse);
   ImGui::PopStyleVar();
   {
-    // Layout id bumped to V3 when the 2D-Viewport sibling tab was added so
-    // returning users with a cached imgui.ini don't end up with the new
-    // window floating outside the scene editor's central node.
-    auto sceneDockID = ImGui::GetID("SceneEditorDockV3");
+    // Layout id bumped to V4 when Scene + Layers were moved to the right
+    // panel alongside Object so returning users with a cached imgui.ini
+    // pick up the new default placement.
+    auto sceneDockID = ImGui::GetID("SceneEditorDockV4");
     auto sceneNode = ImGui::DockBuilderGetNode(sceneDockID);
     sceneDockID = ImGui::DockSpace(sceneDockID, ImVec2(0.0f, 0.0f), 0, 0);
 
@@ -499,10 +499,10 @@ void Editor::Scene::draw()
 
       ImGui::DockBuilderDockWindow("3D-Viewport", sceneDockCenterID);
       ImGui::DockBuilderDockWindow("2D-Viewport", sceneDockCenterID);
-      ImGui::DockBuilderDockWindow("Scene",       sceneDockLeftID);
       ImGui::DockBuilderDockWindow("Graph",       sceneDockLeftID);
-      ImGui::DockBuilderDockWindow("Layers",      sceneDockLeftID);
       ImGui::DockBuilderDockWindow("Object",      sceneDockRightID);
+      ImGui::DockBuilderDockWindow("Scene",       sceneDockRightID);
+      ImGui::DockBuilderDockWindow("Layers",      sceneDockRightID);
       ImGui::DockBuilderDockWindow("Model",       sceneDockRightID);
       ImGui::DockBuilderFinish(sceneDockID);
     }
@@ -970,6 +970,8 @@ void Editor::Scene::draw()
           // Nuke both dockspaces; they get rebuilt next frame from defaults.
           ImGui::DockBuilderRemoveNode(ImGui::GetID("DockSpaceV2"));
           ImGui::DockBuilderRemoveNode(ImGui::GetID("SceneEditorDockV2"));
+          ImGui::DockBuilderRemoveNode(ImGui::GetID("SceneEditorDockV3"));
+          ImGui::DockBuilderRemoveNode(ImGui::GetID("SceneEditorDockV4"));
         }
         ImGui::EndMenu();
       }

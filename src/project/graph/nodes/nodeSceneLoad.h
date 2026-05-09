@@ -21,7 +21,7 @@ namespace Project::Graph::Node
       }
 
     public:
-      constexpr static const char* NAME = ICON_MDI_EARTH_BOX " Load Scene";
+      constexpr static const char* NAME = ICON_MDI_MOVIE_OPEN_OUTLINE " Load Scene";
 
       SceneLoad()
       {

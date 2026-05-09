@@ -994,6 +994,24 @@ void Editor::AssetsBrowser::draw() {
   // drawRename body 1:1 (folder cross-root mirror, scene-folder rewrite,
   // file rename + .conf sidecar).
   auto runRenameCommit = [&]() {
+    // Scene renames are keyed by "scene://<id>" rather than a filesystem path
+    // because scenes live in id-named directories (data/scenes/<id>/) and only
+    // store the user-visible name inside scene.json. Route those through the
+    // SceneManager so the loaded copy and the on-disk copy stay in sync.
+    if (renamePath.rfind("scene://", 0) == 0) {
+      try {
+        int sceneId = std::stoi(renamePath.substr(8));
+        std::string newName = renameBuffer;
+        if (!newName.empty()) {
+          ctx.project->getScenes().setSceneName(sceneId, newName);
+        }
+      } catch (...) {
+        Utils::Logger::log("Scene rename failed: invalid id", Utils::Logger::LEVEL_ERROR);
+      }
+      renamePath.clear();
+      return;
+    }
+
     fs::path oldPath = renamePath;
     bool isDir = fs::is_directory(oldPath);
 
@@ -1444,27 +1462,29 @@ void Editor::AssetsBrowser::draw() {
       checkLineBreak();
 
       std::string sceneId = "scene://" + std::to_string(scene.id);
+      ImVec2 sceneCardPos{};
       bool pressed = drawAssetCard(
         sceneId,
         ImTextureRef(nullptr),
-        ICON_MDI_EARTH_BOX,
+        ICON_MDI_MOVIE_OPEN_OUTLINE,
         displayName,
         "Scene",
         SCENE_TYPE_COLOR,
         isUserSel,
         1.0f,
-        nullptr
+        &sceneCardPos
       );
       bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
+      bool isRenamingThis = (sceneId == renamePath);
 
-      if (pressed) {
+      if (pressed && !isRenamingThis) {
         // Single-click: select only. Clears asset/folder selection so the
         // browser shows one focused item at a time.
         selectedSceneId = scene.id;
         selectedFolder.clear();
         ctx.selAssetUUID = 0;
       }
-      if (isDblClick) {
+      if (isDblClick && !isRenamingThis) {
         // Defer the actual swap until after this frame's draw completes -
         // doing it inline would free the live Scene while the rest of the
         // editor (Object/Graph/Layers panels, EditScope) still holds it.
@@ -1473,7 +1493,7 @@ void Editor::AssetsBrowser::draw() {
         ctx.project->saveConfig();
       }
 
-      if (ImGui::BeginDragDropSource()) {
+      if (!isRenamingThis && ImGui::BeginDragDropSource()) {
         ImGui::SetDragDropPayload("SCENE", &scene.id, sizeof(scene.id));
         ImGui::TextUnformatted(displayName.c_str());
         ImGui::EndDragDropSource();
@@ -1484,15 +1504,29 @@ void Editor::AssetsBrowser::draw() {
                           displayName.c_str(), scene.id);
       }
 
-      if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+      if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !isRenamingThis) {
         ctxSceneId = scene.id;
         ImGui::OpenPopup("SceneCtxMenu");
       }
+
+      // Inline rename overlay slot for this card. Driven by renamePath holding
+      // "scene://<id>" — the runRenameCommit path routes those through the
+      // SceneManager rather than the filesystem.
+      if (isRenamingThis) drawCardRename(sceneCardPos);
     }
 
     if (ImGui::BeginPopup("SceneCtxMenu")) {
       bool canDelete = scenes.size() > 1;
 
+      if (ImGui::MenuItem(ICON_MDI_RENAME " Rename")) {
+        renamePath = "scene://" + std::to_string(ctxSceneId);
+        std::string current{};
+        for (const auto &e : scenes) {
+          if (e.id == ctxSceneId) { current = e.name; break; }
+        }
+        std::strncpy(renameBuffer, current.c_str(), sizeof(renameBuffer) - 1);
+        renameBuffer[sizeof(renameBuffer) - 1] = '\0';
+      }
       if (ImGui::MenuItem(ICON_MDI_CONTENT_COPY " Duplicate")) {
         ctx.project->getScenes().duplicate(ctxSceneId);
       }
