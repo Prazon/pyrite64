@@ -81,7 +81,13 @@ namespace Project::Component::CollMesh
 
     if(meshes.empty())
     {
-      throw std::runtime_error("Component Model: No meshes selected for collision!");
+      if(t3dm->model.t3dm.models.empty()) {
+        throw std::runtime_error(
+          "Component Model: assigned model '" + t3dm->name
+            + "' contains no mesh nodes (glTF parse may have failed).");
+      }
+      throw std::runtime_error(
+        "Component Model: mesh filter on '" + t3dm->name + "' excluded every node.");
     }
 
     flags |= 1;
@@ -155,6 +161,12 @@ namespace Project::Component::CollMesh
 
       ImTable::end();
 
+      if(selModel && !selModel->mesh3D) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200, 200, 120, 255));
+        ImGui::TextWrapped("Collision-only model (no render data). Add fast64 materials in your DCC tool to enable rendering.");
+        ImGui::PopStyleColor();
+      }
+
       if(selModel && ImGui::CollapsingSubHeader("Mesh Filter", ImGuiTreeNodeFlags_DefaultOpen) && ImTable::start("Filter", &obj))
       {
         bool changed = ImTable::addObjProp("Filter", data.filter.meshFilter);
@@ -164,10 +176,12 @@ namespace Project::Component::CollMesh
         }
 
         for(auto idx : data.filter.cache) {
-          ImGui::Text("%s@%s",
-            selModel->model.t3dm.models[idx].name.c_str(),
-            selModel->model.t3dm.models[idx].materialName.c_str()
-          );
+          const auto &m = selModel->model.t3dm.models[idx];
+          if(m.materialName.empty()) {
+            ImGui::Text("%s", m.name.c_str());
+          } else {
+            ImGui::Text("%s@%s", m.name.c_str(), m.materialName.c_str());
+          }
         }
 
         ImTable::end();

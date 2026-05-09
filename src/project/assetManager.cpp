@@ -20,6 +20,8 @@
 #include "../utils/string.h"
 #include "../utils/textureFormats.h"
 #include "tiny3d/tools/gltf_importer/src/parser.h"
+#include "../build/collisionMeshStub.h"
+#include "../editor/imgui/notification.h"
 
 namespace fs = std::filesystem;
 
@@ -423,6 +425,35 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
         }
       } catch (std::exception &e) {
         Utils::Logger::log("Failed to load 3D model asset: " + entry.path + " - " + e.what(), Utils::Logger::LEVEL_ERROR);
+        if (reloadInBulk) {
+          ++bulkModelFailures;
+        } else if (ctx.window) {
+          Editor::Noti::add(Editor::Noti::Type::ERROR,
+            "Failed to load 3D model: " + entry.name + "\n" + e.what());
+        }
+      }
+
+      // Collision-only fallback: if parseGLTF produced no usable models
+      // (because every primitive is missing a material or the material
+      // lacks fast64 extras data), enumerate mesh-node names directly
+      // from the glTF so the editor can still expose this asset to the
+      // CollisionMesh component. mesh3D is left null on purpose: the
+      // collision build path reads vertices straight from the source
+      // glTF and does not need T3D mesh data.
+      if (entry.model.t3dm.models.empty()) {
+        auto stubNames = Build::enumerateGltfMeshNodes(entry.path);
+        if (!stubNames.empty()) {
+          for (const auto &name : stubNames) {
+            entry.model.t3dm.models.push_back({.name = name});
+          }
+          if (reloadInBulk) {
+            ++bulkModelStubs;
+          } else if (ctx.window) {
+            Editor::Noti::add(Editor::Noti::Type::INFO,
+              "Imported as collision-only: " + entry.name
+                + "\n(Add fast64 materials to enable rendering.)");
+          }
+        }
       }
     }
     break;
@@ -540,12 +571,25 @@ void Project::AssetManager::reload() {
   }
 
   // now load models (after all textures are there now)
+  reloadInBulk = true;
+  bulkModelFailures = 0;
+  bulkModelStubs = 0;
   for (auto &typed : entries) {
     for (auto &entry : typed) {
       if (entry.type == FileType::MODEL_3D) {
         reloadEntry(entry, entry.path);
       }
     }
+  }
+  reloadInBulk = false;
+
+  if (ctx.window && bulkModelFailures > 0) {
+    Editor::Noti::add(Editor::Noti::Type::ERROR,
+      std::to_string(bulkModelFailures) + " 3D model(s) failed to load. See log for details.");
+  }
+  if (ctx.window && bulkModelStubs > 0) {
+    Editor::Noti::add(Editor::Noti::Type::INFO,
+      std::to_string(bulkModelStubs) + " model(s) loaded as collision-only (no fast64 materials).");
   }
 
   // Resolve prefab variants once all prefab assets are present in the map.

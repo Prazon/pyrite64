@@ -125,6 +125,13 @@ namespace Project
       std::string defaultGlobalScript{};
       std::shared_ptr<Renderer::Texture> fallbackTex{};
 
+      // True only while reload() is iterating its bulk MODEL_3D pass.
+      // MODEL_3D loader checks this to suppress per-asset error popups
+      // (a single summary popup is emitted by reload() instead).
+      bool reloadInBulk{false};
+      int bulkModelFailures{0};
+      int bulkModelStubs{0};
+
       void reloadEntry(AssetManagerEntry &entry, const std::string &path);
       void resetDirtyTracking();
       void clearDirtyTracking(uint64_t uuid);

@@ -138,6 +138,8 @@ add_executable(pyrite64 src/main.cpp
         src/renderer/texture.cpp
         src/renderer/texture.h
         src/project/project.cpp
+        src/project/cacheDir.h
+        src/project/cacheDir.cpp
         src/editor/recentProjects.h
         src/editor/recentProjects.cpp
         src/editor/actions.h
@@ -249,6 +251,8 @@ add_executable(pyrite64 src/main.cpp
         src/project/assets/collision.cpp
         src/build/t3dmBuilder.cpp
         src/build/collisionBuilder.cpp
+        src/build/collisionMeshStub.h
+        src/build/collisionMeshStub.cpp
         src/project/component/types/compCollBody.cpp
         src/project/component/types/compRigidBody.cpp
         src/build/fontBuilder.cpp
@@ -313,6 +317,7 @@ add_executable(pyrite64 src/main.cpp
         src/editor/preferences.h
         src/editor/preferences.cpp
         src/editor/pages/parts/assets/modelEditor.cpp
+        src/editor/pages/parts/assets/assetEditorDocking.h
         src/editor/pages/parts/assets/imageEditor.h
         src/editor/pages/parts/assets/imageEditor.cpp
         src/editor/pages/parts/assets/codeEditor.h
@@ -325,6 +330,14 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/prefabFunctionCodeEditor.cpp
         src/editor/pages/parts/assets/resourceTypeEditor.h
         src/editor/pages/parts/assets/resourceTypeEditor.cpp
+        src/editor/pages/parts/assets/resourceTypeEditorWindow.h
+        src/editor/pages/parts/assets/resourceTypeEditorWindow.cpp
+        src/editor/pages/parts/assets/resourceInstanceEditor.h
+        src/editor/pages/parts/assets/resourceInstanceEditor.cpp
+        src/editor/pages/parts/assets/fontEditor.h
+        src/editor/pages/parts/assets/fontEditor.cpp
+        src/editor/pages/parts/assets/audioEditor.h
+        src/editor/pages/parts/assets/audioEditor.cpp
         src/editor/pages/parts/assets/assetPreviewViewport.h
         src/editor/pages/parts/assets/assetPreviewViewport.cpp
         src/project/assets/material.h
@@ -341,6 +354,8 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/matPreviewViewport.cpp
         src/editor/pages/parts/assets/matThumbnailCache.h
         src/editor/pages/parts/assets/matThumbnailCache.cpp
+        src/editor/pages/parts/assets/modelThumbnailCache.h
+        src/editor/pages/parts/assets/modelThumbnailCache.cpp
         src/editor/pages/parts/assets/materialEditor.h
         src/editor/pages/parts/assets/materialEditor.cpp
         src/project/assets/materialAsset.h
