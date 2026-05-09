@@ -520,18 +520,17 @@ void Editor::AssetsBrowser::draw() {
 
         // TreeNodeEx renders arrow + icon + name in default text color
         // (white). We then re-draw only the folder glyph in manilla on top
-        // of the white one — pixel positions match exactly so there's no
-        // ghosting and the arrow + name stay white. Position mirrors
-        // ImGui's TreeNodeBehavior label offset: frame_bb.Min + FontSize
-        // + ItemInnerSpacing.x.
+        // of the white one. Pixel positions must match exactly to avoid
+        // ghosting; the X offset mirrors ImGui's TreeNodeBehavior:
+        //   text_offset_x = FontSize + 2 * FramePadding.x
+        // (without ItemInnerSpacing, which is what tripped a prior pass).
         std::string label = std::string(ICON_MDI_FOLDER " ") + name;
         bool open = ImGui::TreeNodeEx(("##tn_" + childVirt).c_str(), flags, "%s", label.c_str());
         {
           ImVec2 itemMin = ImGui::GetItemRectMin();
-          float arrowW  = ImGui::GetFontSize();
-          float spaceW  = ImGui::GetStyle().ItemInnerSpacing.x;
+          float textOffsetX = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 2.0f;
           ImGui::GetWindowDrawList()->AddText(
-            {itemMin.x + arrowW + spaceW, itemMin.y},
+            {itemMin.x + textOffsetX, itemMin.y},
             IM_COL32(0xC8, 0x96, 0x5A, 0xFF),
             ICON_MDI_FOLDER
           );
@@ -555,10 +554,9 @@ void Editor::AssetsBrowser::draw() {
     bool rootOpen = ImGui::TreeNodeEx("##tnRoot", rootFlags, "%s", rootLabel.c_str());
     {
       ImVec2 itemMin = ImGui::GetItemRectMin();
-      float arrowW  = ImGui::GetFontSize();
-      float spaceW  = ImGui::GetStyle().ItemInnerSpacing.x;
+      float textOffsetX = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 2.0f;
       ImGui::GetWindowDrawList()->AddText(
-        {itemMin.x + arrowW + spaceW, itemMin.y},
+        {itemMin.x + textOffsetX, itemMin.y},
         IM_COL32(0xC8, 0x96, 0x5A, 0xFF),
         ICON_MDI_FOLDER_OPEN
       );
