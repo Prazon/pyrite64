@@ -6,6 +6,7 @@
 #include "../project.h"
 #include <filesystem>
 
+#include "../../context.h"
 #include "../../utils/fs.h"
 #include "../../utils/json.h"
 #include "../../editor/undoRedo.h"
@@ -76,6 +77,8 @@ Project::SceneManager::~SceneManager() {
 void Project::SceneManager::save() {
   if (loadedScene) {
     loadedScene->save();
+    auto p = fs::path{getScenePath(project)} / std::to_string(loadedScene->getId()) / "scene.json";
+    project->noteSelfWrite(p.string());
   }
 }
 
@@ -133,6 +136,8 @@ void Project::SceneManager::duplicate(int id)
 void Project::SceneManager::loadScene(int id) {
   if (loadedScene) {
     loadedScene->save();
+    auto p = fs::path{getScenePath(project)} / std::to_string(loadedScene->getId()) / "scene.json";
+    project->noteSelfWrite(p.string());
     delete loadedScene;
     reload(); // ensure names are up to date in case the loaded scene was renamed
   }
@@ -140,6 +145,21 @@ void Project::SceneManager::loadScene(int id) {
   Editor::UndoRedo::getHistory().clear();
 
   loadedScene = new Scene(id, project->getPath());
+}
+
+void Project::SceneManager::reloadFromDisk(int id)
+{
+  bool wasLoaded = (loadedScene && loadedScene->getId() == id);
+  if (wasLoaded) {
+    delete loadedScene;
+    loadedScene = nullptr;
+    Editor::UndoRedo::getHistory().clear();
+    ctx.mainSelection.clear();
+    loadedScene = new Scene(id, project->getPath());
+  }
+  // Refresh entries (names, relPaths) regardless, so the content browser
+  // reflects any external rename.
+  reload();
 }
 
 namespace
@@ -156,12 +176,14 @@ namespace
 
 void Project::SceneManager::setSceneRelPath(int id, const std::string &newRelPath)
 {
+  auto scenesPath = getScenePath(project);
+  auto sceneJsonPath = fs::path{scenesPath} / std::to_string(id) / "scene.json";
+
   if (loadedScene && loadedScene->getId() == id) {
     loadedScene->relPath = newRelPath;
     loadedScene->save();
+    project->noteSelfWrite(sceneJsonPath.string());
   } else {
-    auto scenesPath = getScenePath(project);
-    auto sceneJsonPath = fs::path{scenesPath} / std::to_string(id) / "scene.json";
     if (!fs::exists(sceneJsonPath)) return;
 
     try {
@@ -170,6 +192,7 @@ void Project::SceneManager::setSceneRelPath(int id, const std::string &newRelPat
       if (newRelPath.empty()) doc.erase("relPath");
       else                    doc["relPath"] = newRelPath;
       Utils::FS::saveTextFile(sceneJsonPath.string(), doc.dump(2));
+      project->noteSelfWrite(sceneJsonPath.string());
     } catch (...) {
       return;
     }

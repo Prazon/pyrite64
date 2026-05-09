@@ -3,8 +3,10 @@
 * @license MIT
 */
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 #include "assetManager.h"
 #include "scene/sceneManager.h"
@@ -83,7 +85,19 @@ namespace Project
       AssetManager assets{this};
       SceneManager scenes{this};
 
+      // Watch state for files outside the assetManager's scope:
+      // every data/scenes/<id>/scene.json plus the .p64proj. Keyed by
+      // absolute path, value is mtime from Utils::FS::getFileAge.
+      std::unordered_map<std::string, uint64_t> externalWatch{};
+      std::chrono::steady_clock::time_point externalLastCheck{};
+      bool externalInitialized{false};
+      bool externalForceNext{false};
+
       void deserialize(const nlohmann::json &doc);
+
+      // Returns true iff the project-config side is dirty (ignores assets,
+      // which have their own watch + dirty tracking).
+      [[nodiscard]] bool isConfigDirty() const { return dirty || conf.serialize() != savedState; }
 
     public:
       ProjectConf conf{};
@@ -100,6 +114,25 @@ namespace Project
       SceneManager& getScenes() { return scenes; }
       [[nodiscard]] const std::string &getPath() const { return path; }
       [[nodiscard]] const std::string &getConfigPath() const { return pathConfig; }
+
+      // Detects external edits to scene.json files and the .p64proj.
+      // Silent reload when in-memory state is clean; on conflict opens a
+      // Reload / Keep mine / Cancel modal. Has an internal 2 s throttle
+      // unless `forceNow` is true (used after window focus regained).
+      void pollExternalChanges(bool forceNow = false);
+
+      // Request that the next pollExternalChanges() bypasses the throttle.
+      // Cheaper than calling pollExternalChanges(true) directly because the
+      // actual poll still happens inside the main loop's existing slot.
+      void requestExternalPoll() { externalForceNext = true; }
+
+      // Refresh the watch snapshot for a path we just wrote ourselves, so
+      // the next poll does not mistake our write for an external edit.
+      void noteSelfWrite(const std::string &absPath);
+
+      // Re-parse the .p64proj from disk into conf and reset savedState.
+      // Does not touch assets/scenes (those have their own paths).
+      void reloadConfigFromDisk();
 
   };
 }

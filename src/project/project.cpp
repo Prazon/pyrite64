@@ -4,15 +4,18 @@
 */
 #include "project.h"
 
+#include <SDL3/SDL.h>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 #include "../build/projectBuilder.h"
+#include "../editor/undoRedo.h"
 #include "../utils/fs.h"
 #include "../utils/hash.h"
 #include "../utils/json.h"
 #include "../utils/jsonBuilder.h"
+#include "../utils/logger.h"
 #include "../context.h"
 
 namespace
@@ -216,6 +219,7 @@ void Project::Project::saveConfig()
   auto serializedConfig = conf.serialize();
   Utils::FS::saveTextFile(pathConfig, serializedConfig);
   savedState = serializedConfig;
+  noteSelfWrite(pathConfig);
 }
 
 void Project::Project::save() {
@@ -223,5 +227,191 @@ void Project::Project::save() {
   assets.save();
   scenes.save();
   markSaved();
+}
+
+void Project::Project::noteSelfWrite(const std::string &absPath)
+{
+  if (!externalInitialized) return;
+  std::error_code ec;
+  if (!fs::exists(absPath, ec)) {
+    externalWatch.erase(absPath);
+    return;
+  }
+  externalWatch[absPath] = Utils::FS::getFileAge(absPath);
+}
+
+void Project::Project::reloadConfigFromDisk()
+{
+  auto doc = Utils::JSON::loadFile(pathConfig);
+  if (doc.empty()) return;
+  deserialize(doc);
+  savedState = conf.serialize();
+  dirty = false;
+}
+
+namespace
+{
+  enum class ConflictChoice { Reload, KeepMine, Cancel };
+
+  ConflictChoice askConflict(const std::string &title, const std::string &message)
+  {
+    const SDL_MessageBoxButtonData buttons[] = {
+      { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Reload from disk" },
+      { 0,                                       2, "Keep mine" },
+      { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 3, "Cancel" },
+    };
+    SDL_MessageBoxData mb{};
+    mb.flags = SDL_MESSAGEBOX_WARNING;
+    mb.window = ctx.window;
+    mb.title = title.c_str();
+    mb.message = message.c_str();
+    mb.numbuttons = SDL_arraysize(buttons);
+    mb.buttons = buttons;
+    int btn = -1;
+    if (!SDL_ShowMessageBox(&mb, &btn)) {
+      return ConflictChoice::Cancel;
+    }
+    if (btn == 1) return ConflictChoice::Reload;
+    if (btn == 2) return ConflictChoice::KeepMine;
+    return ConflictChoice::Cancel;
+  }
+}
+
+void Project::Project::pollExternalChanges(bool forceNow)
+{
+  using Clock = std::chrono::steady_clock;
+  constexpr auto kMinInterval = std::chrono::milliseconds(2000);
+
+  auto now = Clock::now();
+  bool force = forceNow || externalForceNext;
+  externalForceNext = false;
+  if (externalInitialized && !force && (now - externalLastCheck) < kMinInterval) {
+    return;
+  }
+  externalLastCheck = now;
+
+  std::unordered_map<std::string, uint64_t> current{};
+
+  auto scenesPath = fs::path{path} / "data" / "scenes";
+  if (fs::exists(scenesPath)) {
+    for (const auto &dirEntry : fs::directory_iterator{scenesPath}) {
+      if (!dirEntry.is_directory()) continue;
+      auto sceneJson = dirEntry.path() / "scene.json";
+      if (!fs::exists(sceneJson)) continue;
+      current[sceneJson.string()] = Utils::FS::getFileAge(sceneJson);
+    }
+  }
+
+  if (fs::exists(pathConfig)) {
+    current[pathConfig] = Utils::FS::getFileAge(pathConfig);
+  }
+
+  if (!externalInitialized) {
+    externalWatch = std::move(current);
+    externalInitialized = true;
+    return;
+  }
+
+  std::vector<std::string> sceneAdded{};
+  std::vector<std::string> sceneModified{};
+  std::vector<std::string> sceneRemoved{};
+  bool projectModified = false;
+  bool projectRemoved = false;
+
+  for (const auto &[p, age] : current) {
+    auto it = externalWatch.find(p);
+    if (p == pathConfig) {
+      if (it == externalWatch.end() || it->second != age) projectModified = true;
+      continue;
+    }
+    if (it == externalWatch.end()) sceneAdded.push_back(p);
+    else if (it->second != age)    sceneModified.push_back(p);
+  }
+  for (const auto &[p, age] : externalWatch) {
+    if (current.find(p) != current.end()) continue;
+    if (p == pathConfig) projectRemoved = true;
+    else                 sceneRemoved.push_back(p);
+  }
+
+  // Returns the integer scene id encoded in <project>/data/scenes/<id>/scene.json,
+  // or -1 if the path does not match.
+  auto sceneIdOf = [](const fs::path &p) -> int {
+    auto parent = p.parent_path().filename().string();
+    try { return std::stoi(parent); } catch (...) { return -1; }
+  };
+
+  Scene *loaded = scenes.getLoadedScene();
+  bool needsEntriesRefresh = !sceneAdded.empty() || !sceneRemoved.empty();
+
+  for (const auto &p : sceneModified) {
+    int id = sceneIdOf(p);
+    if (id < 0) { externalWatch[p] = current[p]; continue; }
+
+    bool isLoaded = (loaded && loaded->getId() == id);
+    bool dirtyHere = isLoaded && Editor::UndoRedo::getHistory().isDirty();
+
+    if (!dirtyHere) {
+      if (isLoaded) {
+        Utils::Logger::log("Scene " + std::to_string(id) + " changed on disk, reloading");
+        scenes.reloadFromDisk(id);
+      } else {
+        needsEntriesRefresh = true;
+      }
+      externalWatch[p] = current[p];
+      continue;
+    }
+
+    auto choice = askConflict(
+      "Scene Changed on Disk",
+      "Scene '" + loaded->getName() + "' was modified outside the editor while you have unsaved changes.\n\n"
+      "Reload from disk to load the external version (your changes will be lost), or Keep mine to "
+      "preserve your in-memory version (the next save will overwrite the external file)."
+    );
+    if (choice == ConflictChoice::Reload) {
+      scenes.reloadFromDisk(id);
+      externalWatch[p] = current[p];
+    } else if (choice == ConflictChoice::KeepMine) {
+      externalWatch[p] = current[p];
+    }
+    // Cancel: leave watch entry stale so we re-prompt next tick.
+  }
+
+  for (const auto &p : sceneAdded) {
+    externalWatch[p] = current[p];
+  }
+  for (const auto &p : sceneRemoved) {
+    int id = sceneIdOf(p);
+    if (loaded && id >= 0 && loaded->getId() == id) {
+      Utils::Logger::log("Loaded scene " + std::to_string(id) + " was removed from disk");
+    }
+    externalWatch.erase(p);
+  }
+  if (needsEntriesRefresh) {
+    scenes.reload();
+  }
+
+  if (projectRemoved) {
+    externalWatch.erase(pathConfig);
+  } else if (projectModified) {
+    if (!isConfigDirty()) {
+      Utils::Logger::log(".p64proj changed on disk, reloading");
+      reloadConfigFromDisk();
+      externalWatch[pathConfig] = current[pathConfig];
+    } else {
+      auto choice = askConflict(
+        "Project File Changed on Disk",
+        "The project file (.p64proj) was modified outside the editor while you have unsaved "
+        "project changes.\n\nReload from disk to load the external version (your changes will be "
+        "lost), or Keep mine to preserve your in-memory version (the next save will overwrite "
+        "the external file)."
+      );
+      if (choice == ConflictChoice::Reload) {
+        reloadConfigFromDisk();
+        externalWatch[pathConfig] = current[pathConfig];
+      } else if (choice == ConflictChoice::KeepMine) {
+        externalWatch[pathConfig] = current[pathConfig];
+      }
+    }
+  }
 }
 

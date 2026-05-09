@@ -50,6 +50,12 @@ namespace Project
       void loadScene(int id);
       [[nodiscard]] Scene* getLoadedScene() const { return loadedScene; }
 
+      // Re-read a scene from disk, replacing the in-memory copy when it is
+      // currently loaded. Clears the undo history and any stale selection
+      // since object pointers are about to be reseated. Refreshes the
+      // entry name cache as a side effect.
+      void reloadFromDisk(int id);
+
       // Update a scene's content-browser folder. Patches in-memory if the
       // scene is currently loaded; otherwise edits scene.json directly.
       // Refreshes the entry cache so the browser sees the move immediately.
