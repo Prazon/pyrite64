@@ -1670,6 +1670,34 @@ void Editor::AssetsBrowser::draw() {
     ctx.project->getScenes().setSceneRelPath(pendingSceneMoveId, pendingSceneMoveTarget);
   }
 
+  // Delete-key shortcut — funnels into the existing right-click delete flow
+  // for whichever item is currently selected. Suppressed while renaming, while
+  // a confirm dialog is already up, or while another widget (search box,
+  // rename input, etc.) is active so we don't eat keystrokes meant for it.
+  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)
+      && renamePath.empty()
+      && deletePath.empty() && deleteFolderPath.empty()
+      && !ImGui::IsAnyItemActive()
+      && ImGui::IsKeyPressed(ImGuiKey_Delete))
+  {
+    if (ctx.selAssetUUID != 0) {
+      if (auto* entry = ctx.project->getAssets().getEntryByUUID(ctx.selAssetUUID)) {
+        deletePath = entry->path;
+      }
+    } else if (!selectedFolder.empty()) {
+      deleteFolderPath = selectedFolder;
+    } else if (selectedSceneId != 0 && scenes.size() > 1) {
+      // Scene delete has no confirm modal in the right-click path either —
+      // match that behavior. The size-guard prevents wiping the last scene
+      // (mirrors the canDelete check in the scene context menu).
+      ctx.project->getScenes().remove(selectedSceneId);
+      const auto &after = ctx.project->getScenes().getEntries();
+      ctx.project->conf.sceneIdLastOpened = after.empty() ? 0 : after.front().id;
+      ctx.project->saveConfig();
+      selectedSceneId = 0;
+    }
+  }
+
   // ── Confirm dialogs ──────────────────────────────────────────────────
   if (!deletePath.empty()) ImGui::OpenPopup("Confirm Delete");
   if (ImGui::BeginPopupModal("Confirm Delete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
