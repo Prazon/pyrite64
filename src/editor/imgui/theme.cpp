@@ -168,7 +168,7 @@ void ImGui::Theme::update()
   style.WindowRounding = rounding;
   style.FrameRounding = rounding;
   style.GrabRounding = rounding;
-  style.TabRounding = 0;
+  style.TabRounding = rounding;
   style.PopupRounding = rounding;
   style.ScrollbarRounding = rounding;
   style.WindowPadding = ImVec2(10, 10);

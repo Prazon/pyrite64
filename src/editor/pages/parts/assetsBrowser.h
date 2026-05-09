@@ -5,6 +5,7 @@
 #pragma once
 #include <array>
 #include <string>
+#include <vector>
 
 #include "../../../renderer/texture.h"
 
@@ -48,6 +49,13 @@ namespace Editor
       // Width of the left chip rail in pixels. Session-only; not persisted.
       // Clamped at draw time so it can never starve the grid pane.
       float chipPanelWidth{110.0f};
+      // Width of the folder-tree panel (Unified mode only). Session-only.
+      float folderTreeWidth{180.0f};
+      // Back/forward navigation history for currentDir (Unified mode only;
+      // Split mode's per-tab dirs don't share a history). Index points at
+      // the current entry; new navigations truncate the forward stack.
+      std::vector<std::string> dirHistory{};
+      int dirHistoryIdx{-1};
       // Virtual content-browser path; "" = Content/ root. Maps onto both
       // assets/<currentDir> and src/user/<currentDir> in parallel.
       // In Split mode this aliases tabDirs[activeTab] each frame.

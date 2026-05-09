@@ -12,6 +12,7 @@
 #include "../editorScene.h"
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <unordered_set>
 #include <unordered_map>
 #include <SDL3/SDL.h>
@@ -61,6 +62,57 @@ namespace
     ChipDef{ "Resources",   ICON_MDI_DATABASE_EDIT_OUTLINE,    FileType::RESOURCE_INSTANCE, false },
     ChipDef{ "Materials",   ICON_MDI_PALETTE_SWATCH,           FileType::MATERIAL,          false },
   };
+
+  // Color the asset card with a thin stripe between icon and label so users can
+  // identify the asset kind at a glance without reading the name. Scenes have
+  // no FileType slot so they're handled with their own constant below.
+  constexpr ImU32 SCENE_TYPE_COLOR = IM_COL32(0xFF, 0x8C, 0x14, 0xFF);
+
+  ImU32 assetTypeColor(FileType t)
+  {
+    switch (t) {
+      case FileType::PREFAB:            return IM_COL32(0x1F, 0x8C, 0xFF, 0xFF); // blue
+      case FileType::IMAGE:             return IM_COL32(0xFF, 0x32, 0x32, 0xFF); // red
+      case FileType::MODEL_3D:          return IM_COL32(0xC8, 0x3C, 0xFF, 0xFF); // purple
+      case FileType::AUDIO:
+      case FileType::MUSIC_XM:          return IM_COL32(0xB4, 0x14, 0x32, 0xFF); // maroon
+      case FileType::FONT:              return IM_COL32(0xFF, 0xE6, 0x3C, 0xFF); // yellow
+      case FileType::MATERIAL:          return IM_COL32(0x32, 0xC8, 0x46, 0xFF); // green
+      case FileType::CODE_OBJ:
+      case FileType::CODE_GLOBAL:
+      case FileType::NODE_GRAPH:        return IM_COL32(0x96, 0x96, 0x96, 0xFF); // grey
+      default:                          return IM_COL32(0x6E, 0x6E, 0x6E, 0xFF); // fallback grey
+    }
+  }
+
+  // Color for a chip in the unified-mode left rail. Mirrors assetTypeColor()
+  // but special-cases the Scenes chip, since scenes don't have a FileType slot.
+  ImU32 chipColor(int chipIdx)
+  {
+    if (chipIdx == ChipKind::CHIP_SCENES) return SCENE_TYPE_COLOR;
+    return assetTypeColor(CHIP_DEFS[chipIdx].type);
+  }
+
+  // Short label rendered as the second line of an asset card (UE5-style). Kept
+  // brief so it doesn't wrap inside a card; matches the chip rail vocabulary.
+  const char* assetTypeLabel(FileType t)
+  {
+    switch (t) {
+      case FileType::IMAGE:             return "Texture";
+      case FileType::AUDIO:             return "Audio";
+      case FileType::FONT:              return "Font";
+      case FileType::MODEL_3D:          return "Static Mesh";
+      case FileType::CODE_OBJ:          return "Object Script";
+      case FileType::CODE_GLOBAL:       return "Global Script";
+      case FileType::PREFAB:            return "Prefab";
+      case FileType::NODE_GRAPH:        return "Node Graph";
+      case FileType::MUSIC_XM:          return "Music";
+      case FileType::RESOURCE_TYPE:     return "Resource Type";
+      case FileType::RESOURCE_INSTANCE: return "Resource";
+      case FileType::MATERIAL:          return "Material";
+      default:                          return "Asset";
+    }
+  }
 
   std::string normalizeDir(std::string dir)
   {
@@ -160,30 +212,440 @@ void Editor::AssetsBrowser::draw() {
   fs::path assetsCurAbs  = assetsRootAbs  / currentDir;
   fs::path scriptsCurAbs = scriptsRootAbs / currentDir;
 
-  // ── LEFT: filter chip rail (Unified mode only) ───────────────────────
-  // Resizable via the splitter button between LEFT and RIGHT below; the
-  // pattern mirrors PrefabEditor's drawSplitter (assets/prefabEditor.cpp).
-  // Hidden entirely in Split mode — the tab strip drives content scoping.
+  // ── Nav history (Unified mode only) ──────────────────────────────────
+  // Lazy-seed and re-sync if currentDir was changed externally (e.g. mode
+  // switch). Split mode bypasses the stack entirely since per-tab dirs
+  // don't share a single timeline.
+  if (!splitMode) {
+    if (dirHistory.empty()) {
+      dirHistory.push_back(currentDir);
+      dirHistoryIdx = 0;
+    } else if (dirHistory[dirHistoryIdx] != currentDir) {
+      if (dirHistoryIdx + 1 < (int)dirHistory.size())
+        dirHistory.resize(dirHistoryIdx + 1);
+      dirHistory.push_back(currentDir);
+      dirHistoryIdx = (int)dirHistory.size() - 1;
+    }
+  }
+
+  // Funnel for user-initiated navigation. Anything that wants the back
+  // button to remember the previous spot must go through this. Toolbar
+  // back/forward bypass it deliberately so they don't push their own
+  // targets onto the stack.
+  auto navigateTo = [&](const std::string &target) {
+    std::string norm = normalizeDir(target);
+    if (norm == currentDir) return;
+    currentDir = norm;
+    if (!splitMode) {
+      if (dirHistoryIdx + 1 < (int)dirHistory.size())
+        dirHistory.resize(dirHistoryIdx + 1);
+      dirHistory.push_back(norm);
+      dirHistoryIdx = (int)dirHistory.size() - 1;
+    }
+  };
+
+  // ── Hoisted create-menu helpers ──────────────────────────────────────
+  // Live above the LEFT/RIGHT split so both the toolbar Add button and
+  // the empty-area context menu can share one drawCreateMenu() body.
+  // These bools are consumed at the bottom of draw() to open the
+  // NewScript / NewResource modals — wherever drawCreateMenu fired.
+  bool wantsNewScript = false;
+  bool wantsNewResource = false;
+
+  auto runImportTo = [&](const fs::path &targetAbsDir, const std::vector<Utils::FilePicker::Options::Filter> &filters) {
+    fs::create_directories(targetAbsDir);
+    Utils::FilePicker::open(
+      [targetAbsDirStr = targetAbsDir.string()](const std::string &path) {
+        if (path.empty()) return;
+        std::error_code ec;
+        fs::path src{path};
+        fs::path dst = fs::path(targetAbsDirStr) / src.filename();
+        if (fs::exists(dst, ec)) {
+          Editor::Noti::add(Editor::Noti::Type::ERROR,
+            "Asset already exists at destination: " + dst.filename().string());
+          return;
+        }
+        fs::copy_file(src, dst, ec);
+        if (ec) {
+          Editor::Noti::add(Editor::Noti::Type::ERROR,
+            "Import failed: " + ec.message());
+        }
+      },
+      {.title = "Import Asset…", .isDirectory = false, .customFilters = filters}
+    );
+  };
+
+  auto createBlankPrefab = [&](const fs::path &dir) {
+    fs::create_directories(dir);
+    auto pickName = [&](){
+      for (int i = 0; i < 1000; ++i) {
+        std::string base = (i == 0) ? "NewPrefab" : ("NewPrefab_" + std::to_string(i + 1));
+        fs::path candidate = dir / (base + ".prefab");
+        std::error_code existsEc;
+        if (!fs::exists(candidate, existsEc)) {
+          return std::pair{base, candidate};
+        }
+      }
+      return std::pair<std::string, fs::path>{"NewPrefab", dir / "NewPrefab.prefab"};
+    };
+    auto [stem, fullPath] = pickName();
+
+    Project::Prefab prefab{};
+    prefab.uuid.value = Utils::Hash::randomU64();
+    prefab.obj.name = "Root";
+    prefab.obj.scale.value = {1.0f, 1.0f, 1.0f};
+    prefab.obj.rot.value = {0, 0, 0, 1};
+
+    Utils::FS::saveTextFile(fullPath.string(), prefab.serialize());
+
+    // Scaffold the per-prefab user source pair alongside the .prefab so the
+    // Code panel in the prefab editor has files to list immediately.
+    Project::ensurePrefabUserSource(
+      ctx.project->getPath(), fullPath.filename().string()
+    );
+    ctx.project->getAssets().reload();
+
+    if (ctx.editorScene) {
+      auto* entry = ctx.project->getAssets().getByPath(fullPath.string());
+      if (entry) ctx.editorScene->openPrefabEditor(entry->getUUID());
+    }
+  };
+
+  auto drawCreateMenu = [&]() {
+    if (ImGui::MenuItem(ICON_MDI_FOLDER_PLUS " New Folder")) {
+      auto pickFreeName = [&](){
+        for (int i = 0; i < 1000; ++i) {
+          std::string name = (i == 0) ? "NewFolder" : ("NewFolder_" + std::to_string(i + 1));
+          if (currentDir.empty() && name == "p64") continue;
+          fs::path candA = assetsCurAbs  / name;
+          fs::path candS = scriptsCurAbs / name;
+          if (!fs::exists(candA) && !fs::exists(candS)) return name;
+        }
+        return std::string{"NewFolder"};
+      };
+      std::string name = pickFreeName();
+      std::error_code ec;
+      fs::create_directories(assetsCurAbs  / name, ec);
+      fs::create_directories(scriptsCurAbs / name, ec);
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem(ICON_MDI_EARTH_BOX_PLUS " New Scene")) {
+      ctx.project->getScenes().add();
+      const auto &after = ctx.project->getScenes().getEntries();
+      if (!after.empty() && !currentDir.empty()) {
+        ctx.project->getScenes().setSceneRelPath(after.back().id, currentDir);
+      }
+    }
+
+    if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " New Prefab")) {
+      createBlankPrefab(assetsCurAbs);
+    }
+
+    if (ImGui::MenuItem(ICON_MDI_DATABASE_EDIT " New Resource Type")) {
+      auto findFreeName = [&]() -> std::string {
+        for (int i = 1; i < 1000; ++i) {
+          std::string n = (i == 1) ? "ResourceType" : ("ResourceType_" + std::to_string(i));
+          if (!fs::exists(assetsCurAbs / (n + ".p64restype"))) return n;
+        }
+        return "ResourceType_X";
+      };
+      uint64_t newUUID = ctx.project->getAssets().createResourceType(
+        findFreeName(), currentDir
+      );
+      if (newUUID) {
+        ctx.selAssetUUID = newUUID;
+      } else {
+        Editor::Noti::add(Editor::Noti::Type::ERROR,
+          "Failed to create resource type.");
+      }
+    }
+
+    if (ImGui::MenuItem(ICON_MDI_PALETTE_SWATCH " New Material")) {
+      // createMaterial() writes into <project>/assets/ directly (matching
+      // createNodeGraph). Search the same root for a free name.
+      fs::path matRoot = fs::path(ctx.project->getPath()) / "assets";
+      auto findFreeName = [&]() -> std::string {
+        for (int i = 1; i < 1000; ++i) {
+          std::string n = (i == 1) ? "Material" : ("Material_" + std::to_string(i));
+          if (!fs::exists(matRoot / (n + ".p64mat"))) return n;
+        }
+        return "Material_X";
+      };
+      uint64_t newUUID = ctx.project->getAssets().createMaterial(findFreeName());
+      if (newUUID && ctx.editorScene) {
+        ctx.selAssetUUID = newUUID;
+        ctx.editorScene->openMaterialEditor(newUUID);
+      } else if (!newUUID) {
+        Editor::Noti::add(Editor::Noti::Type::ERROR,
+          "Failed to create material asset.");
+      }
+    }
+
+    if (ImGui::BeginMenu(ICON_MDI_FILE_DOCUMENT_PLUS_OUTLINE " New Script")) {
+      if (ImGui::MenuItem("Object Script")) {
+        newScriptDir = currentDir; scriptName = "New_Script"; scriptType = 0;
+        wantsNewScript = true;
+      }
+      if (ImGui::MenuItem("Global Script")) {
+        newScriptDir = currentDir; scriptName = "New_Script"; scriptType = 1;
+        wantsNewScript = true;
+      }
+      if (ImGui::MenuItem("Node Graph")) {
+        newScriptDir = currentDir; scriptName = "New_Graph";  scriptType = 2;
+        wantsNewScript = true;
+      }
+      ImGui::EndMenu();
+    }
+
+    {
+      const auto &resourceTypes = ctx.project->getAssets().getTypeEntries(FileType::RESOURCE_TYPE);
+      if (!resourceTypes.empty()) {
+        if (ImGui::BeginMenu(ICON_MDI_DATABASE_PLUS " New Resource Instance")) {
+          for (const auto &typeEntry : resourceTypes) {
+            if (ImGui::MenuItem(typeEntry.name.c_str())) {
+              newResourceDir = currentDir;
+              newResourceName = "New_" + fs::path(typeEntry.name).stem().string();
+              newResourceTypeUUID = typeEntry.getUUID();
+              wantsNewResource = true;
+            }
+          }
+          ImGui::EndMenu();
+        }
+      }
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem(ICON_MDI_FILE_IMPORT_OUTLINE " Import Asset…")) {
+      using F = Utils::FilePicker::Options::Filter;
+      runImportTo(assetsCurAbs, {
+        F{"Image",       "png"},
+        F{"GLTF/GLB",    "glb,gltf"},
+        F{"Font (TTF)",  "ttf"},
+        F{"Audio (WAV)", "wav"},
+        F{"Music (XM)",  "xm"},
+        F{"Prefab",      "p64prefab"},
+      });
+    }
+    if (ImGui::MenuItem(ICON_MDI_FILE_IMPORT_OUTLINE " Import Script…")) {
+      using F = Utils::FilePicker::Options::Filter;
+      runImportTo(scriptsCurAbs, { F{"C++ Source", "cpp"} });
+    }
+  };
+
+  // ── LEFT panes (Unified mode only) ───────────────────────────────────
+  // Three-column unified layout: folder tree | chip rail | grid. Each
+  // separator is a thin button styled like ImGuiCol_Separator, mirroring
+  // PrefabEditor's drawSplitter pattern. Hidden in Split mode — its tab
+  // strip drives content scoping there.
   constexpr float SPLITTER_W   = 4.0f;
+  constexpr float TREE_MIN_W   = 100.0f;
   constexpr float CHIP_MIN_W   = 60.0f;
   constexpr float CHIP_MAX_PAD = 200.0f; // leave at least this much for the grid
   float fullAvail = ImGui::GetContentRegionAvail().x;
   float availWidth;
 
-  if (!splitMode) {
-    chipPanelWidth = ImClamp(chipPanelWidth, CHIP_MIN_W,
-                             std::max(CHIP_MIN_W, fullAvail - CHIP_MAX_PAD - SPLITTER_W));
+  // Reusable vertical splitter — drag to resize the panel to its left.
+  auto vSplitter = [&](const char* id, float &widthVar, float minW, float maxW) {
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetStyleColorVec4(ImGuiCol_Separator));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
+    ImGui::Button(id, ImVec2(SPLITTER_W, -1));
+    ImGui::PopStyleColor(3);
+    if (ImGui::IsItemActive()) {
+      widthVar = ImClamp(widthVar + ImGui::GetIO().MouseDelta.x, minW, std::max(minW, maxW));
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+  };
 
+  if (!splitMode) {
+    // Width budget: tree + chip + 2*splitter + (grid >= CHIP_MAX_PAD).
+    float twoColMax = std::max(TREE_MIN_W + CHIP_MIN_W,
+                               fullAvail - CHIP_MAX_PAD - SPLITTER_W*2);
+    folderTreeWidth = ImClamp(folderTreeWidth, TREE_MIN_W,
+                              std::max(TREE_MIN_W, twoColMax - CHIP_MIN_W));
+    chipPanelWidth  = ImClamp(chipPanelWidth, CHIP_MIN_W,
+                              std::max(CHIP_MIN_W, twoColMax - folderTreeWidth));
+
+    // Folder tree — virtual unified directory tree (union of assets/ and
+    // src/user/). Same merge semantics as the breadcrumb's folder listing
+    // so the user sees one tree regardless of which physical root a folder
+    // lives in.
+    ImGui::BeginChild("FOLDER_TREE", ImVec2(folderTreeWidth, 0), ImGuiChildFlags_Borders);
+
+    std::function<void(const std::string&)> drawTreeChildren = [&](const std::string &virt) {
+      std::vector<std::string> kids{};
+      std::unordered_set<std::string> seen{};
+      for (const auto &root : {assetsRootAbs, scriptsRootAbs}) {
+        fs::path dir = root / virt;
+        std::error_code ec;
+        for (auto it = fs::directory_iterator(dir, ec);
+             !ec && it != fs::directory_iterator();
+             it.increment(ec)) {
+          if (!it->is_directory()) continue;
+          auto name = it->path().filename().string();
+          // Hide the generated outputs directory at the Content root.
+          if (virt.empty() && name == "p64") continue;
+          if (seen.insert(name).second) kids.push_back(name);
+        }
+      }
+      std::sort(kids.begin(), kids.end());
+
+      for (const auto &name : kids) {
+        std::string childVirt = joinDir(virt, name);
+
+        // Probe one level down so leaf folders skip the expand arrow.
+        bool hasKids = false;
+        for (const auto &root : {assetsRootAbs, scriptsRootAbs}) {
+          fs::path d2 = root / childVirt;
+          std::error_code ec;
+          for (auto it2 = fs::directory_iterator(d2, ec);
+               !ec && it2 != fs::directory_iterator();
+               it2.increment(ec)) {
+            if (it2->is_directory()) { hasKids = true; break; }
+          }
+          if (hasKids) break;
+        }
+
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
+                                 | ImGuiTreeNodeFlags_OpenOnDoubleClick
+                                 | ImGuiTreeNodeFlags_SpanAvailWidth;
+        if (!hasKids) flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        if (currentDir == childVirt) flags |= ImGuiTreeNodeFlags_Selected;
+
+        // TreeNodeEx renders arrow + icon + name in default text color
+        // (white). We then re-draw only the folder glyph in manilla on top
+        // of the white one — pixel positions match exactly so there's no
+        // ghosting and the arrow + name stay white. Position mirrors
+        // ImGui's TreeNodeBehavior label offset: frame_bb.Min + FontSize
+        // + ItemInnerSpacing.x.
+        std::string label = std::string(ICON_MDI_FOLDER " ") + name;
+        bool open = ImGui::TreeNodeEx(("##tn_" + childVirt).c_str(), flags, "%s", label.c_str());
+        {
+          ImVec2 itemMin = ImGui::GetItemRectMin();
+          float arrowW  = ImGui::GetFontSize();
+          float spaceW  = ImGui::GetStyle().ItemInnerSpacing.x;
+          ImGui::GetWindowDrawList()->AddText(
+            {itemMin.x + arrowW + spaceW, itemMin.y},
+            IM_COL32(0xC8, 0x96, 0x5A, 0xFF),
+            ICON_MDI_FOLDER
+          );
+        }
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+          navigateTo(childVirt);
+        }
+        if (open && hasKids) {
+          drawTreeChildren(childVirt);
+          ImGui::TreePop();
+        }
+      }
+    };
+
+    // Always-open virtual Content root.
+    ImGuiTreeNodeFlags rootFlags = ImGuiTreeNodeFlags_OpenOnArrow
+                                 | ImGuiTreeNodeFlags_SpanAvailWidth
+                                 | ImGuiTreeNodeFlags_DefaultOpen;
+    if (currentDir.empty()) rootFlags |= ImGuiTreeNodeFlags_Selected;
+    std::string rootLabel = std::string(ICON_MDI_FOLDER_OPEN " Content");
+    bool rootOpen = ImGui::TreeNodeEx("##tnRoot", rootFlags, "%s", rootLabel.c_str());
+    {
+      ImVec2 itemMin = ImGui::GetItemRectMin();
+      float arrowW  = ImGui::GetFontSize();
+      float spaceW  = ImGui::GetStyle().ItemInnerSpacing.x;
+      ImGui::GetWindowDrawList()->AddText(
+        {itemMin.x + arrowW + spaceW, itemMin.y},
+        IM_COL32(0xC8, 0x96, 0x5A, 0xFF),
+        ICON_MDI_FOLDER_OPEN
+      );
+    }
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+      navigateTo("");
+    }
+    if (rootOpen) {
+      drawTreeChildren("");
+      ImGui::TreePop();
+    }
+
+    ImGui::EndChild();
+
+    vSplitter("##treeSplitter", folderTreeWidth,
+              TREE_MIN_W,
+              std::max(TREE_MIN_W, twoColMax - chipPanelWidth));
+
+    // Chip rail — UE5-style filter pills with a left swatch carrying the
+    // type color. The swatch encodes the asset kind, so the pill body drops
+    // the icon glyph (would be redundant) and the label spans the rest of
+    // the row. Body opaque when on, transparent off; swatch dim when off so
+    // the identity is still readable at a glance.
+    ImGui::SameLine();
     ImGui::BeginChild("LEFT", ImVec2(chipPanelWidth, 0), ImGuiChildFlags_Borders);
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextUnformatted("Filters");
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+
+    const float pillH     = ImGui::GetFrameHeight();
+    const float pillRound = 4.0f;
+    const float swatchW   = 4_px;
+    ImDrawList* chipDL = ImGui::GetWindowDrawList();
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 3_px));
     for (int i = 0; i < ChipKind::CHIP_COUNT; ++i) {
       const auto &def = CHIP_DEFS[i];
       bool on = chips[i];
-      std::string label = std::string(def.icon) + "  " + def.name;
-      // Selectable's "selected" state stands in for "filter on". Right-click
-      // pops the solo / show-all menu.
-      if (ImGui::Selectable((label + "##chip").c_str(), on)) {
+
+      ImVec2 pos = ImGui::GetCursorScreenPos();
+      float fullW = ImGui::GetContentRegionAvail().x;
+      std::string id = std::string("##chip") + std::to_string(i);
+      ImGui::InvisibleButton(id.c_str(), ImVec2(fullW, pillH));
+      bool hovered = ImGui::IsItemHovered();
+      if (ImGui::IsItemClicked()) {
         chips[i] = !on;
+        on = !on;
       }
+
+      ImU32 bodyCol;
+      if (on) {
+        bodyCol = ImGui::GetColorU32(hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
+      } else {
+        bodyCol = hovered ? IM_COL32(255, 255, 255, 22) : IM_COL32(0, 0, 0, 0);
+      }
+      chipDL->AddRectFilled(pos, ImVec2(pos.x + fullW, pos.y + pillH),
+                            bodyCol, pillRound);
+
+      ImU32 swatch = chipColor(i);
+      if (!on) {
+        ImVec4 sc = ImGui::ColorConvertU32ToFloat4(swatch);
+        swatch = IM_COL32((int)(sc.x * 255 * 0.55f),
+                          (int)(sc.y * 255 * 0.55f),
+                          (int)(sc.z * 255 * 0.55f),
+                          0xCC);
+      }
+      chipDL->AddRectFilled(pos, ImVec2(pos.x + swatchW, pos.y + pillH),
+                            swatch, pillRound, ImDrawFlags_RoundCornersLeft);
+
+      ImU32 textCol = on
+        ? ImGui::GetColorU32(ImGuiCol_Text)
+        : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+      float textY = pos.y + (pillH - ImGui::GetTextLineHeight()) * 0.5f;
+      std::string nameStr = def.name;
+      ImGui::PushStyleColor(ImGuiCol_Text, textCol);
+      ImGui::RenderTextEllipsis(
+        chipDL,
+        ImVec2(pos.x + swatchW + 6_px, textY),
+        ImVec2(pos.x + fullW - 4_px, pos.y + pillH),
+        0,
+        nameStr.c_str(), nameStr.c_str() + nameStr.size(),
+        nullptr
+      );
+      ImGui::PopStyleColor();
+
       if (ImGui::BeginPopupContextItem(("chipctx" + std::to_string(i)).c_str())) {
         if (ImGui::MenuItem("Solo")) {
           for (int j = 0; j < ChipKind::CHIP_COUNT; ++j) chips[j] = (j == i);
@@ -194,26 +656,15 @@ void Editor::AssetsBrowser::draw() {
         ImGui::EndPopup();
       }
     }
+    ImGui::PopStyleVar();
     ImGui::EndChild();
 
-    // Vertical splitter — drag to resize the chip rail. Styled like
-    // ImGuiCol_Separator so it visually reads as a divider, not a button.
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetStyleColorVec4(ImGuiCol_Separator));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_SeparatorHovered));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::GetStyleColorVec4(ImGuiCol_SeparatorActive));
-    ImGui::Button("##chipSplitter", ImVec2(SPLITTER_W, -1));
-    ImGui::PopStyleColor(3);
-    if (ImGui::IsItemActive()) {
-      chipPanelWidth = ImClamp(chipPanelWidth + ImGui::GetIO().MouseDelta.x,
-                               CHIP_MIN_W,
-                               std::max(CHIP_MIN_W, fullAvail - CHIP_MAX_PAD - SPLITTER_W));
-    }
-    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    }
+    vSplitter("##chipSplitter", chipPanelWidth,
+              CHIP_MIN_W,
+              std::max(CHIP_MIN_W, twoColMax - folderTreeWidth));
 
-    availWidth = ImGui::GetContentRegionAvail().x - 24_px - chipPanelWidth - SPLITTER_W;
+    availWidth = ImGui::GetContentRegionAvail().x - 24_px - chipPanelWidth - SPLITTER_W
+                 - folderTreeWidth - SPLITTER_W;
     ImGui::SameLine();
   } else {
     availWidth = fullAvail - 24_px;
@@ -256,8 +707,53 @@ void Editor::AssetsBrowser::draw() {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4_px, 3_px));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,  ImVec2(4_px, 4_px));
 
+    // Unified-mode toolbar: [+ Add] [Import] [←] [→] before breadcrumb.
+    // Add and Import share helpers with the empty-area context menu so the
+    // create options live in one place. Back/forward walk dirHistory and
+    // bypass navigateTo so they don't push their own targets.
+    if (!splitMode) {
+      if (ImGui::Button(ICON_MDI_PLUS " Add##cbAdd")) {
+        ImGui::OpenPopup("CBAddMenu");
+      }
+      if (ImGui::BeginPopup("CBAddMenu")) {
+        drawCreateMenu();
+        ImGui::EndPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button(ICON_MDI_FILE_IMPORT_OUTLINE " Import##cbImport")) {
+        using F = Utils::FilePicker::Options::Filter;
+        runImportTo(assetsCurAbs, {
+          F{"Image",       "png"},
+          F{"GLTF/GLB",    "glb,gltf"},
+          F{"Font (TTF)",  "ttf"},
+          F{"Audio (WAV)", "wav"},
+          F{"Music (XM)",  "xm"},
+          F{"Prefab",      "p64prefab"},
+        });
+      }
+      ImGui::SameLine();
+
+      bool canBack = dirHistoryIdx > 0;
+      bool canFwd  = dirHistoryIdx >= 0
+                  && dirHistoryIdx < (int)dirHistory.size() - 1;
+      if (!canBack) ImGui::BeginDisabled();
+      if (ImGui::Button(ICON_MDI_ARROW_LEFT "##cbBack")) {
+        --dirHistoryIdx;
+        currentDir = dirHistory[dirHistoryIdx];
+      }
+      if (!canBack) ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (!canFwd) ImGui::BeginDisabled();
+      if (ImGui::Button(ICON_MDI_ARROW_RIGHT "##cbFwd")) {
+        ++dirHistoryIdx;
+        currentDir = dirHistory[dirHistoryIdx];
+      }
+      if (!canFwd) ImGui::EndDisabled();
+      ImGui::SameLine();
+    }
+
     if (ImGui::Button(ICON_MDI_FOLDER " Content")) {
-      currentDir.clear();
+      navigateTo("");
     }
 
     std::vector<std::string> crumbParts{};
@@ -277,22 +773,17 @@ void Editor::AssetsBrowser::draw() {
       ImGui::SameLine();
       accum = joinDir(accum, part);
       if (ImGui::Button(part.c_str())) {
-        currentDir = accum;
+        navigateTo(accum);
       }
     }
     ImGui::PopStyleVar(2);
 
     ImGui::SameLine();
-    // Reserve trailing space for: search box + gap + kebab button + edge gap.
-    constexpr float SEARCH_W = 160.0f;
-    constexpr float KEBAB_W  = 22.0f;
+    // Reserve trailing space for: kebab button + edge gap.
+    constexpr float KEBAB_W = 22.0f;
     ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX()
-                         - SEARCH_W - 4_px - KEBAB_W - 2_px);
-    ImGui::SetNextItemWidth(SEARCH_W);
-    ImGui::InputTextWithHint("##search", "Filter...", &searchFilter);
-
-    ImGui::SameLine();
-    if (ImGui::Button(ICON_MDI_DOTS_VERTICAL "##cbSettings", ImVec2(KEBAB_W, 0))) {
+                         - KEBAB_W - 2_px);
+    if (ImGui::Button(ICON_MDI_COG "##cbSettings", ImVec2(KEBAB_W, 0))) {
       ImGui::OpenPopup("ContentBrowserSettings");
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("View options");
@@ -318,166 +809,427 @@ void Editor::AssetsBrowser::draw() {
     ImGui::PopStyleColor(3);
   }
 
-  ImGui::BeginChild("ASSETS");
+  // Search row — own row above the grid, mirroring UE5's Content Browser
+  // layout. Width is fixed (not full-width) so it reads as a focused control,
+  // not as a header bar. Placeholder uses UE's wording.
+  // The leading filter button is Unified-only — Split mode auto-scopes
+  // chips to the active tab, so a manual override would conflict.
+  if (!splitMode) {
+    if (ImGui::Button(ICON_MDI_FILTER "##cbFilter")) {
+      ImGui::OpenPopup("CBFilterPopup");
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Filter by type");
+    if (ImGui::BeginPopup("CBFilterPopup")) {
+      for (int i = 0; i < ChipKind::CHIP_COUNT; ++i) {
+        ImGui::PushStyleColor(ImGuiCol_Text, chipColor(i));
+        if (ImGui::MenuItem(CHIP_DEFS[i].name, nullptr, chips[i])) {
+          chips[i] = !chips[i];
+        }
+        ImGui::PopStyleColor();
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Show All")) chips.fill(true);
+      if (ImGui::MenuItem("Hide All")) chips.fill(false);
+      ImGui::EndPopup();
+    }
+    ImGui::SameLine();
+  }
+  ImGui::SetNextItemWidth(280_px);
+  ImGui::InputTextWithHint("##search", ICON_MDI_MAGNIFY "  Search Content", &searchFilter);
 
-  float imageSize  = 64_px;
-  float itemWidth  = imageSize + 18_px;
+  // Reserve a one-line footer below the grid for the item / selection count.
+  ImGui::BeginChild("ASSETS", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()));
+
+  // Counted as items pass the search filter (incremented in checkLineBreak),
+  // so the footer reflects what's actually rendered, not the total in the dir.
+  int visibleItems = 0;
+
+  // Card geometry — UE5 Content Browser parallel. The card is the click target;
+  // every visual (thumbnail, stripe, name, type label, frame) is drawn on top
+  // of an InvisibleButton via the window draw list so the whole card reads as
+  // one unit. Heights derive from the current font's line metrics so the
+  // layout scales correctly at different zoom levels.
+  const float imageSize     = 96_px;
+  const float cardPad       = 6_px;
+  const float gapThumbName  = 4_px;
+  const float gapNameType   = 2_px;
+  const float lineH         = ImGui::GetTextLineHeight();
+  const float typeLabelH    = lineH * 0.85f;
+  const float nameAreaH     = 2.0f * lineH;       // up to two wrapped lines
+  const float cardWidth     = imageSize + 2 * cardPad;
+  const float cardHeight    = cardPad + imageSize + gapThumbName + nameAreaH
+                            + gapNameType + typeLabelH + cardPad;
+  const float gridGap       = 8_px;
+  const float itemWidth     = cardWidth + gridGap;
+
   float currentWid = 0.0f;
-  ImVec2 textBtnSize{imageSize + 12_px, imageSize + 8_px};
-
   float cursorStartX = ImGui::GetCursorPosX();
   float cursorY      = ImGui::GetCursorPosY();
 
   auto checkLineBreak = [&]() {
+    ++visibleItems;
     if ((currentWid + itemWidth*2) > availWidth) {
       currentWid = 0.0f;
-      cursorY += imageSize + 28_px;
+      cursorY += cardHeight + gridGap;
       ImGui::SetCursorPos({cursorStartX, cursorY});
     } else {
-      if (currentWid != 0) ImGui::SameLine();
+      if (currentWid != 0) ImGui::SameLine(0.0f, gridGap);
     }
     currentWid += itemWidth;
   };
 
-  auto drawRename = [&](const std::string &label, const ImVec2 &startPos) {
-    ImVec2 rectMin{startPos.x,                  startPos.y + imageSize + 8};
-    ImVec2 rectMax{startPos.x + imageSize+14_px, startPos.y + imageSize + 8_px + 16_px};
+  // Apply a rename triggered from any card. Pulled out of the per-card draw
+  // because we need to fire it AFTER the per-card popup/drag-drop checks have
+  // bound to the InvisibleButton's "last item" state. Mirrors the legacy
+  // drawRename body 1:1 (folder cross-root mirror, scene-folder rewrite,
+  // file rename + .conf sidecar).
+  auto runRenameCommit = [&]() {
+    fs::path oldPath = renamePath;
+    bool isDir = fs::is_directory(oldPath);
 
-    ImVec2 originalCursor = ImGui::GetCursorPos();
-    ImGui::SetCursorScreenPos(rectMin);
-    ImGui::SetNextItemWidth(rectMax.x - rectMin.x);
-    if (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2_px, 0));
-    if (ImGui::InputText("##renameInput", renameBuffer, sizeof(renameBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
-      fs::path oldPath = renamePath;
-      bool isDir = fs::is_directory(oldPath);
-
-      if (isDir) {
-        // Folder rename: cross-root mirror. Apply to whichever physical
-        // sides exist, then rewrite scene relPaths under the old prefix.
-        std::string newName = renameBuffer;
-        if (!newName.empty() && newName != oldPath.filename().string()) {
-          fs::path parent = oldPath.parent_path();
-          fs::path newAbs = parent / newName;
-
-          // Determine which physical root this anchor is in so we can
-          // rename the mirror on the other side too.
-          std::error_code ec;
-          fs::path otherOld, otherNew;
-          {
-            auto lex = oldPath.lexically_relative(assetsRootAbs);
-            if (!lex.empty() && !lex.string().starts_with("..")) {
-              otherOld = scriptsRootAbs / lex;
-              otherNew = scriptsRootAbs / lex.parent_path() / newName;
-            } else {
-              auto lex2 = oldPath.lexically_relative(scriptsRootAbs);
-              if (!lex2.empty() && !lex2.string().starts_with("..")) {
-                otherOld = assetsRootAbs / lex2;
-                otherNew = assetsRootAbs / lex2.parent_path() / newName;
-              }
-            }
-          }
-
-          fs::rename(oldPath, newAbs, ec);
-          if (ec) Utils::Logger::log("Rename failed: " + ec.message(), Utils::Logger::LEVEL_ERROR);
-
-          if (!otherOld.empty() && fs::exists(otherOld)) {
-            std::error_code ec2;
-            fs::rename(otherOld, otherNew, ec2);
-            if (ec2) Utils::Logger::log("Mirror rename failed: " + ec2.message(), Utils::Logger::LEVEL_ERROR);
-          }
-
-          // Compute the virtual prefix swap and rewrite scene relPaths.
-          std::string oldVirt = joinDir(currentDir, oldPath.filename().string());
-          std::string newVirt = joinDir(currentDir, newName);
-          ctx.project->getScenes().renameSceneFolder(oldVirt, newVirt);
-        }
-      } else {
-        // File rename: preserve the existing extension and any sidecar
-        // .conf the asset pipeline owns.
-        std::string newFileName = std::string(renameBuffer) + oldPath.extension().string();
-        fs::path newPath = oldPath.parent_path() / newFileName;
+    if (isDir) {
+      std::string newName = renameBuffer;
+      if (!newName.empty() && newName != oldPath.filename().string()) {
+        fs::path parent = oldPath.parent_path();
+        fs::path newAbs = parent / newName;
 
         std::error_code ec;
-        if (oldPath != newPath) {
-          if (fs::exists(newPath)) {
-            Utils::Logger::log("A file with that name already exists.", Utils::Logger::LEVEL_ERROR);
+        fs::path otherOld, otherNew;
+        {
+          auto lex = oldPath.lexically_relative(assetsRootAbs);
+          if (!lex.empty() && !lex.string().starts_with("..")) {
+            otherOld = scriptsRootAbs / lex;
+            otherNew = scriptsRootAbs / lex.parent_path() / newName;
           } else {
-            fs::rename(oldPath, newPath, ec);
-            if (ec) Utils::Logger::log("Rename failed: " + ec.message(), Utils::Logger::LEVEL_ERROR);
-            else {
-              fs::path oldConf = oldPath.string() + ".conf";
-              fs::path newConf = newPath.string() + ".conf";
-              if (fs::exists(oldConf)) {
-                fs::rename(oldConf, newConf, ec);
-                if (ec) Utils::Logger::log("Failed to move .conf: " + ec.message(), Utils::Logger::LEVEL_ERROR);
-              }
+            auto lex2 = oldPath.lexically_relative(scriptsRootAbs);
+            if (!lex2.empty() && !lex2.string().starts_with("..")) {
+              otherOld = assetsRootAbs / lex2;
+              otherNew = assetsRootAbs / lex2.parent_path() / newName;
+            }
+          }
+        }
+
+        fs::rename(oldPath, newAbs, ec);
+        if (ec) Utils::Logger::log("Rename failed: " + ec.message(), Utils::Logger::LEVEL_ERROR);
+
+        if (!otherOld.empty() && fs::exists(otherOld)) {
+          std::error_code ec2;
+          fs::rename(otherOld, otherNew, ec2);
+          if (ec2) Utils::Logger::log("Mirror rename failed: " + ec2.message(), Utils::Logger::LEVEL_ERROR);
+        }
+
+        std::string oldVirt = joinDir(currentDir, oldPath.filename().string());
+        std::string newVirt = joinDir(currentDir, newName);
+        ctx.project->getScenes().renameSceneFolder(oldVirt, newVirt);
+      }
+    } else {
+      std::string newFileName = std::string(renameBuffer) + oldPath.extension().string();
+      fs::path newPath = oldPath.parent_path() / newFileName;
+
+      std::error_code ec;
+      if (oldPath != newPath) {
+        if (fs::exists(newPath)) {
+          Utils::Logger::log("A file with that name already exists.", Utils::Logger::LEVEL_ERROR);
+        } else {
+          fs::rename(oldPath, newPath, ec);
+          if (ec) Utils::Logger::log("Rename failed: " + ec.message(), Utils::Logger::LEVEL_ERROR);
+          else {
+            fs::path oldConf = oldPath.string() + ".conf";
+            fs::path newConf = newPath.string() + ".conf";
+            if (fs::exists(oldConf)) {
+              fs::rename(oldConf, newConf, ec);
+              if (ec) Utils::Logger::log("Failed to move .conf: " + ec.message(), Utils::Logger::LEVEL_ERROR);
             }
           }
         }
       }
-      renamePath.clear();
+    }
+    renamePath.clear();
+  };
+
+  // Inline rename overlay positioned at the card's name slot. Called by the
+  // grid loop AFTER all card-as-item queries (drag-drop, tooltip, popup) have
+  // resolved against the InvisibleButton, so the InputText doesn't shadow
+  // those queries.
+  auto drawCardRename = [&](const ImVec2 &cardScreenPos) {
+    ImVec2 nameMin{ cardScreenPos.x + cardPad,
+                    cardScreenPos.y + cardPad + imageSize + gapThumbName };
+    ImVec2 originalCursor = ImGui::GetCursorPos();
+    ImGui::SetCursorScreenPos(nameMin);
+    ImGui::SetNextItemWidth(cardWidth - 2 * cardPad);
+    if (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2_px, 0));
+    if (ImGui::InputText("##renameInput", renameBuffer, sizeof(renameBuffer),
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+      runRenameCommit();
     }
     ImGui::PopStyleVar();
 
-    if ((!ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    if ((!ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
+        || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       renamePath.clear();
     }
-
     ImGui::SetCursorPos(originalCursor);
   };
 
-  auto drawLabel = [&](const std::string &label, const ImVec2 &startPos) {
-    auto size = ImGui::CalcTextSize(label.c_str());
-    ImVec2 rextMin{startPos.x,                   startPos.y + imageSize + 8_px};
-    ImVec2 rextMax{startPos.x + imageSize+14_px, startPos.y + imageSize + 8_px + 16_px};
+  // Render one asset card. The InvisibleButton is the click target so the
+  // entire frame is selectable; everything else is draw-list calls. Returns
+  // true on click. `outScreenPos` exposes the card's top-left for the rename
+  // overlay; pass nullptr if not needed.
+  auto drawAssetCard = [&](
+    const std::string &id, ImTextureRef icon, const char* iconTxt,
+    const std::string &displayName, const char* typeLabel,
+    ImU32 typeColor, bool selected, float alpha,
+    ImVec2 *outScreenPos
+  ) -> bool
+  {
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    if (outScreenPos) *outScreenPos = startPos;
 
-    if((size.x+3_px) > (rextMax.x - rextMin.x))
-    {
-      ImGui::RenderTextEllipsis(
-        ImGui::GetWindowDrawList(), rextMin, rextMax, 0,
-        label.c_str(), label.c_str() + label.size(),
-        nullptr
-      );
-    } else {
-      ImGui::GetWindowDrawList()->AddText(
-        {rextMin.x + ((rextMax.x - rextMin.x) - size.x) * 0.5f,
-         rextMin.y + ((rextMax.y - rextMin.y) - size.y) * 0.5f},
-        ImGui::GetColorU32(ImGuiCol_Text),
-        label.c_str()
+    bool clicked = ImGui::InvisibleButton(id.c_str(), {cardWidth, cardHeight},
+                                          ImGuiButtonFlags_AllowOverlap);
+    bool hovered = ImGui::IsItemHovered();
+
+    auto* dl = ImGui::GetWindowDrawList();
+    ImVec2 cardMin = startPos;
+    ImVec2 cardMax = {startPos.x + cardWidth, startPos.y + cardHeight};
+    ImVec2 thumbMin = {cardMin.x + cardPad, cardMin.y + cardPad};
+    ImVec2 thumbMax = {thumbMin.x + imageSize, thumbMin.y + imageSize};
+    const float rounding = 4.0f;
+
+    // Card body — single dark fill behind the whole card.
+    ImU32 bodyCol  = IM_COL32(28, 28, 32, 255);
+    ImU32 thumbBg  = IM_COL32(40, 40, 44, 255);
+    ImU32 nameCol  = IM_COL32(230, 230, 235, 255);
+    ImU32 typeCol  = IM_COL32(140, 140, 145, 255);
+    if (selected) bodyCol = IM_COL32(50, 70, 120, 255);
+    dl->AddRectFilled(cardMin, cardMax, bodyCol, rounding);
+
+    // Thumbnail panel.
+    dl->AddRectFilled(thumbMin, thumbMax, thumbBg, rounding * 0.6f);
+
+    // Checker pattern behind glyph-only thumbnails (UE5 uses this for
+    // transparent textures; we use it everywhere there's no real thumbnail
+    // so the panel doesn't read as flat).
+    if (!icon._TexID) {
+      const float cell = 8_px;
+      ImU32 c1 = IM_COL32(36, 36, 40, 255);
+      ImU32 c2 = IM_COL32(48, 48, 52, 255);
+      int rows = (int)((thumbMax.y - thumbMin.y) / cell) + 1;
+      int cols = (int)((thumbMax.x - thumbMin.x) / cell) + 1;
+      dl->PushClipRect(thumbMin, thumbMax, true);
+      for (int r = 0; r < rows; ++r) {
+        for (int col = 0; col < cols; ++col) {
+          ImVec2 cmin = { thumbMin.x + col*cell, thumbMin.y + r*cell };
+          ImVec2 cmax = { cmin.x + cell, cmin.y + cell };
+          dl->AddRectFilled(cmin, cmax, ((r + col) & 1) ? c1 : c2);
+        }
+      }
+      dl->PopClipRect();
+    }
+
+    // Icon or texture content.
+    int alphaI = (int)(alpha * 255.0f);
+    if (icon._TexID) {
+      dl->AddImage(icon._TexID, thumbMin, thumbMax, {0, 0}, {1, 1},
+                   IM_COL32(255, 255, 255, alphaI));
+    } else if (iconTxt && iconTxt[0]) {
+      const float glyphSize = 40_px;
+      ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(glyphSize, FLT_MAX, 0.0f, iconTxt);
+      ImVec2 glyphPos = {
+        (thumbMin.x + thumbMax.x - ts.x) * 0.5f,
+        (thumbMin.y + thumbMax.y - ts.y) * 0.5f
+      };
+      dl->AddText(ImGui::GetFont(), glyphSize, glyphPos,
+                  IM_COL32(220, 220, 225, alphaI), iconTxt);
+    }
+
+    // Type-color stripe at the bottom edge of the thumbnail (touching the
+    // thumbnail rect — UE5 reads this as the type signal).
+    if (typeColor) {
+      const float stripeH = 2_px;
+      dl->AddRectFilled(
+        { thumbMin.x, thumbMax.y - stripeH },
+        { thumbMax.x, thumbMax.y },
+        typeColor
       );
     }
+
+    // Type-icon corner badge for cards that show a real thumbnail. Without
+    // this, a textured asset looks like a generic image — the badge restores
+    // the type cue UE5 relies on.
+    if (icon._TexID && iconTxt && iconTxt[0]) {
+      const float badgeR = 9_px;
+      ImVec2 badgePos = {thumbMax.x - badgeR - 4_px, thumbMax.y - badgeR - 6_px};
+      dl->AddCircleFilled(badgePos, badgeR, IM_COL32(20, 20, 24, 210));
+      const float gs = 14_px;
+      ImVec2 gts = ImGui::GetFont()->CalcTextSizeA(gs, FLT_MAX, 0.0f, iconTxt);
+      dl->AddText(ImGui::GetFont(), gs,
+                  {badgePos.x - gts.x*0.5f, badgePos.y - gts.y*0.5f},
+                  IM_COL32(230, 230, 235, 255), iconTxt);
+    }
+
+    // Name text — wrapped to two lines, ellipsised on overflow. Clipped to
+    // the card's text area so a runaway substring (e.g. unbreakable token
+    // wider than the card) can't bleed into the next cell. Skipped when
+    // renaming because the rename overlay will replace this region.
+    bool isRenaming = (id == renamePath);
+    if (!isRenaming) {
+      float textLeft  = cardMin.x + cardPad;
+      float textRight = cardMax.x - cardPad;
+      float wrapWidth = textRight - textLeft;
+      float textY     = thumbMax.y + gapThumbName;
+
+      const char* str = displayName.c_str();
+      const char* end = str + displayName.size();
+      ImFont* font = ImGui::GetFont();
+      float fontSize = ImGui::GetFontSize();
+
+      dl->PushClipRect({textLeft, textY},
+                       {textRight, cardMax.y - cardPad * 0.5f},
+                       true);
+
+      const char* l1End = font->CalcWordWrapPositionA(1.0f, str, end, wrapWidth);
+      if (l1End >= end) {
+        // Fits on one line.
+        dl->AddText(font, fontSize, {textLeft, textY}, nameCol, str, end);
+      } else {
+        dl->AddText(font, fontSize, {textLeft, textY}, nameCol, str, l1End);
+
+        const char* l2Begin = l1End;
+        while (l2Begin < end && (*l2Begin == ' ' || *l2Begin == '\n')) ++l2Begin;
+        const char* l2End = font->CalcWordWrapPositionA(1.0f, l2Begin, end, wrapWidth);
+
+        if (l2End >= end) {
+          dl->AddText(font, fontSize, {textLeft, textY + lineH}, nameCol,
+                      l2Begin, l2End);
+        } else {
+          // Truncate line 2 with an ellipsis. Reserve ellipsis width and
+          // re-wrap so we never run past the card edge.
+          const char* ell = "...";
+          float ellW = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, ell).x;
+          const char* l2Trunc = font->CalcWordWrapPositionA(
+            1.0f, l2Begin, end, std::max(0.0f, wrapWidth - ellW));
+          if (l2Trunc <= l2Begin && l2Begin < end) l2Trunc = l2Begin + 1;
+          std::string truncated(l2Begin, l2Trunc);
+          truncated += ell;
+          dl->AddText(font, fontSize, {textLeft, textY + lineH}, nameCol,
+                      truncated.c_str());
+        }
+      }
+
+      // Type label — smaller, dim. Folders pass nullptr/"" to skip.
+      if (typeLabel && typeLabel[0]) {
+        float typeY = textY + nameAreaH + gapNameType;
+        dl->AddText(font, typeLabelH, {textLeft, typeY}, typeCol, typeLabel);
+      }
+
+      dl->PopClipRect();
+    }
+
+    // Border. Brighter on hover, accented on selected.
+    ImU32 borderCol = IM_COL32(70, 70, 75, 255);
+    float borderThick = 1.0f;
+    if (selected) {
+      borderCol  = IM_COL32(120, 160, 255, 255);
+      borderThick = 2.0f;
+    } else if (hovered) {
+      borderCol  = IM_COL32(150, 150, 155, 255);
+      borderThick = 1.5f;
+    }
+    dl->AddRect(cardMin, cardMax, borderCol, rounding, 0, borderThick);
+
+    return clicked && !isRenaming;
   };
 
-  auto drawGridButton = [&](const std::string &id, ImTextureRef icon, const char* iconTxt,
-    const std::string &label, bool selected, float alpha) {
-    bool clicked = false;
-    if(selected) {
-      ImGui::PushStyleColor(ImGuiCol_Button,        {0.5f,0.5f,0.7f,1});
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.5f,0.5f,0.7f,0.8f});
-    }
+  // Folder card — distinct render so folders don't read as assets. UE5
+  // parallel: a tan/beige folder shape with the name centered below, no
+  // card frame, no type stripe, no type label. `filled` shades the folder
+  // brighter to signal that it contains matching content under the active
+  // chip filter. Sized to the same cell as drawAssetCard so the grid stays
+  // uniform; the rename overlay reuses the asset-card name slot.
+  auto drawFolderCard = [&](
+    const std::string &id, const std::string &name,
+    bool filled, bool selected, ImVec2 *outScreenPos
+  ) -> bool
+  {
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    if (outScreenPos) *outScreenPos = startPos;
 
-    ImGui::PushID(id.c_str());
-    auto sPos = ImGui::GetCursorScreenPos();
-    bool isRenaming = id == renamePath;
-    if (isRenaming) drawRename(label, sPos);
-    else drawLabel(label, sPos);
+    bool clicked = ImGui::InvisibleButton(id.c_str(), {cardWidth, cardHeight},
+                                          ImGuiButtonFlags_AllowOverlap);
+    bool hovered = ImGui::IsItemHovered();
 
-    if(icon._TexID)
-    {
-      clicked = ImGui::ImageButton("##img", icon,
-        {imageSize, imageSize}, {0,0}, {1,1}, {0,0,0,0},
-        {1,1,1, alpha}
+    auto* dl = ImGui::GetWindowDrawList();
+
+    // Folder occupies the same square as a card's thumbnail area. The MDI
+    // folder glyph (filled when the folder has matching content, outline when
+    // empty) is drawn big and tinted manilla so the silhouette matches UE5
+    // without inventing custom geometry.
+    ImVec2 fMin = {startPos.x + cardPad, startPos.y + cardPad};
+    ImVec2 fMax = {fMin.x + imageSize, fMin.y + imageSize};
+
+    ImU32 colFolder = filled ? IM_COL32(0xC8, 0x96, 0x5A, 0xFF)
+                              : IM_COL32(0xA8, 0x80, 0x4D, 0xFF);
+    if (selected)     colFolder = IM_COL32(0xE6, 0xB8, 0x78, 0xFF);
+    else if (hovered) colFolder = IM_COL32(0xD2, 0xA0, 0x64, 0xFF);
+
+    const char* iconTxt = filled ? ICON_MDI_FOLDER : ICON_MDI_FOLDER_OUTLINE;
+    const float glyphSize = imageSize * 0.95f;
+    ImFont* font = ImGui::GetFont();
+    ImVec2 gts = font->CalcTextSizeA(glyphSize, FLT_MAX, 0.0f, iconTxt);
+    dl->AddText(
+      font, glyphSize,
+      { (fMin.x + fMax.x - gts.x) * 0.5f,
+        (fMin.y + fMax.y - gts.y) * 0.5f },
+      colFolder, iconTxt
+    );
+
+    // Selection halo around the folder slot.
+    if (selected) {
+      dl->AddRect(
+        {fMin.x - 2_px, fMin.y - 2_px},
+        {fMax.x + 2_px, fMax.y + 2_px},
+        IM_COL32(120, 160, 255, 255),
+        5.0f, 0, 2.0f
       );
-    } else {
-      ImGui::PushFont(nullptr, 40_px);
-      clicked = ImGui::Button(iconTxt, textBtnSize);
-      ImGui::PopFont();
     }
 
-    ImGui::PopID();
+    // Folder name — centered below the folder, single line, ellipsised on
+    // overflow. Clipped to card width so very long names can't bleed into
+    // the next cell. Skipped during rename (the overlay replaces this slot).
+    bool isRenaming = (id == renamePath);
+    if (!isRenaming) {
+      float fontSize = ImGui::GetFontSize();
+      float maxW = cardWidth - 2 * cardPad;
 
-    if(selected) ImGui::PopStyleColor(2);
+      std::string drawn = name;
+      ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, drawn.c_str());
+      if (ts.x > maxW) {
+        const char* end = name.c_str() + name.size();
+        const char* ell = "...";
+        float ellW = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, ell).x;
+        const char* trunc = font->CalcWordWrapPositionA(
+          1.0f, name.c_str(), end, std::max(0.0f, maxW - ellW));
+        if (trunc <= name.c_str() && !name.empty()) trunc = name.c_str() + 1;
+        drawn = std::string(name.c_str(), trunc);
+        drawn += ell;
+        ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, drawn.c_str());
+      }
+      ImVec2 textPos = {
+        startPos.x + (cardWidth - ts.x) * 0.5f,
+        fMax.y + gapThumbName
+      };
+      dl->PushClipRect(
+        {startPos.x + cardPad, fMax.y},
+        {startPos.x + cardWidth - cardPad, startPos.y + cardHeight},
+        true
+      );
+      dl->AddText(font, fontSize, textPos,
+                  IM_COL32(230, 230, 235, 255), drawn.c_str());
+      dl->PopClipRect();
+    }
+
     return clicked && !isRenaming;
   };
 
@@ -576,20 +1328,19 @@ void Editor::AssetsBrowser::draw() {
 
       checkLineBreak();
 
-      if (isHighlighted) {
-        ImGui::PushStyleColor(ImGuiCol_Button,        {0.5f,0.5f,0.7f,1});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.5f,0.5f,0.7f,0.8f});
-      }
-
-      ImGui::PushID(scene.id);
-      ImVec2 lblPos = ImGui::GetCursorScreenPos();
-      drawLabel(displayName, lblPos);
-
-      ImGui::PushFont(nullptr, 40_px);
-      bool pressed = ImGui::Button(ICON_MDI_EARTH_BOX, textBtnSize);
-      ImGui::PopFont();
+      std::string sceneId = "scene://" + std::to_string(scene.id);
+      bool pressed = drawAssetCard(
+        sceneId,
+        ImTextureRef(nullptr),
+        ICON_MDI_EARTH_BOX,
+        displayName,
+        "Scene",
+        SCENE_TYPE_COLOR,
+        isHighlighted,
+        1.0f,
+        nullptr
+      );
       bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
-      ImGui::PopID();
 
       if (pressed) {
         // Single-click: select only. Clears asset/folder selection so the
@@ -603,8 +1354,6 @@ void Editor::AssetsBrowser::draw() {
         ctx.project->conf.sceneIdLastOpened = scene.id;
         ctx.project->saveConfig();
       }
-
-      if (isHighlighted) ImGui::PopStyleColor(2);
 
       if (ImGui::BeginDragDropSource()) {
         ImGui::SetDragDropPayload("SCENE", &scene.id, sizeof(scene.id));
@@ -654,16 +1403,21 @@ void Editor::AssetsBrowser::draw() {
     if (!searchFilter.empty() && folder.find(searchFilter) == std::string::npos) continue;
 
     checkLineBreak();
-    // Build a unique virtual id so PushID/popups don't collide with files of
-    // the same name. The id also doubles as the folder's virtual rel path.
     std::string virtChild = joinDir(currentDir, folder);
     std::string folderId  = "folder://" + virtChild;
 
     bool filled = folderHasContent[folder];
-    const char* folderIcon = filled ? ICON_MDI_FOLDER : ICON_MDI_FOLDER_OUTLINE;
     bool isFolderSel = (selectedFolder == virtChild);
 
-    bool clicked = drawGridButton(folderId, ImTextureRef(nullptr), folderIcon, folder, isFolderSel, 1.0f);
+    // Resolve abs path on the side that exists so it can double as the card
+    // id — letting renamePath (also an abs path) match this card and trigger
+    // the inline rename overlay below.
+    fs::path assetSidePre  = assetsRootAbs  / virtChild;
+    fs::path scriptSidePre = scriptsRootAbs / virtChild;
+    std::string folderAbsId = (fs::exists(assetSidePre) ? assetSidePre : scriptSidePre).string();
+
+    ImVec2 folderCardPos;
+    bool clicked = drawFolderCard(folderAbsId, folder, filled, isFolderSel, &folderCardPos);
     bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
 
     // Drag-drop target: a scene dropped here moves to this folder.
@@ -717,50 +1471,61 @@ void Editor::AssetsBrowser::draw() {
       ctx.selAssetUUID = 0;
     }
     if (isDblClick) {
-      currentDir = virtChild;
+      navigateTo(virtChild);
       selectedFolder.clear();
     }
 
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip("Folder: %s\n(double-click to open)", virtChild.c_str());
     }
+
+    if (folderAbsId == renamePath) drawCardRename(folderCardPos);
   }
 
   // Files
   for (const auto *assetPtr : assetItems)
   {
     const auto &asset = *assetPtr;
-    if (!searchFilter.empty() && asset.name.find(searchFilter) == std::string::npos) continue;
+    // Display name without extension (UE5 parallel — extension is metadata,
+    // not part of the user-facing name). Search still matches against the
+    // stem, which is what users type.
+    std::string displayName = fs::path(asset.name).stem().string();
+    if (displayName.empty()) displayName = asset.name;
+    if (!searchFilter.empty() && displayName.find(searchFilter) == std::string::npos) continue;
 
     checkLineBreak();
 
     auto icon = ImTextureRef(nullptr);
     const char* iconTxt = ICON_MDI_FILE_OUTLINE;
+    switch (asset.type) {
+      case FileType::IMAGE:       iconTxt = ICON_MDI_FILE_IMAGE_OUTLINE;       break;
+      case FileType::MODEL_3D:    iconTxt = ICON_MDI_CUBE_OUTLINE;             break;
+      case FileType::AUDIO:       iconTxt = ICON_MDI_MUSIC;                    break;
+      case FileType::MUSIC_XM:    iconTxt = ICON_MDI_PIANO;                    break;
+      case FileType::FONT:        iconTxt = ICON_MDI_FORMAT_FONT;              break;
+      case FileType::PREFAB:      iconTxt = ICON_MDI_PACKAGE_VARIANT_CLOSED;   break;
+      case FileType::CODE_OBJ:    iconTxt = ICON_MDI_LANGUAGE_CPP;             break;
+      case FileType::CODE_GLOBAL: iconTxt = ICON_MDI_SCRIPT_OUTLINE;           break;
+      case FileType::NODE_GRAPH:  iconTxt = ICON_MDI_GRAPH_OUTLINE;            break;
+      case FileType::MATERIAL:    iconTxt = ICON_MDI_PALETTE_SWATCH;           break;
+      default: break;
+    }
     if (asset.texture) {
       icon = ImTextureRef(asset.texture->getGPUTex());
-    } else {
-      switch (asset.type) {
-        case FileType::MODEL_3D:    iconTxt = ICON_MDI_CUBE_OUTLINE;             break;
-        case FileType::AUDIO:       iconTxt = ICON_MDI_MUSIC;                    break;
-        case FileType::MUSIC_XM:    iconTxt = ICON_MDI_PIANO;                    break;
-        case FileType::FONT:        iconTxt = ICON_MDI_FORMAT_FONT;              break;
-        case FileType::PREFAB:      iconTxt = ICON_MDI_PACKAGE_VARIANT_CLOSED;   break;
-        case FileType::CODE_OBJ:    iconTxt = ICON_MDI_LANGUAGE_CPP;             break;
-        case FileType::CODE_GLOBAL: iconTxt = ICON_MDI_SCRIPT_OUTLINE;           break;
-        case FileType::NODE_GRAPH:  iconTxt = ICON_MDI_GRAPH_OUTLINE;            break;
-        case FileType::MATERIAL:    iconTxt = ICON_MDI_PALETTE_SWATCH;           break;
-        default: break;
-      }
     }
 
     bool isSelected = (ctx.selAssetUUID == asset.getUUID());
-    bool clicked = drawGridButton(
+    ImVec2 cardPos;
+    bool clicked = drawAssetCard(
       asset.path,
       icon,
       iconTxt,
-      asset.name,
+      displayName,
+      assetTypeLabel(asset.type),
+      assetTypeColor(asset.type),
       isSelected,
-      asset.conf.exclude ? 0.25f : 1.0f
+      asset.conf.exclude ? 0.25f : 1.0f,
+      &cardPos
     );
     bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
 
@@ -799,10 +1564,13 @@ void Editor::AssetsBrowser::draw() {
 
     if (ImGui::BeginDragDropSource()) {
       if (icon._TexID) {
-        ImGui::ImageButton(asset.name.c_str(), icon, {imageSize*0.75f, imageSize*0.75f});
+        ImGui::Image(icon, {64_px, 64_px});
       } else {
-        ImGui::Button(iconTxt, textBtnSize);
+        ImGui::PushFont(nullptr, 32_px);
+        ImGui::TextUnformatted(iconTxt);
+        ImGui::PopFont();
       }
+      ImGui::TextUnformatted(displayName.c_str());
       ImGui::SetDragDropPayload("ASSET", &asset.conf.uuid, sizeof(asset.conf.uuid));
       ImGui::EndDragDropSource();
     }
@@ -846,6 +1614,8 @@ void Editor::AssetsBrowser::draw() {
       showContextMenu(asset.path);
       ImGui::EndPopup();
     }
+
+    if (asset.path == renamePath) drawCardRename(cardPos);
   }
 
   // Apply pending scene drag-drop after the grid pass so we don't mutate
@@ -909,204 +1679,12 @@ void Editor::AssetsBrowser::draw() {
   }
 
   // ── Empty-area Create / Import context menu ──────────────────────────
-  bool wantsNewScript = false;
-  bool wantsNewResource = false;
-
-  auto runImportTo = [&](const fs::path &targetAbsDir, const std::vector<Utils::FilePicker::Options::Filter> &filters) {
-    fs::create_directories(targetAbsDir);
-    Utils::FilePicker::open(
-      [targetAbsDirStr = targetAbsDir.string()](const std::string &path) {
-        if (path.empty()) return;
-        std::error_code ec;
-        fs::path src{path};
-        fs::path dst = fs::path(targetAbsDirStr) / src.filename();
-        if (fs::exists(dst, ec)) {
-          Editor::Noti::add(Editor::Noti::Type::ERROR,
-            "Asset already exists at destination: " + dst.filename().string());
-          return;
-        }
-        fs::copy_file(src, dst, ec);
-        if (ec) {
-          Editor::Noti::add(Editor::Noti::Type::ERROR,
-            "Import failed: " + ec.message());
-        }
-      },
-      {.title = "Import Asset…", .isDirectory = false, .customFilters = filters}
-    );
-  };
-
-  auto createBlankPrefab = [&](const fs::path &dir) {
-    fs::create_directories(dir);
-    auto pickName = [&](){
-      for (int i = 0; i < 1000; ++i) {
-        std::string base = (i == 0) ? "NewPrefab" : ("NewPrefab_" + std::to_string(i + 1));
-        fs::path candidate = dir / (base + ".prefab");
-        std::error_code existsEc;
-        if (!fs::exists(candidate, existsEc)) {
-          return std::pair{base, candidate};
-        }
-      }
-      return std::pair<std::string, fs::path>{"NewPrefab", dir / "NewPrefab.prefab"};
-    };
-    auto [stem, fullPath] = pickName();
-
-    Project::Prefab prefab{};
-    prefab.uuid.value = Utils::Hash::randomU64();
-    prefab.obj.name = "Root";
-    prefab.obj.scale.value = {1.0f, 1.0f, 1.0f};
-    prefab.obj.rot.value = {0, 0, 0, 1};
-
-    Utils::FS::saveTextFile(fullPath.string(), prefab.serialize());
-
-    // Scaffold the per-prefab user source pair alongside the .prefab so the
-    // Code panel in the prefab editor has files to list immediately. Uses the
-    // same naming the existing P64_NODE scanner expects (filename including
-    // the .prefab extension), so addPrefabFunction / scanPrefabFunctions
-    // continue to round-trip cleanly.
-    Project::ensurePrefabUserSource(
-      ctx.project->getPath(), fullPath.filename().string()
-    );
-    ctx.project->getAssets().reload();
-
-    if (ctx.editorScene) {
-      auto* entry = ctx.project->getAssets().getByPath(fullPath.string());
-      if (entry) ctx.editorScene->openPrefabEditor(entry->getUUID());
-    }
-  };
-
+  // Body is shared with the toolbar Add menu via the hoisted drawCreateMenu()
+  // lambda; the wantsNew* bools it sets are consumed below.
   if (ImGui::BeginPopupContextWindow("AssetsBrowserCtx",
         ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
   {
-    // New Folder — eager-mirror across both physical roots so the
-    // virtual tree stays parallel.
-    if (ImGui::MenuItem(ICON_MDI_FOLDER_PLUS " New Folder")) {
-      auto pickFreeName = [&](){
-        for (int i = 0; i < 1000; ++i) {
-          std::string name = (i == 0) ? "NewFolder" : ("NewFolder_" + std::to_string(i + 1));
-          // Reserve "p64" at the Content root.
-          if (currentDir.empty() && name == "p64") continue;
-          fs::path candA = assetsCurAbs  / name;
-          fs::path candS = scriptsCurAbs / name;
-          if (!fs::exists(candA) && !fs::exists(candS)) return name;
-        }
-        return std::string{"NewFolder"};
-      };
-      std::string name = pickFreeName();
-      std::error_code ec;
-      fs::create_directories(assetsCurAbs  / name, ec);
-      fs::create_directories(scriptsCurAbs / name, ec);
-    }
-
-    ImGui::Separator();
-
-    if (ImGui::MenuItem(ICON_MDI_EARTH_BOX_PLUS " New Scene")) {
-      ctx.project->getScenes().add();
-      // Place the freshly-created scene at the current virtual folder.
-      const auto &after = ctx.project->getScenes().getEntries();
-      if (!after.empty() && !currentDir.empty()) {
-        ctx.project->getScenes().setSceneRelPath(after.back().id, currentDir);
-      }
-    }
-
-    if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " New Prefab")) {
-      createBlankPrefab(assetsCurAbs);
-    }
-
-    if (ImGui::MenuItem(ICON_MDI_DATABASE_EDIT " New Resource Type")) {
-      // Editor-authored .p64restype: empty schema, freshly-minted uuid, lives
-      // under the current virtual directory. Auto-select so the user lands in
-      // the AssetInspector ready to start adding fields.
-      auto findFreeName = [&]() -> std::string {
-        for (int i = 1; i < 1000; ++i) {
-          std::string n = (i == 1) ? "ResourceType" : ("ResourceType_" + std::to_string(i));
-          if (!fs::exists(assetsCurAbs / (n + ".p64restype"))) return n;
-        }
-        return "ResourceType_X";
-      };
-      uint64_t newUUID = ctx.project->getAssets().createResourceType(
-        findFreeName(), currentDir
-      );
-      if (newUUID) {
-        ctx.selAssetUUID = newUUID;
-      } else {
-        Editor::Noti::add(Editor::Noti::Type::ERROR,
-          "Failed to create resource type.");
-      }
-    }
-
-    if (ImGui::MenuItem(ICON_MDI_PALETTE_SWATCH " New Material")) {
-      // createMaterial() writes into <project>/assets/ directly (matching
-      // the existing createNodeGraph contract — current sub-dir isn't
-      // consulted). Search the same root for a free name.
-      fs::path matRoot = fs::path(ctx.project->getPath()) / "assets";
-      auto findFreeName = [&]() -> std::string {
-        for (int i = 1; i < 1000; ++i) {
-          std::string n = (i == 1) ? "Material" : ("Material_" + std::to_string(i));
-          if (!fs::exists(matRoot / (n + ".p64mat"))) return n;
-        }
-        return "Material_X";
-      };
-      uint64_t newUUID = ctx.project->getAssets().createMaterial(findFreeName());
-      if (newUUID && ctx.editorScene) {
-        ctx.selAssetUUID = newUUID;
-        ctx.editorScene->openMaterialEditor(newUUID);
-      } else if (!newUUID) {
-        Editor::Noti::add(Editor::Noti::Type::ERROR,
-          "Failed to create material asset.");
-      }
-    }
-
-    if (ImGui::BeginMenu(ICON_MDI_FILE_DOCUMENT_PLUS_OUTLINE " New Script")) {
-      if (ImGui::MenuItem("Object Script")) {
-        newScriptDir = currentDir; scriptName = "New_Script"; scriptType = 0;
-        wantsNewScript = true;
-      }
-      if (ImGui::MenuItem("Global Script")) {
-        newScriptDir = currentDir; scriptName = "New_Script"; scriptType = 1;
-        wantsNewScript = true;
-      }
-      if (ImGui::MenuItem("Node Graph")) {
-        newScriptDir = currentDir; scriptName = "New_Graph";  scriptType = 2;
-        wantsNewScript = true;
-      }
-      ImGui::EndMenu();
-    }
-
-    {
-      const auto &resourceTypes = ctx.project->getAssets().getTypeEntries(FileType::RESOURCE_TYPE);
-      if (!resourceTypes.empty()) {
-        if (ImGui::BeginMenu(ICON_MDI_DATABASE_PLUS " New Resource Instance")) {
-          for (const auto &typeEntry : resourceTypes) {
-            if (ImGui::MenuItem(typeEntry.name.c_str())) {
-              newResourceDir = currentDir;
-              newResourceName = "New_" + fs::path(typeEntry.name).stem().string();
-              newResourceTypeUUID = typeEntry.getUUID();
-              wantsNewResource = true;
-            }
-          }
-          ImGui::EndMenu();
-        }
-      }
-    }
-
-    ImGui::Separator();
-
-    if (ImGui::MenuItem(ICON_MDI_FILE_IMPORT_OUTLINE " Import Asset…")) {
-      using F = Utils::FilePicker::Options::Filter;
-      runImportTo(assetsCurAbs, {
-        F{"Image",       "png"},
-        F{"GLTF/GLB",    "glb,gltf"},
-        F{"Font (TTF)",  "ttf"},
-        F{"Audio (WAV)", "wav"},
-        F{"Music (XM)",  "xm"},
-        F{"Prefab",      "p64prefab"},
-      });
-    }
-    if (ImGui::MenuItem(ICON_MDI_FILE_IMPORT_OUTLINE " Import Script…")) {
-      using F = Utils::FilePicker::Options::Filter;
-      runImportTo(scriptsCurAbs, { F{"C++ Source", "cpp"} });
-    }
-
+    drawCreateMenu();
     ImGui::EndPopup();
   }
   if (wantsNewScript) ImGui::OpenPopup("NewScript");
@@ -1187,6 +1765,21 @@ void Editor::AssetsBrowser::draw() {
   }
 
   ImGui::EndChild();
+
+  // Status footer — UE5-parallel "N items (M selected)" line. Selection is
+  // mutually exclusive across files/scenes/folders (each click site clears
+  // the others), so this collapses to 0 or 1.
+  int selectedCount = (ctx.selAssetUUID != 0 ? 1 : 0)
+                    + (selectedSceneId != 0 ? 1 : 0)
+                    + (selectedFolder.empty() ? 0 : 1);
+  if (selectedCount > 0) {
+    ImGui::TextDisabled("%d item%s (%d selected)",
+      visibleItems, visibleItems == 1 ? "" : "s", selectedCount);
+  } else {
+    ImGui::TextDisabled("%d item%s",
+      visibleItems, visibleItems == 1 ? "" : "s");
+  }
+
   ImGui::EndChild();
 
   // Persist any navigation that happened this frame back into the active
