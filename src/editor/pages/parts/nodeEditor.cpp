@@ -5,13 +5,17 @@
 #include "nodeEditor.h"
 
 #include "imgui.h"
+#include "IconsMaterialDesignIcons.h"
 #include "../../../context.h"
 #include "../../../utils/logger.h"
 #include "../../imgui/helper.h"
 
+#include <unordered_set>
+
 #include "ImNodeFlow.h"
 #include "json.hpp"
 #include "../../../project/graph/nodes/baseNode.h"
+#include "../../../project/compile/compileErrors.h"
 #include "../../../utils/fs.h"
 
 namespace
@@ -146,6 +150,36 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   bool isOpen = true;
   ImGui::Begin(winName.c_str(), &isOpen, ImGuiWindowFlags_NoCollapse);
 
+  // Compile toolbar — Unreal-Blueprint-style "validate this graph now" button.
+  // Clears just this asset's diagnostics so unrelated errors from a prior
+  // full build (or other open graphs) survive, then re-runs Graph::validate
+  // against the live in-editor graph. The CompileErrorsWindow auto-pops on
+  // revision bump (see editorScene draw loop) so no further wiring needed.
+  {
+    size_t errsThisAsset = 0;
+    for(const auto &e : ctx.compileErrors.all()) {
+      if(e.assetUUID == uuid
+         && e.severity == Project::Compile::Severity::ERROR) ++errsThisAsset;
+    }
+
+    if(ImGui::Button(ICON_MDI_PLAY " Compile")) {
+      ctx.compileErrors.clearForAsset(uuid);
+      graph.validate(&ctx.compileErrors, uuid);
+    }
+    ImGui::SameLine();
+    if(errsThisAsset == 0) {
+      ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0x6C, 0xC8, 0x6C, 0xFF));
+      ImGui::TextUnformatted(ICON_MDI_CHECK_CIRCLE " 0 errors");
+      ImGui::PopStyleColor();
+    } else {
+      ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xF0, 0x55, 0x55, 0xFF));
+      ImGui::Text(ICON_MDI_ALERT_CIRCLE " %zu error%s",
+        errsThisAsset, errsThisAsset == 1 ? "" : "s");
+      ImGui::PopStyleColor();
+    }
+    ImGui::Separator();
+  }
+
   ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
   ImVec2 canvasSize = ImGui::GetContentRegionAvail();
   graph.graph.setSize(canvasSize);
@@ -179,6 +213,35 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   }
 
   graph.graph.update();
+
+  // Bad-node outline: persistent red rect on every node referenced by an
+  // ERROR for this asset. Cleared implicitly when the user hits Compile
+  // again (clearForAsset) or fixes the graph (next validate drops the
+  // entry). Drawn on the foreground list so it sits over ImNodeFlow lines.
+  {
+    std::unordered_set<uint64_t> badNodes;
+    for(const auto &e : ctx.compileErrors.all()) {
+      if(e.assetUUID == uuid
+         && e.severity == Project::Compile::Severity::ERROR
+         && e.nodeUUID != 0) {
+        badNodes.insert(e.nodeUUID);
+      }
+    }
+    if(!badNodes.empty()) {
+      ImVec2 scroll = graph.graph.getGrid().scroll();
+      auto *fg = ImGui::GetForegroundDrawList();
+      for(const auto &kv : graph.graph.getNodes()) {
+        auto *n = (Project::Graph::Node::Base*)kv.second.get();
+        if(!n || !badNodes.contains(n->uuid)) continue;
+        ImVec2 g = n->getPos();
+        ImVec2 sz = n->getSize();
+        ImVec2 mn{canvasMin.x + scroll.x + g.x - 3.0f,
+                  canvasMin.y + scroll.y + g.y - 3.0f};
+        ImVec2 mx{mn.x + sz.x + 6.0f, mn.y + sz.y + 6.0f};
+        fg->AddRect(mn, mx, IM_COL32(0xF0, 0x55, 0x55, 0xFF), 4.0f, 0, 2.0f);
+      }
+    }
+  }
 
   if(highlightSecondsLeft > 0.0f && highlightNodeUUID != 0) {
     Project::Graph::Node::Base* hn = nullptr;

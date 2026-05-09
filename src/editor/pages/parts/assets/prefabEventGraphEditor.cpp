@@ -6,9 +6,12 @@
 #include "json.hpp"
 #include "IconsMaterialDesignIcons.h"
 
+#include <unordered_set>
+
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
 #include "../../../../utils/logger.h"
+#include "../../../../project/compile/compileErrors.h"
 #include "../../../../project/graph/nodes/baseNode.h"
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
 #include "../../../../project/graph/nodes/nodePrefabFunc.h"
@@ -212,6 +215,31 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
   // the parent PrefabEditor to persist graph edits.
   if (ImGui::Button(ICON_MDI_CONTENT_SAVE " Save")) save();
   ImGui::SameLine();
+  // Compile button: validate this graph in isolation. Same semantics as
+  // NodeEditor — clear just this asset's diagnostics, then re-validate.
+  if (ImGui::Button(ICON_MDI_PLAY " Compile")) {
+    ctx.compileErrors.clearForAsset(assetUUID);
+    graph.validate(&ctx.compileErrors, assetUUID);
+  }
+  ImGui::SameLine();
+  {
+    size_t errsThisAsset = 0;
+    for(const auto &e : ctx.compileErrors.all()) {
+      if(e.assetUUID == assetUUID
+         && e.severity == Project::Compile::Severity::ERROR) ++errsThisAsset;
+    }
+    if(errsThisAsset == 0) {
+      ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0x6C, 0xC8, 0x6C, 0xFF));
+      ImGui::TextUnformatted(ICON_MDI_CHECK_CIRCLE " 0 errors");
+      ImGui::PopStyleColor();
+    } else {
+      ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0xF0, 0x55, 0x55, 0xFF));
+      ImGui::Text(ICON_MDI_ALERT_CIRCLE " %zu error%s",
+        errsThisAsset, errsThisAsset == 1 ? "" : "s");
+      ImGui::PopStyleColor();
+    }
+  }
+  ImGui::SameLine();
   ImGui::TextDisabled("(stored in %s)", asset->path.c_str());
 
   // Ctrl+S → save while focused on this graph window.
@@ -267,6 +295,35 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
   }
 
   graph.graph.update();
+
+  // Bad-node outline: persistent red rect on every node referenced by an
+  // ERROR for this asset. See nodeEditor.cpp for the parallel block —
+  // same draw-list strategy and clearing semantics (next Compile press
+  // refreshes; fixing the graph drops the entry on re-validate).
+  {
+    std::unordered_set<uint64_t> badNodes;
+    for(const auto &e : ctx.compileErrors.all()) {
+      if(e.assetUUID == assetUUID
+         && e.severity == Project::Compile::Severity::ERROR
+         && e.nodeUUID != 0) {
+        badNodes.insert(e.nodeUUID);
+      }
+    }
+    if(!badNodes.empty()) {
+      ImVec2 scroll = graph.graph.getGrid().scroll();
+      auto *fg = ImGui::GetForegroundDrawList();
+      for(const auto &kv : graph.graph.getNodes()) {
+        auto *n = (Project::Graph::Node::Base*)kv.second.get();
+        if(!n || !badNodes.contains(n->uuid)) continue;
+        ImVec2 g = n->getPos();
+        ImVec2 sz = n->getSize();
+        ImVec2 mn{canvasMin.x + scroll.x + g.x - 3.0f,
+                  canvasMin.y + scroll.y + g.y - 3.0f};
+        ImVec2 mx{mn.x + sz.x + 6.0f, mn.y + sz.y + 6.0f};
+        fg->AddRect(mn, mx, IM_COL32(0xF0, 0x55, 0x55, 0xFF), 4.0f, 0, 2.0f);
+      }
+    }
+  }
 
   // Highlight overlay: draw a colored rect on top of the node for a couple
   // seconds after a focus request. Uses the foreground draw list so the
