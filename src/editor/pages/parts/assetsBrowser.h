@@ -83,10 +83,25 @@ namespace Editor
       int pendingSceneMoveId{0};
       std::string pendingSceneMoveTarget{};
       char renameBuffer[256]{};
+      // Per-frame hover flag, written at the top of draw() and read by
+      // main.cpp to gate the global Ctrl+wheel UI zoom: when the cursor is
+      // over the content browser, Ctrl+wheel scales the browser cards
+      // instead of the whole editor. Stale by one frame, which matches how
+      // ImGui's own hover state behaves.
+      bool hoveredLastFrame{false};
+      // Per-browser content scale. Multiplies card geometry (thumb + label
+      // text via PushFont) so users can resize browser cards without
+      // touching the global UI zoom. Persisted in the per-project editor
+      // cache (editorState.json).
+      float thumbScale{1.0f};
 
     public:
       AssetsBrowser() { chips.fill(true); }
       void draw();
       void showContextMenu(const std::string& path);
+
+      bool wasHovered() const { return hoveredLastFrame; }
+      float getThumbScale() const { return thumbScale; }
+      void setThumbScale(float s);
   };
 }

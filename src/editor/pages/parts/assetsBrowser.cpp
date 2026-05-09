@@ -145,14 +145,46 @@ namespace
 
 }
 
+void Editor::AssetsBrowser::setThumbScale(float s) {
+  // Lower bound keeps text legible; upper bound keeps a 2x2 grid feasible at
+  // typical window widths. Wheel and slider both clamp through here.
+  thumbScale = std::clamp(s, 0.4f, 3.0f);
+}
+
 void Editor::AssetsBrowser::draw() {
   if (!ctx.project) return;
+
+  // Hover state for main.cpp's Ctrl+wheel chord. Queried while still scoped
+  // to the "Files" root window, before any BeginChild, so RootAndChildWindows
+  // covers the whole panel including its child panes.
+  hoveredLastFrame = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
+
+  // Ctrl+wheel resizes the browser content while hovered. Multiplicative
+  // step (1.1) matches the global Theme zoom feel. We don't try to preempt
+  // main.cpp's global handler this frame (it runs first); main.cpp gates
+  // on hoveredLastFrame from the previous frame, so the global zoom only
+  // misfires the very first frame the cursor enters the browser.
+  {
+    ImGuiIO &io = ImGui::GetIO();
+    if (hoveredLastFrame && io.KeyCtrl && io.MouseWheel != 0.0f && !io.WantTextInput) {
+      float step = (io.MouseWheel > 0.0f) ? 1.1f : (1.0f / 1.1f);
+      setThumbScale(thumbScale * step);
+      io.MouseWheel = 0.0f;
+      Editor::Noti::showAction(
+        "Browser zoom: " + std::to_string((int)(thumbScale * 100.0f + 0.5f)) + "%");
+    }
+  }
+
   auto &scenes   = ctx.project->getScenes().getEntries();
   auto &assetMgr = ctx.project->getAssets();
 
-  // Reset the material thumbnail cache's per-frame render budget so at most
-  // MAX_PER_FRAME materials kick off a re-render this draw.
-  if (ctx.editorScene) ctx.editorScene->getMatThumbnails().newFrame();
+  // Reset the thumbnail caches' per-frame render budgets so at most
+  // MAX_PER_FRAME materials and MAX_PER_FRAME models each kick off a
+  // re-render this draw.
+  if (ctx.editorScene) {
+    ctx.editorScene->getMatThumbnails().newFrame();
+    ctx.editorScene->getModelThumbnails().newFrame();
+  }
 
   const bool splitMode = (ctx.prefs.contentBrowserMode == Editor::ContentBrowserMode::Split);
 
@@ -906,6 +938,16 @@ void Editor::AssetsBrowser::draw() {
   // Reserve a one-line footer below the grid for the item / selection count.
   ImGui::BeginChild("ASSETS", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()));
 
+  // Per-browser content scale. Pushed inside the ASSETS child so it scopes
+  // to the grid (cards + their labels) without bleeding into the breadcrumb,
+  // chip rail, or folder tree above. Card text reads GetFont/GetFontSize,
+  // so it picks up the scaled font automatically; lineH below is computed
+  // after the push so derived label heights track the new size.
+  // 15.0f matches the FontSizeBase set in theme.cpp's loadFonts(); keeping
+  // them in sync means thumbScale==1 reproduces the un-scaled baseline.
+  const float browserFontSize = 15.0f * ImGui::Theme::zoomFactor * thumbScale;
+  ImGui::PushFont(nullptr, browserFontSize);
+
   // Counted as items pass the search filter (incremented in checkLineBreak),
   // so the footer reflects what's actually rendered, not the total in the dir.
   int visibleItems = 0;
@@ -914,18 +956,20 @@ void Editor::AssetsBrowser::draw() {
   // every visual (thumbnail, stripe, name, type label, frame) is drawn on top
   // of an InvisibleButton via the window draw list so the whole card reads as
   // one unit. Heights derive from the current font's line metrics so the
-  // layout scales correctly at different zoom levels.
-  const float imageSize     = 96_px;
-  const float cardPad       = 6_px;
-  const float gapThumbName  = 4_px;
-  const float gapNameType   = 2_px;
+  // layout scales correctly at different zoom levels. thumbScale stacks on
+  // top of the global UI zoom (already baked into _px) so the cards grow as
+  // a unit (image and labels both) when Ctrl+wheel adjusts the browser.
+  const float imageSize     = 96_px * thumbScale;
+  const float cardPad       = 6_px  * thumbScale;
+  const float gapThumbName  = 4_px  * thumbScale;
+  const float gapNameType   = 2_px  * thumbScale;
   const float lineH         = ImGui::GetTextLineHeight();
   const float typeLabelH    = lineH * 0.85f;
   const float nameAreaH     = 2.0f * lineH;       // up to two wrapped lines
   const float cardWidth     = imageSize + 2 * cardPad;
   const float cardHeight    = cardPad + imageSize + gapThumbName + nameAreaH
                             + gapNameType + typeLabelH + cardPad;
-  const float gridGap       = 8_px;
+  const float gridGap       = 8_px * thumbScale;
   const float itemWidth     = cardWidth + gridGap;
 
   float currentWid = 0.0f;
@@ -1606,6 +1650,12 @@ void Editor::AssetsBrowser::draw() {
       if (matTex) icon = ImTextureRef(matTex);
     }
 
+    // Same lazy-render + persisted-PNG flow for model assets.
+    if (asset.type == FileType::MODEL_3D && ctx.editorScene) {
+      auto* modelTex = ctx.editorScene->getModelThumbnails().fetch(asset);
+      if (modelTex) icon = ImTextureRef(modelTex);
+    }
+
     bool isSelected = (ctx.selAssetUUID == asset.getUUID());
     ImVec2 cardPos;
     bool clicked = drawAssetCard(
@@ -1648,6 +1698,19 @@ void Editor::AssetsBrowser::draw() {
           handled = true;
         } else if (asset.type == FileType::MATERIAL) {
           ctx.editorScene->openMaterialEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::FONT) {
+          ctx.editorScene->openFontEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::AUDIO
+                || asset.type == FileType::MUSIC_XM) {
+          ctx.editorScene->openAudioEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::RESOURCE_TYPE) {
+          ctx.editorScene->openResourceTypeEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::RESOURCE_INSTANCE) {
+          ctx.editorScene->openResourceInstanceEditor(asset.getUUID());
           handled = true;
         }
       }
@@ -1753,7 +1816,25 @@ void Editor::AssetsBrowser::draw() {
     ImGui::Text("This action cannot be undone!\nAre you sure you want to delete this asset?");
     ImGui::Separator();
     if (ImGui::Button("OK", ImVec2(120_px, 0))) {
+      // Look up the entry by path before the file is gone so we can also
+      // drop any cached preview thumbnail keyed by its UUID. The asset
+      // browser only knows the path here; getByPath gives us the UUID.
+      uint64_t deletedUUID = 0;
+      FileType deletedType = FileType::UNKNOWN;
+      if (ctx.project) {
+        if (auto *e = ctx.project->getAssets().getByPath(deletePath)) {
+          deletedUUID = e->getUUID();
+          deletedType = e->type;
+        }
+      }
       fs::remove(deletePath);
+      if (deletedUUID != 0 && ctx.editorScene) {
+        if (deletedType == FileType::MATERIAL) {
+          ctx.editorScene->getMatThumbnails().erase(deletedUUID);
+        } else if (deletedType == FileType::MODEL_3D) {
+          ctx.editorScene->getModelThumbnails().erase(deletedUUID);
+        }
+      }
       deletePath.clear();
       ImGui::CloseCurrentPopup();
     }
@@ -1782,9 +1863,36 @@ void Editor::AssetsBrowser::draw() {
       // Remove scenes first (they live outside the physical mirror).
       for (int sid : sceneIds) ctx.project->getScenes().remove(sid);
 
-      // Then nuke whichever physical sides exist.
       fs::path assetSide  = assetsRootAbs  / deleteFolderPath;
       fs::path scriptSide = scriptsRootAbs / deleteFolderPath;
+
+      // Sweep cached thumbnails for any material/model assets under the
+      // folder before the files vanish. We need the entries' UUIDs, which
+      // we can only resolve while the assets still exist on disk.
+      if (ctx.project && ctx.editorScene) {
+        auto under = [](const fs::path &root, const std::string &p) {
+          std::error_code ec;
+          auto rel = fs::relative(p, root, ec);
+          if (ec) return false;
+          auto s = rel.generic_string();
+          // relative() returns ".." prefixes for paths outside `root`.
+          return !s.empty() && !s.starts_with("..");
+        };
+        for (const auto &typed : ctx.project->getAssets().getEntries()) {
+          for (const auto &asset : typed) {
+            if (asset.type != FileType::MATERIAL
+              && asset.type != FileType::MODEL_3D) continue;
+            if (!under(assetSide, asset.path)) continue;
+            if (asset.type == FileType::MATERIAL) {
+              ctx.editorScene->getMatThumbnails().erase(asset.getUUID());
+            } else {
+              ctx.editorScene->getModelThumbnails().erase(asset.getUUID());
+            }
+          }
+        }
+      }
+
+      // Then nuke whichever physical sides exist.
       std::error_code ec;
       if (fs::exists(assetSide))  fs::remove_all(assetSide,  ec);
       if (fs::exists(scriptSide)) fs::remove_all(scriptSide, ec);
@@ -1812,6 +1920,7 @@ void Editor::AssetsBrowser::draw() {
   }
   ImGui::Dummy({0, 10_px});
 
+  ImGui::PopFont();
   ImGui::EndChild();
 
   // Status footer — UE5-parallel "N items (M selected)" line. Selection is
@@ -1826,6 +1935,33 @@ void Editor::AssetsBrowser::draw() {
   } else {
     ImGui::TextDisabled("%d item%s",
       visibleItems, visibleItems == 1 ? "" : "s");
+  }
+
+  // Right-aligned thumb-scale cluster: [-] [slider] [+]. Mirrors the wheel
+  // path so trackpad / no-wheel users have a discoverable control. setThumbScale
+  // clamps so the slider edges and button edges land on the same bounds.
+  {
+    const float btnW     = 22_px;
+    const float sliderW  = 110_px;
+    const float gap      = 4_px;
+    const float clusterW = btnW + gap + sliderW + gap + btnW;
+    ImGui::SameLine();
+    float avail = ImGui::GetContentRegionAvail().x;
+    if (avail > clusterW) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - clusterW));
+
+    if (ImGui::Button("-##thumbDec", ImVec2(btnW, 0))) {
+      setThumbScale(thumbScale / 1.1f);
+    }
+    ImGui::SameLine(0.0f, gap);
+    ImGui::SetNextItemWidth(sliderW);
+    float pct = thumbScale * 100.0f;
+    if (ImGui::SliderFloat("##thumbScale", &pct, 40.0f, 300.0f, "%.0f%%")) {
+      setThumbScale(pct / 100.0f);
+    }
+    ImGui::SameLine(0.0f, gap);
+    if (ImGui::Button("+##thumbInc", ImVec2(btnW, 0))) {
+      setThumbScale(thumbScale * 1.1f);
+    }
   }
 
   ImGui::EndChild();
