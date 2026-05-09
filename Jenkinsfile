@@ -28,6 +28,11 @@ pipeline {
             defaultValue: 'B:\\forks\\pyrite64',
             description: 'Destination working tree to copy pyrite64.exe into after a successful build (so taskbar shortcuts pick up the latest build). Leave empty to skip deploy.'
         )
+        booleanParam(
+            name: 'RUN_SMOKE',
+            defaultValue: true,
+            description: 'Run scripts/smoke_test.sh after a successful build (build-tables across all example projects). Disable for hot-fix loops where you want to skip the full table-gen pass.'
+        )
     }
 
     environment {
@@ -74,6 +79,17 @@ pipeline {
             }
         }
 
+        stage('LFS') {
+            steps {
+                script { env.FAILED_STAGE = 'LFS' }
+                // Pull binary blobs (TTFs, .blend, .mp4, plus the example
+                // projects' PNG textures still tracked from upstream). The
+                // smoke test will read those PNGs through mksprite, so a
+                // pointer-file checkout is not enough.
+                bat '"%MSYS2_BASH%" -lc "cd \\"$(cygpath \'%WORKSPACE%\')\\" && git lfs install --local && git lfs pull"'
+            }
+        }
+
         stage('Clean') {
             when { expression { return params.CLEAN_BUILD } }
             steps {
@@ -107,6 +123,19 @@ pipeline {
                         exit /b 1
                     )
                 '''
+            }
+        }
+
+        stage('Smoke Test') {
+            when { expression { return params.RUN_SMOKE } }
+            steps {
+                script { env.FAILED_STAGE = 'Smoke Test' }
+                // Drives `--cli --cmd build-tables` across the four example
+                // projects. Catches regressions in the asset/scene/script
+                // table generators without needing the N64 toolchain to
+                // produce a ROM. See scripts/smoke_test.sh for the project
+                // list and exit semantics.
+                bat '"%MSYS2_BASH%" -lc "cd \\"$(cygpath \'%WORKSPACE%\')\\" && bash scripts/smoke_test.sh"'
             }
         }
 
