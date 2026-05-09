@@ -98,7 +98,7 @@ bool Build::regenerateAssetTable(Project::Project &project)
   return true;
 }
 
-bool Build::buildProject(const std::string &configPath)
+bool Build::buildProject(const std::string &configPath, bool runMake)
 {
   Project::Project project{configPath};
   auto path = project.getPath();
@@ -317,7 +317,12 @@ bool Build::buildProject(const std::string &configPath)
   }
 
   // Build
-  bool success = sceneCtx.toolchain.runCmdSyncLogged("make -C \"" + path + "\" -j8");
+  bool success = true;
+  if (runMake) {
+    success = sceneCtx.toolchain.runCmdSyncLogged("make -C \"" + path + "\" -j8");
+  } else {
+    Utils::Logger::log("Tables/assets generated; skipping `make` (runMake=false).");
+  }
 
   // Surface a one-line summary if the graph validator collected anything —
   // the Compile Errors panel has the structured details, this is just the
@@ -332,7 +337,7 @@ bool Build::buildProject(const std::string &configPath)
   }
 
   if(success) {
-    Utils::Logger::log("Build done!");
+    Utils::Logger::log(runMake ? "Build done!" : "Tables build done!");
   } else {
     Utils::Logger::log("Build failed!", Utils::Logger::LEVEL_ERROR);
   }

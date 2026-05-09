@@ -28,7 +28,11 @@ namespace Build
   bool buildResourceAssets(Project::Project &project, SceneCtx &sceneCtx);
   void buildResourceTable(Project::Project &project, SceneCtx &sceneCtx);
 
-  bool buildProject(const std::string &path);
+  // When runMake is false, all editor-side codegen (tables, scenes, asset
+  // pipelines, Makefile emission) still runs but the final `make` step that
+  // builds the ROM is skipped. Useful as a fast smoke test that doesn't need
+  // the N64 toolchain installed.
+  bool buildProject(const std::string &path, bool runMake = true);
 
   // Regenerate just <project>/src/p64/assetTable.h from the current asset
   // manager state. Light alternative to a full buildProject when the editor's

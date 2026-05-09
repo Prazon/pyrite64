@@ -6,8 +6,10 @@
 #include "logger.h"
 #include "proc.h"
 #include <filesystem>
+#include <fstream>
 #include <atomic>
 #include <thread>
+#include <random>
 
 #include "fs.h"
 
@@ -133,16 +135,53 @@ bool Utils::Toolchain::runCmdSyncLogged(const std::string &cmd)
 {
   #if defined(_WIN32)
     auto minttyPath = state.mingwPath / "usr" / "bin" / "bash.exe";
-    //std::string command = minttyPath.string() + " --log - -w hide /bin/env MSYSTEM=MINGW64 " + cmd;
-    std::string command = minttyPath.string() + " -lc '" + cmd + "'";
-    //std::string command = cmd;
-    for(char &c : command) {
-      if(c == '\\')c = '/';
+
+    // bash -lc starts in $HOME (login profile cd), which breaks any cmd that
+    // uses paths relative to pyrite64.exe's CWD — mksprite/mkasset/audioconv64
+    // from the asset builders, etc. We need to (a) cd back to the editor's
+    // CWD inside bash, and (b) avoid cmd.exe-level quoting fragility (popen
+    // wraps in cmd.exe /c, which doesn't honor single-quotes and splits on
+    // bare && at the cmd.exe level).
+    //
+    // Robust answer: write the payload to a temp .sh and invoke bash -l on
+    // it directly. No nested quoting, no cmd.exe operators leaking through.
+    auto cwd = fs::current_path().string();
+    std::string msysCwd;
+    if (cwd.size() >= 2 && cwd[1] == ':') {
+      msysCwd = "/";
+      msysCwd += (char)std::tolower((unsigned char)cwd[0]);
+      msysCwd += cwd.substr(2);
+    } else {
+      msysCwd = cwd;
     }
-    return Utils::Proc::runSyncLogged(command);
-    //Utils::Logger::logRaw(run_bash(command));
-    //return true;
-    
+    for (char &c : msysCwd) if (c == '\\') c = '/';
+
+    // The caller-built cmd uses Windows-native separators (e.g. mkSprite is
+    // `\pyrite64-sdk\bin\mksprite`); convert to forward slashes before writing
+    // so bash doesn't interpret the backslashes as escapes.
+    std::string cmdNorm = cmd;
+    for (char &c : cmdNorm) if (c == '\\') c = '/';
+
+    // Per-invocation temp file so concurrent builds don't clobber each other.
+    static std::atomic_uint64_t seq{0};
+    uint64_t id = seq.fetch_add(1) ^ (uint64_t)std::random_device{}();
+    auto tmpPath = fs::temp_directory_path() / ("pyrite64_cmd_" + std::to_string(id) + ".sh");
+    {
+      std::ofstream f{tmpPath};
+      f << "#!/usr/bin/env bash\n";
+      f << "cd \"" << msysCwd << "\" || exit 1\n";
+      f << cmdNorm << "\n";
+    }
+
+    std::string scriptPath = tmpPath.string();
+    for (char &c : scriptPath) if (c == '\\') c = '/';
+    std::string command = minttyPath.string() + " -l " + scriptPath;
+    for (char &c : command) if (c == '\\') c = '/';
+
+    bool ok = Utils::Proc::runSyncLogged(command);
+    std::error_code ec; fs::remove(tmpPath, ec);
+    return ok;
+
   #else
     return Utils::Proc::runSyncLogged(cmd);
   #endif

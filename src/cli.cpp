@@ -92,6 +92,14 @@ CLI::Result CLI::run(int argc, char** argv)
     printf("Building project: %s\n", argProgPath.c_str());
     res = Build::buildProject(argProgPath);
   }
+  else if (cmd == "build-tables")
+  {
+    // Editor-side smoke test: runs every codegen step but skips the final
+    // `make` so it doesn't need the N64 toolchain. See scripts/smoke_test.sh.
+    if (argProgPath.empty()) { fputs("error: project path required\n", stderr); return Result::ERROR; }
+    printf("Building tables only (no make): %s\n", argProgPath.c_str());
+    res = Build::buildProject(argProgPath, /*runMake=*/false);
+  }
   else if (cmd == "clean")
   {
     if (argProgPath.empty()) { fputs("error: project path required\n", stderr); return Result::ERROR; }
