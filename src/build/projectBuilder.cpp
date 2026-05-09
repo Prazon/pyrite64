@@ -67,6 +67,7 @@ bool Build::regenerateAssetTable(Project::Project &project)
         || entry.type == AT::CODE_OBJ
         || entry.type == AT::CODE_GLOBAL
         || entry.type == AT::RESOURCE_TYPE
+        || entry.type == AT::MATERIAL
       ) continue;
 
       if (entry.romPath.size() > 5) {
@@ -154,6 +155,7 @@ bool Build::buildProject(const std::string &configPath)
         || entry.type == Project::FileType::CODE_OBJ
         || entry.type == Project::FileType::CODE_GLOBAL
         || entry.type == Project::FileType::RESOURCE_TYPE
+        || entry.type == Project::FileType::MATERIAL
       ) continue;
       sceneCtx.addAsset(entry);
     }

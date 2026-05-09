@@ -13,6 +13,7 @@
 #include "../renderer/object.h"
 #include "../utils/codeParser.h"
 #include "../renderer/texture.h"
+#include "assets/materialAsset.h"
 #include "assets/model3d.h"
 #include "assets/resourceInstance.h"
 #include "scene/prefab.h"
@@ -45,6 +46,7 @@ namespace Project
     MUSIC_XM,
     RESOURCE_TYPE,     // .h header in P64::Asset::C… namespace, defines a Data struct
     RESOURCE_INSTANCE, // .p64res json file, holds field values for one RESOURCE_TYPE
+    MATERIAL,          // .p64mat material asset (node-graph driven)
 
     _SIZE
   };
@@ -84,6 +86,7 @@ namespace Project
     std::shared_ptr<Renderer::N64Mesh> mesh3D{};
     std::shared_ptr<Prefab> prefab{nullptr};
     std::shared_ptr<Resource::Instance> resource{nullptr};
+    std::shared_ptr<Assets::MaterialAsset> materialAsset{nullptr};
     AssetConf conf{};
     Utils::CPP::Struct params{};
 
@@ -193,6 +196,10 @@ namespace Project
 
       bool createScript(const std::string &name, bool isGlobal, const std::string &subDir = {});
       uint64_t createNodeGraph(const std::string &name);
+      // Creates a fresh .p64mat asset under <project>/assets with a seeded
+      // empty graph (one Output node) and a default-constructed compiled
+      // Material. Returns the new asset's UUID, or 0 on failure.
+      uint64_t createMaterial(const std::string &name);
       uint64_t createResourceInstance(const std::string &name, uint64_t typeUuid, const std::string &subDir = {});
   };
 }

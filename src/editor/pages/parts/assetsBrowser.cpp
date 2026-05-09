@@ -59,6 +59,7 @@ namespace
     ChipDef{ "Node Graphs", ICON_MDI_GRAPH_OUTLINE,            FileType::NODE_GRAPH, false },
     ChipDef{ "Res. Types",  ICON_MDI_DATABASE_OUTLINE,         FileType::RESOURCE_TYPE,     true  },
     ChipDef{ "Resources",   ICON_MDI_DATABASE_EDIT_OUTLINE,    FileType::RESOURCE_INSTANCE, false },
+    ChipDef{ "Materials",   ICON_MDI_PALETTE_SWATCH,           FileType::MATERIAL,          false },
   };
 
   std::string normalizeDir(std::string dir)
@@ -134,6 +135,7 @@ void Editor::AssetsBrowser::draw() {
         activeChips[CHIP_MUSIC_XM]           = true;
         activeChips[CHIP_FONTS]              = true;
         activeChips[CHIP_RESOURCE_INSTANCE]  = true;
+        activeChips[CHIP_MATERIAL]           = true;
         break;
       case TAB_SCRIPTS:
         activeChips[CHIP_CODE_OBJ]      = true;
@@ -746,6 +748,7 @@ void Editor::AssetsBrowser::draw() {
         case FileType::CODE_OBJ:    iconTxt = ICON_MDI_LANGUAGE_CPP;             break;
         case FileType::CODE_GLOBAL: iconTxt = ICON_MDI_SCRIPT_OUTLINE;           break;
         case FileType::NODE_GRAPH:  iconTxt = ICON_MDI_GRAPH_OUTLINE;            break;
+        case FileType::MATERIAL:    iconTxt = ICON_MDI_PALETTE_SWATCH;           break;
         default: break;
       }
     }
@@ -782,6 +785,9 @@ void Editor::AssetsBrowser::draw() {
           handled = true;
         } else if (asset.type == FileType::PREFAB) {
           ctx.editorScene->openPrefabEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::MATERIAL) {
+          ctx.editorScene->openMaterialEditor(asset.getUUID());
           handled = true;
         }
       }
@@ -1004,6 +1010,28 @@ void Editor::AssetsBrowser::draw() {
 
     if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " New Prefab")) {
       createBlankPrefab(assetsCurAbs);
+    }
+
+    if (ImGui::MenuItem(ICON_MDI_PALETTE_SWATCH " New Material")) {
+      // createMaterial() writes into <project>/assets/ directly (matching
+      // the existing createNodeGraph contract — current sub-dir isn't
+      // consulted). Search the same root for a free name.
+      fs::path matRoot = fs::path(ctx.project->getPath()) / "assets";
+      auto findFreeName = [&]() -> std::string {
+        for (int i = 1; i < 1000; ++i) {
+          std::string n = (i == 1) ? "Material" : ("Material_" + std::to_string(i));
+          if (!fs::exists(matRoot / (n + ".p64mat"))) return n;
+        }
+        return "Material_X";
+      };
+      uint64_t newUUID = ctx.project->getAssets().createMaterial(findFreeName());
+      if (newUUID && ctx.editorScene) {
+        ctx.selAssetUUID = newUUID;
+        ctx.editorScene->openMaterialEditor(newUUID);
+      } else if (!newUUID) {
+        Editor::Noti::add(Editor::Noti::Type::ERROR,
+          "Failed to create material asset.");
+      }
     }
 
     if (ImGui::BeginMenu(ICON_MDI_FILE_DOCUMENT_PLUS_OUTLINE " New Script")) {

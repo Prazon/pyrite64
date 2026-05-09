@@ -28,6 +28,7 @@ namespace Editor
   class PrefabEditor;
   class PrefabEventGraphEditor;
   class PrefabFunctionCodeEditor;
+  class MaterialEditor;
 
   class Scene
   {
@@ -50,6 +51,9 @@ namespace Editor
       // P64_NODE function from a prefab's user .cpp). Keyed by a synthetic
       // UUID derived from (prefabName, functionName) so re-opens dedupe.
       std::map<uint64_t, std::shared_ptr<PrefabFunctionCodeEditor>> prefabFunctionCodeEditors{};
+      // Per-asset .p64mat material editors. Lifecycle parallel to the
+      // model/image editors above — keyed on the asset's UUID for de-dupe.
+      std::map<uint64_t, std::shared_ptr<MaterialEditor>> materialEditors{};
 
       // Defer-destroy list: PrefabEditor owns a Viewport3D whose framebuffer
       // GPU texture is referenced by ImGui's draw list for the current frame.
@@ -129,6 +133,10 @@ namespace Editor
       // new one. dockTarget, when nonzero, becomes the editor's first-frame
       // dock override (used by PrefabEditor to land it next to its viewport).
       void openPrefabEventGraphEditor(uint64_t prefabAssetUUID, ImGuiID dockTarget = 0);
+      // Open the material asset editor (.p64mat). Idempotent — re-opens
+      // focus the existing window. dockTarget is honoured the same way as
+      // the prefab event graph opener.
+      void openMaterialEditor(uint64_t assetUUID, ImGuiID dockTarget = 0);
       // Open a slice editor showing only the named P64_NODE function from
       // <project>/src/user/<prefabName>.cpp. Idempotent — re-opens focus
       // the existing window. dockTarget, when nonzero, becomes the

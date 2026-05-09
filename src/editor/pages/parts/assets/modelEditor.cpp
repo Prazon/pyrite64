@@ -9,6 +9,7 @@
 #include "textureEditor.h"
 #include "../../../../context.h"
 #include "../../../imgui/helper.h"
+#include "../../editorScene.h"
 #include "imgui_internal.h"
 
 namespace
@@ -219,10 +220,65 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
     {
       auto &mat = entry.second;
 
+      // Per-slot material-asset binding. When set, the asset's compiled
+      // Material wins over the inline override at model-load time (see
+      // AssetManager::reloadEntry FileType::MATERIAL handling). Mutually
+      // exclusive with the inline Override toggle: enabling one disables
+      // the other so the runtime path is unambiguous.
+      uint64_t curAssetRef = 0;
+      if (model->conf.data.contains("materialAssetRefs")
+        && model->conf.data["materialAssetRefs"].contains(entry.first))
+      {
+        curAssetRef = model->conf.data["materialAssetRefs"][entry.first].get<uint64_t>();
+      }
+
+      auto &matAssets = assetManager.getTypeEntries(Project::FileType::MATERIAL);
       ImTable::start("General", nullptr, labelWidth);
+      ImTable::add("Material Asset");
+
+      // ImTable::addAssetVecComboBox expects a list with .getId()/.getName().
+      // matAssets entries already satisfy that. We mutate curAssetRef
+      // directly and write back to conf.data on change.
+      uint64_t before = curAssetRef;
+      ImTable::addAssetVecComboBox<Project::AssetManagerEntry>(
+        "##matAsset", matAssets, curAssetRef
+      );
+      if (curAssetRef != before) {
+        if (curAssetRef == 0) {
+          if (model->conf.data.contains("materialAssetRefs")) {
+            model->conf.data["materialAssetRefs"].erase(entry.first);
+          }
+        } else {
+          if (!model->conf.data.contains("materialAssetRefs")) {
+            model->conf.data["materialAssetRefs"] = nlohmann::json::object();
+          }
+          model->conf.data["materialAssetRefs"][entry.first] = curAssetRef;
+          // Asset wins over inline — flip the override off so the user
+          // doesn't see a stale inline panel below.
+          mat.isCustom.value = false;
+          model->conf.data["materials"].erase(entry.first);
+        }
+        assetManager.markAssetMetaDirty(model->getUUID());
+        needsReload = true;
+      }
+
+      // "Open Material Editor" shortcut — keeps the round-trip cheap when
+      // the user is iterating on both model slot and material content.
+      if (curAssetRef != 0 && ctx.editorScene) {
+        ImTable::add("");
+        if (ImGui::Button(ICON_MDI_PENCIL " Open Material Editor")) {
+          ctx.editorScene->openMaterialEditor(curAssetRef);
+        }
+      }
+
       if(ImTable::addProp("Override", mat.isCustom))
       {
         if(mat.isCustom.value) {
+          // Enabling inline override while a material asset is set would
+          // make the runtime path ambiguous; clear the asset ref first.
+          if (curAssetRef != 0 && model->conf.data.contains("materialAssetRefs")) {
+            model->conf.data["materialAssetRefs"].erase(entry.first);
+          }
           model->conf.data["materials"][entry.first] = mat.serialize();
         } else {
           matToRemove = entry.first; // defer to not break loop

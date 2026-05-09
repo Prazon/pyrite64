@@ -30,6 +30,7 @@ namespace Editor
         CHIP_NODE_GRAPH,
         CHIP_RESOURCE_TYPE,
         CHIP_RESOURCE_INSTANCE,
+        CHIP_MATERIAL,
         CHIP_COUNT
       };
 

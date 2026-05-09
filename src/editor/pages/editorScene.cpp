@@ -26,6 +26,7 @@
 #include "parts/assets/prefabEditor.h"
 #include "parts/assets/prefabEventGraphEditor.h"
 #include "parts/assets/prefabFunctionCodeEditor.h"
+#include "parts/assets/materialEditor.h"
 #include "../../project/compile/compileErrors.h"
 
 namespace
@@ -154,6 +155,19 @@ void Editor::Scene::openPrefabEditor(uint64_t assetUUID)
   } else {
     prefabEditors[assetUUID] = std::make_shared<PrefabEditor>(assetUUID);
   }
+}
+
+void Editor::Scene::openMaterialEditor(uint64_t assetUUID, ImGuiID dockTarget)
+{
+  auto it = materialEditors.find(assetUUID);
+  if (it != materialEditors.end()) {
+    if (dockTarget) it->second->setFirstDockTarget(dockTarget);
+    it->second->focus();
+    return;
+  }
+  auto editor = std::make_shared<MaterialEditor>(assetUUID);
+  if (dockTarget) editor->setFirstDockTarget(dockTarget);
+  materialEditors[assetUUID] = std::move(editor);
 }
 
 void Editor::Scene::openPrefabEventGraphEditor(uint64_t prefabAssetUUID, ImGuiID dockTarget)
@@ -608,6 +622,17 @@ void Editor::Scene::draw()
     }
   }
   for(auto &uuid : delFnCodeUUIDs) prefabFunctionCodeEditors.erase(uuid);
+
+  // Material asset editors. Same lifecycle as the prefab event graph
+  // editors above — a closed window drops its editor; dirty material
+  // graphs are silently discarded for now (Save button is explicit).
+  std::vector<uint64_t> delMaterialUUIDs{};
+  for(auto &[uuid, editor] : materialEditors) {
+    if (!editor->draw(dockSpaceID)) {
+      delMaterialUUIDs.push_back(uuid);
+    }
+  }
+  for(auto &uuid : delMaterialUUIDs) materialEditors.erase(uuid);
 
   // SPBF64 fork: graph + inspector now take an explicit scene + selection.
   // Here we drive them with the project's active scene and the main selection.

@@ -134,6 +134,12 @@ namespace
     } else if (ext == ".p64res") {
       type = Project::FileType::RESOURCE_INSTANCE;
       outPath = changeExt(outPath, ".res");
+    } else if (ext == ".p64mat") {
+      // Material assets resolve at editor build time — they don't emit a
+      // ROM blob themselves (the model that references them stamps the
+      // resolved Material into its own data). outPath is left unset so
+      // the projectBuilder skip list catches it.
+      type = Project::FileType::MATERIAL;
     }
 
     if (type == Project::FileType::UNKNOWN) {
@@ -315,6 +321,21 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
       entry.resource->deserialize(Utils::FS::loadTextFile(path));
     } break;
 
+    case FileType::MATERIAL:
+    {
+      entry.materialAsset = std::make_shared<Assets::MaterialAsset>();
+      entry.materialAsset->deserialize(Utils::FS::loadTextFile(path));
+      // Self-contained UUID (matches prefab/resource-instance convention).
+      // Without this, materialAsset->uuid stays 0 on disk and the asset
+      // entry uses the .conf-minted uuid only.
+      if (entry.materialAsset->uuid == 0) {
+        entry.materialAsset->uuid = entry.conf.uuid;
+        Utils::FS::saveTextFile(entry.path, entry.materialAsset->serialize());
+      } else {
+        entry.conf.uuid = entry.materialAsset->uuid;
+      }
+    } break;
+
     case FileType::MODEL_3D:
     {
       try{
@@ -350,6 +371,24 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
             mat.deserialize(savedMats[t3dMat.first]);
           } else {
             mat.fromT3D(*this, t3dMat.second);
+          }
+        }
+
+        // Material-asset overlay: each entry under conf.data["materialAssetRefs"]
+        // pins a model slot to a referenced .p64mat. The asset's compiled
+        // Material wins over inline overrides and over the T3D defaults,
+        // so editing the .p64mat propagates to every model on next reload.
+        if (entry.conf.data.contains("materialAssetRefs")) {
+          auto &refs = entry.conf.data["materialAssetRefs"];
+          for (auto it = refs.begin(); it != refs.end(); ++it) {
+            const std::string &slotName = it.key();
+            uint64_t matAssetUUID = it.value().get<uint64_t>();
+            auto matEntry = getEntryByUUID(matAssetUUID);
+            if (!matEntry || matEntry->type != FileType::MATERIAL || !matEntry->materialAsset) continue;
+            auto slotIt = entry.model.materials.find(slotName);
+            if (slotIt == entry.model.materials.end()) continue;
+            slotIt->second = matEntry->materialAsset->compiled;
+            slotIt->second.isCustom.value = true;
           }
         }
 
@@ -402,6 +441,12 @@ void Project::AssetManager::reload() {
         if (assetEntry.prefab) {
           assetEntry.conf.uuid = assetEntry.prefab->uuid.value;
         }
+      }
+
+      if (assetEntry.type == FileType::MATERIAL) {
+        // Materials must be resolved before MODEL_3D so the second-pass
+        // model loader can stamp asset-driven materials onto model slots.
+        reloadEntry(assetEntry, path.string());
       }
 
       if (assetEntry.type == FileType::RESOURCE_INSTANCE) {
@@ -670,7 +715,8 @@ bool Project::AssetManager::pollWatch()
 
     if (entry->type == FileType::IMAGE
       || entry->type == FileType::PREFAB
-      || entry->type == FileType::RESOURCE_INSTANCE)
+      || entry->type == FileType::RESOURCE_INSTANCE
+      || entry->type == FileType::MATERIAL)
     {
       reloadEntry(*entry, entry->path);
       if (entry->type == FileType::PREFAB && entry->prefab) {
@@ -782,7 +828,8 @@ void Project::AssetManager::save()
       || entry->type == FileType::UNKNOWN
       || entry->type == FileType::CODE_OBJ
       || entry->type == FileType::CODE_GLOBAL
-      || entry->type == FileType::PREFAB)
+      || entry->type == FileType::PREFAB
+      || entry->type == FileType::MATERIAL)
     {
       dirtyAssetMeta.erase(uuid);
       savedAssetMetaState.erase(uuid);
@@ -835,7 +882,8 @@ void Project::AssetManager::markAssetMetaDirty(uint64_t uuid)
     || entry->type == FileType::UNKNOWN
     || entry->type == FileType::CODE_OBJ
     || entry->type == FileType::CODE_GLOBAL
-    || entry->type == FileType::PREFAB)
+    || entry->type == FileType::PREFAB
+    || entry->type == FileType::MATERIAL)
   {
     return;
   }
@@ -939,6 +987,32 @@ uint64_t Project::AssetManager::createNodeGraph(const std::string &name)
   reload();
 
   auto entry = getByName(name + ".p64graph");
+  return entry ? entry->getUUID() : 0;
+}
+
+uint64_t Project::AssetManager::createMaterial(const std::string &name)
+{
+  if (name.empty()) return 0;
+  if (name.find_first_of("/\\:*?\"<>|") != std::string::npos) return 0;
+
+  auto assetPath = getAssetPath(project);
+  auto filePath = assetPath / (name + ".p64mat");
+  if (fs::exists(filePath)) return 0;
+
+  ::Project::Assets::MaterialAsset asset{};
+  asset.uuid = Utils::Hash::randomU64();
+  asset.graphJSON = R"({"nodes":[],"links":[]})";
+  // Compile defaults match Graph::compile()'s no-sink baseline.
+  asset.compiled.persp.value = true;
+  asset.compiled.zmode.value = 0b11;
+  asset.compiled.dither.value = 15;
+  asset.compiled.primColor.value = {0.0f, 0.0f, 0.0f, 1.0f};
+  asset.compiled.envColor.value  = {0.5f, 0.5f, 0.5f, 1.0f};
+  asset.compiled.isCustom.value = true;
+
+  Utils::FS::saveTextFile(filePath, asset.serialize());
+  reload();
+  auto entry = getByPath(filePath.string());
   return entry ? entry->getUUID() : 0;
 }
 

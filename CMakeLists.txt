@@ -325,6 +325,19 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/textureEditor.cpp
         src/editor/pages/parts/assets/matInstanceEditor.h
         src/editor/pages/parts/assets/matInstanceEditor.cpp
+        src/editor/pages/parts/assets/materialEditor.h
+        src/editor/pages/parts/assets/materialEditor.cpp
+        src/project/assets/materialAsset.h
+        src/project/assets/materialAsset.cpp
+        src/project/materialGraph/graph.h
+        src/project/materialGraph/graph.cpp
+        src/project/materialGraph/nodes/baseNode.h
+        src/project/materialGraph/nodes/nodeOutput.h
+        src/project/materialGraph/nodes/nodeColorCombiner.h
+        src/project/materialGraph/nodes/nodeColors.h
+        src/project/materialGraph/nodes/nodeRenderMode.h
+        src/project/materialGraph/nodes/nodeTexture.h
+        src/project/materialGraph/nodes/nodeGeometry.h
         src/renderer/storageBuffer.cpp
         src/renderer/skeleton.h
         src/renderer/skeleton.cpp
