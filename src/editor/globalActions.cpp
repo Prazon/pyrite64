@@ -24,6 +24,12 @@ namespace Editor::Actions
   {
     registerAction(Type::PROJECT_OPEN, [](const std::string &path) {
        Utils::Logger::log("Open Project: " + path);
+       // Flush per-project editor state to the *closing* project's cache
+       // before deleting it. Otherwise switching from project A to project B
+       // would silently drop A's open-tab list.
+       if (ctx.project && ctx.editorScene) {
+         ctx.editorScene->onProjectClosing();
+       }
        delete ctx.project;
        UndoRedo::getHistory().clear();
        try {
@@ -31,6 +37,9 @@ namespace Editor::Actions
          Editor::RecentProjects::setMostRecentPath(path);
          if(ctx.project && !ctx.project->getScenes().getEntries().empty()) {
            ctx.project->getScenes().loadScene(ctx.project->conf.sceneIdLastOpened);
+         }
+         if (ctx.project && ctx.editorScene) {
+           ctx.editorScene->onProjectOpened();
          }
        } catch (const std::exception &e) {
          auto error = "Failed to open project:\n" + std::string(e.what());

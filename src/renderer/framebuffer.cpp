@@ -4,6 +4,7 @@
 */
 #include "framebuffer.h"
 #include "../context.h"
+#include <cstring>
 #include <stdexcept>
 
 SDL_GPUTextureFormat Renderer::getDepthStencilFormat()
@@ -168,5 +169,61 @@ uint32_t Renderer::Framebuffer::readObjectID(uint32_t x, uint32_t y) {
   //printf("ID: %08X\n", res);
   endGenericRead();
   return res;
+}
+
+bool Renderer::Framebuffer::readPixels(std::vector<uint8_t> &out)
+{
+  out.clear();
+  if (!gpuTex || texInfo.width == 0 || texInfo.height == 0) return false;
+
+  const uint32_t w = texInfo.width;
+  const uint32_t h = texInfo.height;
+  const size_t byteCount = (size_t)w * h * 4;
+
+  // Disposable transfer buffer sized for this exact readback. The persistent
+  // transBufferRead member is sized for 1-pixel reads (readColor / readObjectID)
+  // and reusing it would force a resize plus retain memory we don't need
+  // between thumbnail saves.
+  SDL_GPUTransferBufferCreateInfo tbci{};
+  tbci.size = (Uint32)byteCount;
+  tbci.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+  SDL_GPUTransferBuffer *tb = SDL_CreateGPUTransferBuffer(ctx.gpu, &tbci);
+  if (!tb) return false;
+
+  SDL_GPUCommandBuffer *cmdBuff = SDL_AcquireGPUCommandBuffer(ctx.gpu);
+  SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(cmdBuff);
+
+  SDL_GPUTextureRegion src{};
+  src.texture = gpuTex;
+  src.x = 0;
+  src.y = 0;
+  src.w = w;
+  src.h = h;
+  src.d = 1;
+
+  SDL_GPUTextureTransferInfo dst{};
+  dst.transfer_buffer = tb;
+  dst.pixels_per_row = w;
+  dst.rows_per_layer = h;
+
+  SDL_DownloadFromGPUTexture(pass, &src, &dst);
+  SDL_EndGPUCopyPass(pass);
+
+  SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmdBuff);
+  SDL_WaitForGPUFences(ctx.gpu, true, &fence, 1);
+  SDL_ReleaseGPUFence(ctx.gpu, fence);
+
+  void *mapped = SDL_MapGPUTransferBuffer(ctx.gpu, tb, false);
+  if (!mapped) {
+    SDL_ReleaseGPUTransferBuffer(ctx.gpu, tb);
+    return false;
+  }
+
+  out.resize(byteCount);
+  std::memcpy(out.data(), mapped, byteCount);
+
+  SDL_UnmapGPUTransferBuffer(ctx.gpu, tb);
+  SDL_ReleaseGPUTransferBuffer(ctx.gpu, tb);
+  return true;
 }
 

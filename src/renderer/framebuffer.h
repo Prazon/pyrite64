@@ -3,6 +3,9 @@
 * @license MIT
 */
 #pragma once
+#include <cstdint>
+#include <vector>
+
 #include <SDL3/SDL.h>
 
 #include "glm/vec4.hpp"
@@ -50,5 +53,12 @@ namespace Renderer
 
       glm::u8vec4 readColor(uint32_t x, uint32_t y);
       uint32_t readObjectID(uint32_t x, uint32_t y);
+
+      // Synchronous full-target readback of the color attachment as tightly
+      // packed RGBA8 bytes. Resizes `out` to width*height*4. Returns false if
+      // the framebuffer has zero size or the GPU download fails. Allocates and
+      // releases its own transfer buffer; safe to call rarely (e.g. when
+      // saving a thumbnail PNG).
+      bool readPixels(std::vector<uint8_t> &out);
   };
 }

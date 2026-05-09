@@ -60,5 +60,9 @@ namespace Editor
       // should fall back to a glyph until a later frame).
       SDL_GPUTexture* renderHeadless(ImVec2 size);
       SDL_GPUTexture* getTexture() const;
+
+      // Read the most-recent render back to RGBA8 bytes for persisting to
+      // disk. Returns false if no render has happened yet.
+      bool readPixels(std::vector<uint8_t> &out, uint32_t &outW, uint32_t &outH);
   };
 }

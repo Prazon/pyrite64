@@ -11,3 +11,5 @@ pyrite64.exe
 *.dll
 preferences.json
 .claude/
+# Per-project editor cache (material thumbnails, restored open-tab list, etc.)
+.cache/

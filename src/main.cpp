@@ -410,7 +410,14 @@ int main(int argc, char** argv)
       if(!ImGui::GetIO().WantTextInput)
       {
         int mouseWheelY = ImGui::GetIO().MouseWheel;
-        if(ImGui::IsKeyChordPressed(ctx.prefs.keymap.zoomIn)) {
+        // Skip the global UI zoom when the content browser is the hover
+        // target. Ctrl+wheel there scales the browser cards instead.
+        // hoveredLastFrame is from the previous draw, which is fine: the
+        // user has to keep the cursor in the panel for several frames to
+        // wheel in any case.
+        bool overContentBrowser = ctx.editorScene
+          && ctx.editorScene->getAssetsBrowser().wasHovered();
+        if(ImGui::IsKeyChordPressed(ctx.prefs.keymap.zoomIn) && !overContentBrowser) {
           // special handling for zoom, the default keybind uses CTRL+SCROLL,
           // so check direction here
           int zoom = 1;
@@ -418,7 +425,7 @@ int main(int argc, char** argv)
           if(mouseWheelY < 0)zoom = -1;
           ImGui::Theme::changeZoom(zoom);
         }
-        else if(ImGui::IsKeyChordPressed(ctx.prefs.keymap.zoomOut)) {
+        else if(ImGui::IsKeyChordPressed(ctx.prefs.keymap.zoomOut) && !overContentBrowser) {
           int zoom = -1;
           if(mouseWheelY > 0)zoom = 1;
           if(mouseWheelY < 0)zoom = -1;
@@ -474,6 +481,9 @@ int main(int argc, char** argv)
 
       if(ctx.wantsProjectClose)
       {
+        // Persist per-project editor state (open tabs, etc.) into the
+        // closing project's .cache before tearing the project down.
+        if (ctx.editorScene) ctx.editorScene->onProjectClosing();
         Editor::UndoRedo::getHistory().clear();
         delete ctx.project;
         ctx.project = nullptr;

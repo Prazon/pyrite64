@@ -112,3 +112,9 @@ SDL_GPUTexture* Editor::MaterialPreviewViewport::getTexture() const
 {
   return viewport.getTexture();
 }
+
+bool Editor::MaterialPreviewViewport::readPixels(std::vector<uint8_t> &out,
+                                                 uint32_t &outW, uint32_t &outH)
+{
+  return viewport.readPixels(out, outW, outH);
+}

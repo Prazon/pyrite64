@@ -86,5 +86,10 @@ namespace Editor
       // (SDL_GPU textures persist), so thumbnail consumers can keep
       // displaying it without triggering a fresh render.
       SDL_GPUTexture* getTexture() const;
+
+      // Synchronous read of the framebuffer's color target as RGBA8.
+      // `outW`/`outH` receive the framebuffer dimensions. Returns false if
+      // nothing has been rendered yet.
+      bool readPixels(std::vector<uint8_t> &out, uint32_t &outW, uint32_t &outH);
   };
 }

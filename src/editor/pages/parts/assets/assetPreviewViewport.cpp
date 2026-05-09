@@ -189,6 +189,15 @@ SDL_GPUTexture* Editor::AssetPreviewViewport::getTexture() const
   return fb.getTexture();
 }
 
+bool Editor::AssetPreviewViewport::readPixels(std::vector<uint8_t> &out,
+                                              uint32_t &outW, uint32_t &outH)
+{
+  outW = fb.getWidth();
+  outH = fb.getHeight();
+  if (outW == 0 || outH == 0) return false;
+  return fb.readPixels(out);
+}
+
 void Editor::AssetPreviewViewport::draw(ImVec2 size)
 {
   if (size.x < 64.0f) size.x = 64.0f;
