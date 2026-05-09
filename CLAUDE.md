@@ -29,6 +29,26 @@ Editor CLI mode (used by game projects' `make p64`):
 ./pyrite64.exe --help
 ```
 
+Beyond build/clean, `--cli` exposes a JSON-output asset-tooling surface aimed at agents/scripts that need to author content without the GUI. One op per process. All read commands print JSON to stdout; mutations echo the post-state JSON. Sources live in `src/cli/cliCommands.cpp` — see the registry near the bottom for the full command list. Examples:
+
+```bash
+# discovery
+./pyrite64.exe --cli --cmd asset-list --type prefab          PROJ
+./pyrite64.exe --cli --cmd component-list                    PROJ
+./pyrite64.exe --cli --cmd component-describe --comp PaperSprite PROJ
+
+# prefab authoring
+./pyrite64.exe --cli --cmd prefab-create --name Foo          PROJ
+./pyrite64.exe --cli --cmd prefab-add-component --asset Foo --comp PaperSprite PROJ
+./pyrite64.exe --cli --cmd prefab-set-prop --asset Foo --comp PaperSprite \
+                                           --field frame --value 3 PROJ
+./pyrite64.exe --cli --cmd prefab-set-transform --asset Foo --field pos --value '[10,0,0]' PROJ
+./pyrite64.exe --cli --cmd prefab-add-object --asset Foo --parent Foo --name Hand PROJ
+./pyrite64.exe --cli --cmd prefab-describe --asset Foo       PROJ
+```
+
+`--asset` and `--parent` accept either an asset name (with or without extension) or a uuid. `--path` is a slash-separated Object name path within a prefab tree (empty = root). `--value` is JSON-parsed first, falling back to a raw string. Graph/material/event-graph node-level editing is intentionally out of scope — those remain GUI-authored.
+
 `build/compile_commands.json` is emitted — point clangd/IDE tooling there.
 
 There are no editor-side unit tests. `n64/tests/` and `n64/examples/` are runtime sample ROMs built through libdragon's makefile system, not CTest targets. CI workflows are in `.github/workflows/` (`editor.yml`, `docs.yml`).

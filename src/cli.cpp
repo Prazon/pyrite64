@@ -5,6 +5,9 @@
 #include "cli.h"
 #include "argparse/argparse.hpp"
 #include "build/projectBuilder.h"
+#include "cli/cliCommands.h"
+#include "context.h"
+#include "project/project.h"
 #include "utils/logger.h"
 
 namespace
@@ -31,9 +34,12 @@ CLI::Result CLI::run(int argc, char** argv)
    .default_value(false)
    .implicit_value(true);
 
+  // Cmd is a free-form string here (validated against build/clean and the
+  // cliCommands.cpp registry below) so adding new sub-commands does not need
+  // to touch this file.
   prog.add_argument("--cmd")
-    .help("Command to run")
-    .choices("build", "clean");
+    .help("Command to run: build, clean, or one of the asset/prefab tooling commands. See --cmd help for the full list.")
+    .default_value(std::string{});
 
   prog.add_argument("--experimental")
     .help("Enable experimental features (may cause instability / break projects)")
@@ -45,6 +51,8 @@ CLI::Result CLI::run(int argc, char** argv)
     .help("Path to project file (.p64proj)")
   ;
 
+  CLI::Commands::registerFlags(prog);
+
   argProgPath = {};
   try {
     prog.parse_args(argc, argv);
@@ -52,6 +60,7 @@ CLI::Result CLI::run(int argc, char** argv)
   catch (const std::exception& err) {
     std::cerr << err.what() << std::endl;
     std::cerr << prog;
+    CLI::Commands::printExtendedHelp();
     return Result::ERROR;
   }
 
@@ -68,15 +77,24 @@ CLI::Result CLI::run(int argc, char** argv)
     fputs(msg.c_str(), stdout);
   });
 
+  if (cmd == "help" || cmd.empty()) {
+    fputs("Pyrite64 - CLI\n", stdout);
+    std::cout << prog;
+    CLI::Commands::printExtendedHelp();
+    return cmd.empty() ? Result::ERROR : Result::SUCCESS;
+  }
+
   printf("Pyrite64 - CLI\n");
   bool res = false;
 
   if (cmd == "build") {
+    if (argProgPath.empty()) { fputs("error: project path required\n", stderr); return Result::ERROR; }
     printf("Building project: %s\n", argProgPath.c_str());
     res = Build::buildProject(argProgPath);
   }
   else if (cmd == "clean")
   {
+    if (argProgPath.empty()) { fputs("error: project path required\n", stderr); return Result::ERROR; }
     printf("Cleaning project: %s\n", argProgPath.c_str());
     Project::Project project{argProgPath};
     res = Build::cleanProject(project, {
@@ -85,6 +103,25 @@ CLI::Result CLI::run(int argc, char** argv)
       .engine = true,
       .engineSrc = true
     });
+  }
+  else if (CLI::Commands::isExtendedCmd(cmd))
+  {
+    if (argProgPath.empty()) { fputs("error: project path required\n", stderr); return Result::ERROR; }
+    Project::Project project{argProgPath};
+    // Components and Prefab::save() reach into ctx.project. The build/clean
+    // paths happen to not need it, but the asset-tooling commands often do.
+    ctx.project = &project;
+    CLI::Commands::Args cliArgs{};
+    cliArgs.cmd = cmd;
+    CLI::Commands::readArgs(prog, cliArgs);
+    int rc = CLI::Commands::dispatch(cliArgs, project);
+    ctx.project = nullptr;
+    res = (rc == 0);
+  }
+  else {
+    fprintf(stderr, "error: unknown --cmd '%s'\n", cmd.c_str());
+    CLI::Commands::printExtendedHelp();
+    res = false;
   }
 
   return res ? Result::SUCCESS : Result::ERROR;

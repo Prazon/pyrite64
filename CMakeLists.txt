@@ -214,6 +214,8 @@ add_executable(pyrite64 src/main.cpp
         src/project/component/types/compCode.cpp
         src/cli.cpp
         src/cli.h
+        src/cli/cliCommands.cpp
+        src/cli/cliCommands.h
         src/build/scriptBuilder.cpp
         n64/engine/include/script/scriptTable.h
         src/utils/codeParser.h
