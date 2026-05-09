@@ -10,6 +10,7 @@
 #include "ccMapping.h"
 #include "textureEditor.h"
 #include "assetEditorDocking.h"
+#include "../assetInspector.h"
 #include "../../../../context.h"
 #include "../../../imgui/helper.h"
 #include "../../editorScene.h"
@@ -161,6 +162,18 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
     previewBoundUUID = model->getUUID();
     previewBoundMesh = meshRaw;
   }
+
+  // Outer split: existing top/bottom layout on the left, AssetInspector on
+  // the right (replaces the global "Asset" tab the scene editor used to host).
+  ImVec2 outerAvail = ImGui::GetContentRegionAvail();
+  float outerSplitW   = 6_px;
+  float minOuterRight = 220_px;
+  float minOuterLeft  = 280_px;
+  float outerRightW   = std::clamp(outerAvail.x * assetSplitFrac, minOuterRight,
+                                   std::max(minOuterRight, outerAvail.x - minOuterLeft - outerSplitW));
+  float outerLeftW    = std::max(minOuterLeft, outerAvail.x - outerSplitW - outerRightW);
+
+  ImGui::BeginChild("##modelOuterLeft", ImVec2(outerLeftW, 0), ImGuiChildFlags_None);
 
   // Top half: 3D preview, bottom half: material/property UI.
   ImVec2 fullAvail = ImGui::GetContentRegionAvail();
@@ -570,6 +583,40 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
     ImGui::PopID();
   }
   ImGui::EndChild();  // ##matUI
+
+  ImGui::EndChild();  // ##modelOuterLeft
+
+  ImGui::SameLine();
+  ImGui::InvisibleButton("##modelAssetSplit", ImVec2(outerSplitW, -1));
+  if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    assetSplitDragging = true;
+    float dx = ImGui::GetIO().MouseDelta.x;
+    if (outerAvail.x > outerSplitW * 2) {
+      assetSplitFrac -= dx / (outerAvail.x - outerSplitW);
+      assetSplitFrac = std::clamp(assetSplitFrac, 0.15f, 0.50f);
+    }
+  } else {
+    assetSplitDragging = false;
+  }
+  if (ImGui::IsItemHovered() || assetSplitDragging) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  }
+  {
+    ImVec2 a = ImGui::GetItemRectMin();
+    ImVec2 b = ImGui::GetItemRectMax();
+    ImU32 col = ImGui::GetColorU32(assetSplitDragging ? ImGuiCol_SeparatorActive : ImGuiCol_Separator);
+    ImGui::GetWindowDrawList()->AddRectFilled(
+      {(a.x + b.x) * 0.5f - 1.0f, a.y},
+      {(a.x + b.x) * 0.5f + 1.0f, b.y},
+      col
+    );
+  }
+
+  ImGui::SameLine();
+  ImGui::BeginChild("##modelInspector", ImVec2(0, 0), ImGuiChildFlags_Borders);
+  Editor::AssetInspector::draw(assetUUID);
+  ImGui::EndChild();
+
   ImGui::End();
 
   // update placeholder indices

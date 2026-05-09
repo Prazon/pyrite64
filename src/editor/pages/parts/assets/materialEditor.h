@@ -42,6 +42,10 @@ namespace Editor
       float previewSplitFrac{0.35f};
       bool  splitDragging{false};
 
+      // Asset inspector right strip.
+      float assetSplitFrac{0.22f};
+      bool  assetSplitDragging{false};
+
       // Live 3D preview applied to a polygonal host cube. setMaterial() each
       // frame stamps compiledCache into the host's per-part material slots so
       // graph edits show up live.

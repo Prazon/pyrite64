@@ -26,6 +26,10 @@ namespace Editor
       bool     forceFocusNextFrame{true};
       bool     firstDockFrame{true};
 
+      // Asset inspector right strip.
+      float    assetSplitFrac{0.24f};
+      bool     assetSplitDragging{false};
+
     public:
       explicit ModelEditor(uint64_t assetUUID) : assetUUID(assetUUID) {}
 

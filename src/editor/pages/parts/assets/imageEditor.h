@@ -30,6 +30,10 @@ namespace Editor
       bool   forceFocusNextFrame{true};
       bool   firstDockFrame{true};
 
+      // Asset inspector right strip: width fraction, drag flag.
+      float  assetSplitFrac{0.30f};
+      bool   assetSplitDragging{false};
+
       // Sprite slicing overlay state — purely visualization in v1, not persisted
       bool   sliceShow{false};
       int    sliceCellW{16};

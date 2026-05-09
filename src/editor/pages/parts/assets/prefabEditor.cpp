@@ -10,6 +10,7 @@
 #include "IconsMaterialDesignIcons.h"
 
 #include "assetEditorDocking.h"
+#include "../assetInspector.h"
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
 #include "../../../../utils/hash.h"
@@ -237,10 +238,11 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   // Window names — suffixed with the asset UUID so they're unique across
   // open editors. ID-string trick lets us change the visible title without
   // losing dock state.
-  const std::string winComp = std::string{ICON_MDI_FILE_TREE              "  Components##PrefabComp_"} + uuidStr;
-  const std::string winMyP  = std::string{ICON_MDI_PACKAGE_VARIANT_CLOSED "  My Prefab##PrefabMyP_"}  + uuidStr;
-  const std::string winVP   = std::string{ICON_MDI_VIEW_QUILT             "  Viewport##PrefabVP_"}    + uuidStr;
-  const std::string winDet  = std::string{ICON_MDI_INFORMATION            "  Details##PrefabDet_"}    + uuidStr;
+  const std::string winComp  = std::string{ICON_MDI_FILE_TREE              "  Components##PrefabComp_"} + uuidStr;
+  const std::string winMyP   = std::string{ICON_MDI_PACKAGE_VARIANT_CLOSED "  My Prefab##PrefabMyP_"}  + uuidStr;
+  const std::string winVP    = std::string{ICON_MDI_VIEW_QUILT             "  Viewport##PrefabVP_"}    + uuidStr;
+  const std::string winDet   = std::string{ICON_MDI_INFORMATION            "  Details##PrefabDet_"}    + uuidStr;
+  const std::string winAsset = std::string{ICON_MDI_FILE_OUTLINE           "  Asset##PrefabAsset_"}    + uuidStr;
 
   if (firstBuild) {
     ImGui::DockBuilderRemoveNode(dockspaceID);
@@ -253,10 +255,14 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
     right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.30f, nullptr, &center);
     leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.50f, nullptr, &left);
 
-    ImGui::DockBuilderDockWindow(winComp.c_str(), left);
-    ImGui::DockBuilderDockWindow(winMyP.c_str(),  leftBottom);
-    ImGui::DockBuilderDockWindow(winVP.c_str(),   center);
-    ImGui::DockBuilderDockWindow(winDet.c_str(),  right);
+    ImGui::DockBuilderDockWindow(winComp.c_str(),  left);
+    ImGui::DockBuilderDockWindow(winMyP.c_str(),   leftBottom);
+    ImGui::DockBuilderDockWindow(winVP.c_str(),    center);
+    ImGui::DockBuilderDockWindow(winDet.c_str(),   right);
+    // Asset inspector tabs into the same right node as Details so the user
+    // can flip between the prefab's selected-thing details and its asset
+    // metadata (compression / exclude / etc.).
+    ImGui::DockBuilderDockWindow(winAsset.c_str(), right);
     ImGui::DockBuilderFinish(dockspaceID);
     // Remember the viewport's node so we can dock EventGraph + function
     // source tabs next to it from openPrefabEventGraphEditor / openCodeEditorByPath.
@@ -313,6 +319,10 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
 
   ImGui::Begin(winDet.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
     drawDetailsPanel();
+  ImGui::End();
+
+  ImGui::Begin(winAsset.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    Editor::AssetInspector::draw(assetUUID);
   ImGui::End();
 
   return isOpen;

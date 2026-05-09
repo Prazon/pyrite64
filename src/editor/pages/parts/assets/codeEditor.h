@@ -37,6 +37,13 @@ namespace Editor
       bool   firstDockApplied{false};
       bool   firstDockFrame{true};
 
+      // Asset inspector right strip: width fraction, drag flag.
+      // Only shown when the editor is backed by a real asset UUID (i.e.
+      // pathOverride is empty); path-opened windows skip the strip because
+      // there's no AssetManager entry to inspect.
+      float assetSplitFrac{0.28f};
+      bool  assetSplitDragging{false};
+
       // Last text we wrote / loaded. Used to decide if the buffer is dirty.
       std::string savedText{};
 

@@ -3,7 +3,6 @@
 * @license MIT
 */
 #pragma once
-#include "parts/assetInspector.h"
 #include "parts/assetsBrowser.h"
 #include "parts/compileErrorsWindow.h"
 #include "parts/layerInspector.h"
@@ -18,6 +17,7 @@
 #include "parts/viewport2D.h"
 #include "parts/viewport3D.h"
 #include "parts/assets/matThumbnailCache.h"
+#include "parts/assets/modelThumbnailCache.h"
 
 namespace Project::Compile { struct Error; }
 
@@ -31,6 +31,10 @@ namespace Editor
   class PrefabFunctionCodeEditor;
   class MaterialEditor;
   class WidgetBlueprintEditor;
+  class FontEditor;
+  class AudioEditor;
+  class ResourceTypeEditorWindow;
+  class ResourceInstanceEditor;
 
   class Scene
   {
@@ -59,11 +63,25 @@ namespace Editor
       // Per-asset .p64widget editors (WYSIWYG canvas tab for HUD/menu
       // authoring). Lifecycle mirrors the prefab/material editors above.
       std::map<uint64_t, std::shared_ptr<WidgetBlueprintEditor>> widgetEditors{};
+      // Per-asset font / audio / resource-type / resource-instance editors.
+      // These types previously had no dedicated window and relied on the
+      // "Asset" tab in the scene editor; that tab has been removed and each
+      // type now opens its own window with the AssetInspector strip on the
+      // right.
+      std::map<uint64_t, std::shared_ptr<FontEditor>> fontEditors{};
+      std::map<uint64_t, std::shared_ptr<AudioEditor>> audioEditors{};
+      std::map<uint64_t, std::shared_ptr<ResourceTypeEditorWindow>> resourceTypeEditors{};
+      std::map<uint64_t, std::shared_ptr<ResourceInstanceEditor>> resourceInstanceEditors{};
 
       // Material thumbnail cache (browser-wide). Each entry owns its own
       // tiny offscreen viewport so the framebuffer texture is stable across
       // frames. Saving a material in MaterialEditor invalidates its entry.
       MaterialThumbnailCache matThumbnails{};
+
+      // Model thumbnail cache. Stub: only loads pre-existing PNGs from
+      // <project>/.cache/modelThumb/. The render-and-persist path is not
+      // wired yet; see modelThumbnailCache.h for the migration plan.
+      ModelThumbnailCache modelThumbnails{};
 
       // Defer-destroy list: PrefabEditor owns a Viewport3D whose framebuffer
       // GPU texture is referenced by ImGui's draw list for the current frame.
@@ -90,7 +108,6 @@ namespace Editor
       PreferenceOverlay prefOverlay{};
       ProjectSettings projectSettings{};
       AssetsBrowser assetsBrowser{};
-      AssetInspector assetInspector{};
       SceneInspector sceneInspector{};
       LayerInspector layerInspector{};
       ObjectInspector objectInspector{};
@@ -118,9 +135,10 @@ namespace Editor
 
       // Restoration of persisted open editors must happen after a project is
       // loaded — PrefabEditor::loadFromDisk needs ctx.project, and instantiating
-      // it with a null project leaves it permanently empty. The constructor
-      // populates these vectors from editorScene.json; processPendingRestores()
-      // drains them at the top of draw() once ctx.project is non-null.
+      // it with a null project leaves it permanently empty. onProjectOpened()
+      // populates these vectors from <project>/.cache/editorState/editorState.json;
+      // processPendingRestores() drains them at the top of draw() once
+      // ctx.project is non-null.
       std::vector<uint64_t> pendingRestoreModels{};
       std::vector<uint64_t> pendingRestoreImages{};
       std::vector<uint64_t> pendingRestoreCode{};
@@ -130,6 +148,13 @@ namespace Editor
     public:
       Scene();
       ~Scene();
+
+      // Project lifecycle hooks. onProjectOpened() loads persisted open-editor
+      // UUIDs from the new project's cache; onProjectClosing() flushes the
+      // current set to the *closing* project's cache and tears down all open
+      // editors so they don't bleed into the next project.
+      void onProjectOpened();
+      void onProjectClosing();
 
       void openModelEditor(uint64_t assetUUID);
       void openImageEditor(uint64_t assetUUID);
@@ -157,10 +182,27 @@ namespace Editor
       // asset editors above.
       void openWidgetBlueprintEditor(uint64_t assetUUID, ImGuiID dockTarget = 0);
 
+      // Open the font / audio / resource-type / resource-instance editor for
+      // the given asset. Idempotent — re-opens focus the existing window.
+      void openFontEditor(uint64_t assetUUID);
+      void openAudioEditor(uint64_t assetUUID);
+      void openResourceTypeEditor(uint64_t assetUUID);
+      void openResourceInstanceEditor(uint64_t assetUUID);
+
       // Material thumbnail cache accessor — used by MaterialEditor::save()
       // to invalidate a saved material's thumbnail and by AssetsBrowser to
       // fetch / display them.
       MaterialThumbnailCache& getMatThumbnails() { return matThumbnails; }
+
+      // Model thumbnail cache accessor (currently stub-only — see comment
+      // on the member and in modelThumbnailCache.h).
+      ModelThumbnailCache& getModelThumbnails() { return modelThumbnails; }
+
+      // Asset browser accessor. main.cpp consults its hover state to gate
+      // the global Ctrl+wheel UI zoom; the browser owns its own thumbScale
+      // when the cursor is over it. editorScene.cpp uses this for the
+      // per-project cache load/save path too.
+      AssetsBrowser& getAssetsBrowser() { return assetsBrowser; }
       // Open a slice editor showing only the named P64_NODE function from
       // <project>/src/user/<prefabName>.cpp. Idempotent — re-opens focus
       // the existing window. dockTarget, when nonzero, becomes the

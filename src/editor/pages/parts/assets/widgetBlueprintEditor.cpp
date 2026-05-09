@@ -14,6 +14,7 @@
 #include "IconsMaterialDesignIcons.h"
 
 #include "assetEditorDocking.h"
+#include "../assetInspector.h"
 #include "../../../../context.h"
 #include "../../../../utils/fs.h"
 #include "../../../../utils/logger.h"
@@ -229,10 +230,11 @@ bool Editor::WidgetBlueprintEditor::draw(ImGuiID defDockId)
   bool firstBuild = (ImGui::DockBuilderGetNode(dockspaceID) == nullptr);
   ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), 0);
 
-  const std::string winPal = std::string{ICON_MDI_PUZZLE_OUTLINE      "  Palette##WidgetPal_"}      + uuidStr;
-  const std::string winHie = std::string{ICON_MDI_FILE_TREE           "  Hierarchy##WidgetHie_"}    + uuidStr;
-  const std::string winVP  = std::string{ICON_MDI_VIEW_QUILT          "  Canvas##WidgetVP_"}        + uuidStr;
-  const std::string winDet = std::string{ICON_MDI_INFORMATION         "  Details##WidgetDet_"}      + uuidStr;
+  const std::string winPal   = std::string{ICON_MDI_PUZZLE_OUTLINE      "  Palette##WidgetPal_"}      + uuidStr;
+  const std::string winHie   = std::string{ICON_MDI_FILE_TREE           "  Hierarchy##WidgetHie_"}    + uuidStr;
+  const std::string winVP    = std::string{ICON_MDI_VIEW_QUILT          "  Canvas##WidgetVP_"}        + uuidStr;
+  const std::string winDet   = std::string{ICON_MDI_INFORMATION         "  Details##WidgetDet_"}      + uuidStr;
+  const std::string winAsset = std::string{ICON_MDI_FILE_OUTLINE        "  Asset##WidgetAsset_"}      + uuidStr;
 
   if (firstBuild) {
     ImGui::DockBuilderRemoveNode(dockspaceID);
@@ -244,10 +246,11 @@ bool Editor::WidgetBlueprintEditor::draw(ImGuiID defDockId)
     ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.30f, nullptr, &center);
     ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.55f, nullptr, &left);
 
-    ImGui::DockBuilderDockWindow(winPal.c_str(), left);
-    ImGui::DockBuilderDockWindow(winHie.c_str(), leftBottom);
-    ImGui::DockBuilderDockWindow(winVP.c_str(),  center);
-    ImGui::DockBuilderDockWindow(winDet.c_str(), right);
+    ImGui::DockBuilderDockWindow(winPal.c_str(),   left);
+    ImGui::DockBuilderDockWindow(winHie.c_str(),   leftBottom);
+    ImGui::DockBuilderDockWindow(winVP.c_str(),    center);
+    ImGui::DockBuilderDockWindow(winDet.c_str(),   right);
+    ImGui::DockBuilderDockWindow(winAsset.c_str(), right);
     ImGui::DockBuilderFinish(dockspaceID);
   }
 
@@ -267,6 +270,10 @@ bool Editor::WidgetBlueprintEditor::draw(ImGuiID defDockId)
 
   ImGui::Begin(winDet.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
     inspector.draw(scene, selection);
+  ImGui::End();
+
+  ImGui::Begin(winAsset.c_str(), nullptr, ImGuiWindowFlags_NoCollapse);
+    Editor::AssetInspector::draw(assetUUID);
   ImGui::End();
 
   return isOpen;

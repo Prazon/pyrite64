@@ -10,6 +10,8 @@
 #include "../actions.h"
 #include "../undoRedo.h"
 #include "../../context.h"
+#include "../../project/cacheDir.h"
+#include "../../project/project.h"
 
 #define IMVIEWGUIZMO_IMPLEMENTATION 1
 #include "ImGuizmo.h"
@@ -28,6 +30,10 @@
 #include "parts/assets/prefabFunctionCodeEditor.h"
 #include "parts/assets/materialEditor.h"
 #include "parts/assets/widgetBlueprintEditor.h"
+#include "parts/assets/fontEditor.h"
+#include "parts/assets/audioEditor.h"
+#include "parts/assets/resourceTypeEditorWindow.h"
+#include "parts/assets/resourceInstanceEditor.h"
 #include "../../project/compile/compileErrors.h"
 
 namespace
@@ -53,14 +59,39 @@ Editor::Scene::Scene()
   });
   needsSanityCheck = true;
 
-  try
-  {
-    auto json = Utils::JSON::loadFile(Utils::Proc::getAppDataPath() / "editorScene.json");
-    // Don't instantiate editors yet — ctx.project hasn't been opened by the
-    // boot sequence in main.cpp. Stash UUIDs and let processPendingRestores()
-    // run them once the project is live. PrefabEditor in particular caches
-    // its in-memory subtree on construction; building it without a project
-    // leaves it permanently stillborn.
+  // Open-editor restoration is per-project now (lives in
+  // <project>/.cache/editorState/editorState.json). Loading is deferred
+  // until onProjectOpened() runs, after PROJECT_OPEN has populated
+  // ctx.project. Constructing a Scene without an active project leaves the
+  // pendingRestore* lists empty, which is the correct behaviour at the
+  // launcher screen.
+}
+
+Editor::Scene::~Scene()
+{
+  // Persistence has moved to onProjectClosing(); the destructor runs at
+  // editor shutdown well after the last project has been closed and torn
+  // down, so there's nothing to flush here.
+  Editor::Actions::registerAction(Editor::Actions::Type::OPEN_NODE_GRAPH, nullptr);
+}
+
+void Editor::Scene::onProjectOpened()
+{
+  // Drain any per-project state from a previously open project before loading
+  // the new one. The close hook should have already done this, but call it
+  // again defensively in case PROJECT_OPEN is reached without a clean close.
+  pendingRestoreModels.clear();
+  pendingRestoreImages.clear();
+  pendingRestoreCode.clear();
+  pendingRestorePrefabs.clear();
+
+  if (!ctx.project) return;
+
+  auto path = Project::Cache::fileFor(*ctx.project, "editorState", "editorState.json");
+  if (path.empty()) return;
+
+  try {
+    auto json = Utils::JSON::loadFile(path);
     auto stashList = [&](const char *key, std::vector<uint64_t> &out) {
       if (!json.contains(key)) return;
       for (const auto &assetUUID : json[key]) {
@@ -71,32 +102,72 @@ Editor::Scene::Scene()
     stashList("winImages",  pendingRestoreImages);
     stashList("winCode",    pendingRestoreCode);
     stashList("winPrefabs", pendingRestorePrefabs);
-  } catch(const std::exception& e) {}
+    if (json.contains("assetsBrowserThumbScale")) {
+      assetsBrowser.setThumbScale(json["assetsBrowserThumbScale"].get<float>());
+    }
+  } catch (const std::exception &) {
+    // Missing or malformed cache file is non-fatal — the user just gets a
+    // clean tab strip. JSON::loadFile already logs parse errors.
+  }
 }
 
-Editor::Scene::~Scene()
+void Editor::Scene::onProjectClosing()
 {
-  nlohmann::json conf{};
-  conf["winModels"] = nlohmann::json::array();
-  for(const auto& [assetUUID, _] : modelEditors) {
-    conf["winModels"].push_back(assetUUID);
-  }
-  conf["winImages"] = nlohmann::json::array();
-  for(const auto& [assetUUID, _] : imageEditors) {
-    conf["winImages"].push_back(assetUUID);
-  }
-  conf["winCode"] = nlohmann::json::array();
-  for(const auto& [assetUUID, _] : codeEditors) {
-    conf["winCode"].push_back(assetUUID);
-  }
-  conf["winPrefabs"] = nlohmann::json::array();
-  for(const auto& [assetUUID, _] : prefabEditors) {
-    conf["winPrefabs"].push_back(assetUUID);
+  if (ctx.project) {
+    nlohmann::json conf{};
+    conf["winModels"] = nlohmann::json::array();
+    for (const auto& [assetUUID, _] : modelEditors) {
+      conf["winModels"].push_back(assetUUID);
+    }
+    conf["winImages"] = nlohmann::json::array();
+    for (const auto& [assetUUID, _] : imageEditors) {
+      conf["winImages"].push_back(assetUUID);
+    }
+    conf["winCode"] = nlohmann::json::array();
+    for (const auto& [assetUUID, _] : codeEditors) {
+      conf["winCode"].push_back(assetUUID);
+    }
+    conf["winPrefabs"] = nlohmann::json::array();
+    for (const auto& [assetUUID, _] : prefabEditors) {
+      conf["winPrefabs"].push_back(assetUUID);
+    }
+    conf["assetsBrowserThumbScale"] = assetsBrowser.getThumbScale();
+
+    auto path = Project::Cache::fileFor(*ctx.project, "editorState", "editorState.json");
+    if (!path.empty()) {
+      Utils::FS::saveTextFile(path, conf.dump(2));
+    }
   }
 
-  Utils::FS::saveTextFile(Utils::Proc::getAppDataPath() / "editorScene.json", conf.dump(2));
+  // Tear down editors that hold references to the project being closed. Same
+  // hazard as the per-frame defer-erase lists used during normal close: any
+  // editor with a GPU framebuffer is held one frame in its pendingErase
+  // bucket so ImGui's already-built draw list can finish referencing the
+  // texture. Models / prefabs / materials all use that pattern.
+  pendingRestoreModels.clear();
+  pendingRestoreImages.clear();
+  pendingRestoreCode.clear();
+  pendingRestorePrefabs.clear();
 
-  Editor::Actions::registerAction(Editor::Actions::Type::OPEN_NODE_GRAPH, nullptr);
+  for (auto &[uuid, editor] : modelEditors) pendingModelEditorErase.push_back(std::move(editor));
+  modelEditors.clear();
+  imageEditors.clear();
+  codeEditors.clear();
+  for (auto &[uuid, editor] : prefabEditors) pendingPrefabEditorErase.push_back(std::move(editor));
+  prefabEditors.clear();
+  prefabEventGraphEditors.clear();
+  prefabFunctionCodeEditors.clear();
+  for (auto &[uuid, editor] : materialEditors) pendingMaterialEditorErase.push_back(std::move(editor));
+  materialEditors.clear();
+  widgetEditors.clear();
+  fontEditors.clear();
+  audioEditors.clear();
+  resourceTypeEditors.clear();
+  resourceInstanceEditors.clear();
+  nodeEditors.clear();
+
+  matThumbnails.clear();
+  modelThumbnails.clear();
 }
 
 void Editor::Scene::openModelEditor(uint64_t assetUUID)
@@ -180,6 +251,46 @@ void Editor::Scene::openWidgetBlueprintEditor(uint64_t assetUUID, ImGuiID dockTa
   }
   (void)dockTarget; // dockTarget honored on first draw via defDockId arg
   widgetEditors[assetUUID] = std::make_shared<WidgetBlueprintEditor>(assetUUID);
+}
+
+void Editor::Scene::openFontEditor(uint64_t assetUUID)
+{
+  auto it = fontEditors.find(assetUUID);
+  if (it != fontEditors.end()) {
+    it->second->focus();
+  } else {
+    fontEditors[assetUUID] = std::make_shared<FontEditor>(assetUUID);
+  }
+}
+
+void Editor::Scene::openAudioEditor(uint64_t assetUUID)
+{
+  auto it = audioEditors.find(assetUUID);
+  if (it != audioEditors.end()) {
+    it->second->focus();
+  } else {
+    audioEditors[assetUUID] = std::make_shared<AudioEditor>(assetUUID);
+  }
+}
+
+void Editor::Scene::openResourceTypeEditor(uint64_t assetUUID)
+{
+  auto it = resourceTypeEditors.find(assetUUID);
+  if (it != resourceTypeEditors.end()) {
+    it->second->focus();
+  } else {
+    resourceTypeEditors[assetUUID] = std::make_shared<ResourceTypeEditorWindow>(assetUUID);
+  }
+}
+
+void Editor::Scene::openResourceInstanceEditor(uint64_t assetUUID)
+{
+  auto it = resourceInstanceEditors.find(assetUUID);
+  if (it != resourceInstanceEditors.end()) {
+    it->second->focus();
+  } else {
+    resourceInstanceEditors[assetUUID] = std::make_shared<ResourceInstanceEditor>(assetUUID);
+  }
 }
 
 void Editor::Scene::openPrefabEventGraphEditor(uint64_t prefabAssetUUID, ImGuiID dockTarget)
@@ -391,7 +502,6 @@ void Editor::Scene::draw()
       ImGui::DockBuilderDockWindow("Scene",       sceneDockLeftID);
       ImGui::DockBuilderDockWindow("Graph",       sceneDockLeftID);
       ImGui::DockBuilderDockWindow("Layers",      sceneDockLeftID);
-      ImGui::DockBuilderDockWindow("Asset",       sceneDockRightID);
       ImGui::DockBuilderDockWindow("Object",      sceneDockRightID);
       ImGui::DockBuilderDockWindow("Model",       sceneDockRightID);
       ImGui::DockBuilderFinish(sceneDockID);
@@ -665,6 +775,30 @@ void Editor::Scene::draw()
   }
   for(auto &uuid : delWidgetUUIDs) widgetEditors.erase(uuid);
 
+  std::vector<uint64_t> delFontUUIDs{};
+  for(auto &[uuid, editor] : fontEditors) {
+    if (!editor->draw(dockSpaceID)) delFontUUIDs.push_back(uuid);
+  }
+  for(auto &uuid : delFontUUIDs) fontEditors.erase(uuid);
+
+  std::vector<uint64_t> delAudioUUIDs{};
+  for(auto &[uuid, editor] : audioEditors) {
+    if (!editor->draw(dockSpaceID)) delAudioUUIDs.push_back(uuid);
+  }
+  for(auto &uuid : delAudioUUIDs) audioEditors.erase(uuid);
+
+  std::vector<uint64_t> delResTypeUUIDs{};
+  for(auto &[uuid, editor] : resourceTypeEditors) {
+    if (!editor->draw(dockSpaceID)) delResTypeUUIDs.push_back(uuid);
+  }
+  for(auto &uuid : delResTypeUUIDs) resourceTypeEditors.erase(uuid);
+
+  std::vector<uint64_t> delResInstUUIDs{};
+  for(auto &[uuid, editor] : resourceInstanceEditors) {
+    if (!editor->draw(dockSpaceID)) delResInstUUIDs.push_back(uuid);
+  }
+  for(auto &uuid : delResInstUUIDs) resourceInstanceEditors.erase(uuid);
+
   // SPBF64 fork: graph + inspector now take an explicit scene + selection.
   // Here we drive them with the project's active scene and the main selection.
   // PrefabEditor windows below set up their own EditScope and call these
@@ -674,10 +808,6 @@ void Editor::Scene::draw()
   ImGui::Begin("Object");
     if (mainScene) objectInspector.draw(*mainScene, ctx.mainSelection);
     else ImGui::Text("No Scene loaded");
-  ImGui::End();
-
-  ImGui::Begin("Asset");
-    assetInspector.draw();
   ImGui::End();
 
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2_px, 2_px));

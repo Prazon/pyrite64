@@ -6,6 +6,7 @@
 #include "imageEditor.h"
 
 #include "assetEditorDocking.h"
+#include "../assetInspector.h"
 #include "../../../../context.h"
 #include "../../../imgui/helper.h"
 #include "imgui_internal.h"
@@ -87,30 +88,70 @@ bool Editor::ImageEditor::draw(ImGuiID defDockId)
   bool isOpen = true;
   ImGui::Begin(winName.c_str(), &isOpen);
 
+  // Outer left/right split: image canvas + tools on the left, AssetInspector
+  // strip on the right (replaces the global "Asset" tab the scene editor
+  // used to host).
+  ImVec2 outerAvail = ImGui::GetContentRegionAvail();
+  float splitterW   = 6_px;
+  float minRightW   = 220_px;
+  float minLeftW    = 200_px;
+  float rightW      = std::clamp(outerAvail.x * assetSplitFrac, minRightW,
+                                 std::max(minRightW, outerAvail.x - minLeftW - splitterW));
+  float leftW       = std::max(minLeftW, outerAvail.x - splitterW - rightW);
+
+  ImGui::BeginChild("##imgLeft", ImVec2(leftW, 0), ImGuiChildFlags_None);
   if (!asset->texture) {
     ImGui::TextDisabled("Image is not loaded.");
-    ImGui::End();
-    return isOpen;
+  } else {
+    int imgW = asset->texture->getWidth();
+    int imgH = asset->texture->getHeight();
+
+    drawToolbar(imgW, imgH);
+    ImGui::Separator();
+
+    float slicePanelH = sliceShow ? 132_px : 28_px;
+    ImVec2 leftAvail = ImGui::GetContentRegionAvail();
+    float canvasH = std::max(64_px, leftAvail.y - slicePanelH - 4_px);
+
+    ImGui::BeginChild("##canvas", ImVec2(0, canvasH), ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    drawCanvas(ImTextureID(asset->texture->getGPUTex()), imgW, imgH);
+    ImGui::EndChild();
+
+    drawSlicePanel(imgW, imgH);
   }
-
-  int imgW = asset->texture->getWidth();
-  int imgH = asset->texture->getHeight();
-
-  drawToolbar(imgW, imgH);
-
-  ImGui::Separator();
-
-  // Reserve a vertical slice for the slicing panel below the canvas.
-  float slicePanelH = sliceShow ? 132_px : 28_px;
-  ImVec2 fullAvail = ImGui::GetContentRegionAvail();
-  float canvasH = std::max(64_px, fullAvail.y - slicePanelH - 4_px);
-
-  ImGui::BeginChild("##canvas", ImVec2(0, canvasH), ImGuiChildFlags_Borders,
-                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-  drawCanvas(ImTextureID(asset->texture->getGPUTex()), imgW, imgH);
   ImGui::EndChild();
 
-  drawSlicePanel(imgW, imgH);
+  ImGui::SameLine();
+  ImGui::InvisibleButton("##imgAssetSplit", ImVec2(splitterW, -1));
+  if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    assetSplitDragging = true;
+    float dx = ImGui::GetIO().MouseDelta.x;
+    if (outerAvail.x > splitterW * 2) {
+      assetSplitFrac -= dx / (outerAvail.x - splitterW);
+      assetSplitFrac = std::clamp(assetSplitFrac, 0.18f, 0.55f);
+    }
+  } else {
+    assetSplitDragging = false;
+  }
+  if (ImGui::IsItemHovered() || assetSplitDragging) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  }
+  {
+    ImVec2 a = ImGui::GetItemRectMin();
+    ImVec2 b = ImGui::GetItemRectMax();
+    ImU32 col = ImGui::GetColorU32(assetSplitDragging ? ImGuiCol_SeparatorActive : ImGuiCol_Separator);
+    ImGui::GetWindowDrawList()->AddRectFilled(
+      {(a.x + b.x) * 0.5f - 1.0f, a.y},
+      {(a.x + b.x) * 0.5f + 1.0f, b.y},
+      col
+    );
+  }
+
+  ImGui::SameLine();
+  ImGui::BeginChild("##imgInspector", ImVec2(0, 0), ImGuiChildFlags_Borders);
+  Editor::AssetInspector::draw(assetUUID);
+  ImGui::EndChild();
 
   ImGui::End();
   return isOpen;
