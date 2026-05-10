@@ -1433,12 +1433,108 @@ void Editor::AssetsBrowser::draw() {
     }
   }
 
-  // ── Render: scenes → folders → files ─────────────────────────────────
+  // ── Render: folders → scenes → files ─────────────────────────────────
+  // Folders go first, Unreal-style — gives navigation precedence over
+  // content so the user always sees structural items at the top of the
+  // grid before scrolling into individual assets.
   static int  ctxSceneId = -1;
   // Track whether we accepted a SCENE drag-drop this frame so we can apply
   // it after the loop without invalidating iteration.
   pendingSceneMoveId = 0;
   pendingSceneMoveTarget.clear();
+
+  // Folders. Unreal-style rule: hide folder cards whenever the user has
+  // narrowed the view (search box has text, or any chip is toggled off in
+  // unified mode). Folder navigation stays available via the left tree.
+  // This also dodges a font-atlas glitch where rapidly toggling chips
+  // would leave folder glyphs partially transparent for one frame.
+  bool everythingShown = searchFilter.empty();
+  if (everythingShown && !splitMode) {
+    for (int i = 0; i < ChipKind::CHIP_COUNT; ++i) {
+      if (!activeChips[i]) { everythingShown = false; break; }
+    }
+  }
+  for (const auto &folder : folders) {
+    if (!everythingShown) continue;
+    checkLineBreak();
+    std::string virtChild = joinDir(currentDir, folder);
+    std::string folderId  = "folder://" + virtChild;
+
+    bool filled = folderHasContent[folder];
+    bool isFolderSel = (selectedFolder == virtChild);
+
+    // Resolve abs path on the side that exists so it can double as the card
+    // id — letting renamePath (also an abs path) match this card and trigger
+    // the inline rename overlay below.
+    fs::path assetSidePre  = assetsRootAbs  / virtChild;
+    fs::path scriptSidePre = scriptsRootAbs / virtChild;
+    std::string folderAbsId = (fs::exists(assetSidePre) ? assetSidePre : scriptSidePre).string();
+
+    ImVec2 folderCardPos;
+    bool clicked = drawFolderCard(folderAbsId, folder, filled, isFolderSel, &folderCardPos);
+    bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
+
+    // Drag-drop target: a scene dropped here moves to this folder.
+    if (ImGui::BeginDragDropTarget()) {
+      if (const auto *payload = ImGui::AcceptDragDropPayload("SCENE")) {
+        int sid = *static_cast<const int*>(payload->Data);
+        pendingSceneMoveId = sid;
+        pendingSceneMoveTarget = virtChild;
+      }
+      ImGui::EndDragDropTarget();
+    }
+
+    if (ImGui::BeginPopupContextItem(folderId.c_str())) {
+      // Resolve which physical sides this virtual folder lives on.
+      fs::path assetSide  = assetsRootAbs  / virtChild;
+      fs::path scriptSide = scriptsRootAbs / virtChild;
+      bool hasAssetSide  = fs::exists(assetSide);
+      bool hasScriptSide = fs::exists(scriptSide);
+
+      if (!hasAssetSide) ImGui::BeginDisabled();
+      if (ImGui::MenuItem(ICON_MDI_FOLDER_OPEN " Show Assets folder")) {
+        Utils::Proc::openInFileBrowser(assetSide.string());
+      }
+      if (!hasAssetSide) ImGui::EndDisabled();
+
+      if (!hasScriptSide) ImGui::BeginDisabled();
+      if (ImGui::MenuItem(ICON_MDI_FOLDER_OPEN " Show Scripts folder")) {
+        Utils::Proc::openInFileBrowser(scriptSide.string());
+      }
+      if (!hasScriptSide) ImGui::EndDisabled();
+
+      ImGui::Separator();
+      if (ImGui::MenuItem(ICON_MDI_RENAME " Rename")) {
+        // Pick whichever side actually exists as the rename anchor; the
+        // mirror is renamed in lockstep inside drawRename().
+        renamePath = (hasAssetSide ? assetSide : scriptSide).string();
+        std::string stem = folder;
+        strncpy(renameBuffer, stem.c_str(), sizeof(renameBuffer) - 1);
+        renameBuffer[sizeof(renameBuffer) - 1] = '\0';
+      }
+      if (ImGui::MenuItem(ICON_MDI_DELETE " Delete")) {
+        deleteFolderPath = virtChild;
+      }
+      ImGui::EndPopup();
+    }
+
+    if (clicked) {
+      // Single-click: highlight only. Double-click navigates in.
+      selectedFolder = virtChild;
+      selectedSceneId = 0;
+      ctx.selAssetUUID = 0;
+    }
+    if (isDblClick) {
+      navigateTo(virtChild);
+      selectedFolder.clear();
+    }
+
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Folder: %s\n(double-click to open)", virtChild.c_str());
+    }
+
+    if (folderAbsId == renamePath) drawCardRename(folderCardPos);
+  }
 
   if (activeChips[ChipKind::CHIP_SCENES])
   {
@@ -1548,99 +1644,6 @@ void Editor::AssetsBrowser::draw() {
       }
       ImGui::EndPopup();
     }
-  }
-
-  // Folders. Unreal-style rule: hide folder cards whenever the user has
-  // narrowed the view (search box has text, or any chip is toggled off in
-  // unified mode). Folder navigation stays available via the left tree.
-  // This also dodges a font-atlas glitch where rapidly toggling chips
-  // would leave folder glyphs partially transparent for one frame.
-  bool everythingShown = searchFilter.empty();
-  if (everythingShown && !splitMode) {
-    for (int i = 0; i < ChipKind::CHIP_COUNT; ++i) {
-      if (!activeChips[i]) { everythingShown = false; break; }
-    }
-  }
-  for (const auto &folder : folders) {
-    if (!everythingShown) continue;
-    checkLineBreak();
-    std::string virtChild = joinDir(currentDir, folder);
-    std::string folderId  = "folder://" + virtChild;
-
-    bool filled = folderHasContent[folder];
-    bool isFolderSel = (selectedFolder == virtChild);
-
-    // Resolve abs path on the side that exists so it can double as the card
-    // id — letting renamePath (also an abs path) match this card and trigger
-    // the inline rename overlay below.
-    fs::path assetSidePre  = assetsRootAbs  / virtChild;
-    fs::path scriptSidePre = scriptsRootAbs / virtChild;
-    std::string folderAbsId = (fs::exists(assetSidePre) ? assetSidePre : scriptSidePre).string();
-
-    ImVec2 folderCardPos;
-    bool clicked = drawFolderCard(folderAbsId, folder, filled, isFolderSel, &folderCardPos);
-    bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
-
-    // Drag-drop target: a scene dropped here moves to this folder.
-    if (ImGui::BeginDragDropTarget()) {
-      if (const auto *payload = ImGui::AcceptDragDropPayload("SCENE")) {
-        int sid = *static_cast<const int*>(payload->Data);
-        pendingSceneMoveId = sid;
-        pendingSceneMoveTarget = virtChild;
-      }
-      ImGui::EndDragDropTarget();
-    }
-
-    if (ImGui::BeginPopupContextItem(folderId.c_str())) {
-      // Resolve which physical sides this virtual folder lives on.
-      fs::path assetSide  = assetsRootAbs  / virtChild;
-      fs::path scriptSide = scriptsRootAbs / virtChild;
-      bool hasAssetSide  = fs::exists(assetSide);
-      bool hasScriptSide = fs::exists(scriptSide);
-
-      if (!hasAssetSide) ImGui::BeginDisabled();
-      if (ImGui::MenuItem(ICON_MDI_FOLDER_OPEN " Show Assets folder")) {
-        Utils::Proc::openInFileBrowser(assetSide.string());
-      }
-      if (!hasAssetSide) ImGui::EndDisabled();
-
-      if (!hasScriptSide) ImGui::BeginDisabled();
-      if (ImGui::MenuItem(ICON_MDI_FOLDER_OPEN " Show Scripts folder")) {
-        Utils::Proc::openInFileBrowser(scriptSide.string());
-      }
-      if (!hasScriptSide) ImGui::EndDisabled();
-
-      ImGui::Separator();
-      if (ImGui::MenuItem(ICON_MDI_RENAME " Rename")) {
-        // Pick whichever side actually exists as the rename anchor; the
-        // mirror is renamed in lockstep inside drawRename().
-        renamePath = (hasAssetSide ? assetSide : scriptSide).string();
-        std::string stem = folder;
-        strncpy(renameBuffer, stem.c_str(), sizeof(renameBuffer) - 1);
-        renameBuffer[sizeof(renameBuffer) - 1] = '\0';
-      }
-      if (ImGui::MenuItem(ICON_MDI_DELETE " Delete")) {
-        deleteFolderPath = virtChild;
-      }
-      ImGui::EndPopup();
-    }
-
-    if (clicked) {
-      // Single-click: highlight only. Double-click navigates in.
-      selectedFolder = virtChild;
-      selectedSceneId = 0;
-      ctx.selAssetUUID = 0;
-    }
-    if (isDblClick) {
-      navigateTo(virtChild);
-      selectedFolder.clear();
-    }
-
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("Folder: %s\n(double-click to open)", virtChild.c_str());
-    }
-
-    if (folderAbsId == renamePath) drawCardRename(folderCardPos);
   }
 
   // Files
