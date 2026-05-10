@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -158,11 +159,73 @@ namespace
     return -1;
   }
 
+  // Recursive uuid lookup. Object uuids are uint32_t but we accept the full
+  // uint64_t range so callers can pass a uuid that came back from a JSON
+  // describe response without having to truncate it.
+  Project::Object *findObjectByUUIDRecursive(Project::Object *node, uint64_t uuid)
+  {
+    if (!node) return nullptr;
+    if ((uint64_t)node->uuid == uuid) return node;
+    for (auto &c : node->children) {
+      if (auto *hit = findObjectByUUIDRecursive(c.get(), uuid)) return hit;
+    }
+    return nullptr;
+  }
+
+  Project::Object *findObjectByUUIDRecursiveWithParent(
+    Project::Object *node, uint64_t uuid,
+    Project::Object **outParent, size_t *outIdx)
+  {
+    if (!node) return nullptr;
+    if ((uint64_t)node->uuid == uuid) {
+      *outParent = nullptr; *outIdx = 0; return node;
+    }
+    for (size_t i = 0; i < node->children.size(); ++i) {
+      auto *child = node->children[i].get();
+      if ((uint64_t)child->uuid == uuid) {
+        *outParent = node; *outIdx = i; return child;
+      }
+      Project::Object *grandParent = nullptr; size_t grandIdx = 0;
+      auto *hit = findObjectByUUIDRecursiveWithParent(child, uuid, &grandParent, &grandIdx);
+      if (hit) {
+        *outParent = grandParent ? grandParent : child;
+        if (!grandParent) {
+          // Direct child of `child` was the hit; restate parent/idx.
+          *outParent = child; *outIdx = grandIdx;
+        } else {
+          *outParent = grandParent; *outIdx = grandIdx;
+        }
+        return hit;
+      }
+    }
+    return nullptr;
+  }
+
+  // Detect the obj://<uuid> addressing form. Hex or decimal accepted; the
+  // hash form lets headless callers stash the uuid that came back from a
+  // describe call and reuse it across rename/move operations without the
+  // path-string fragility.
+  bool tryParseObjUUID(const std::string &path, uint64_t &out)
+  {
+    static const std::string kPrefix = "obj://";
+    if (path.size() <= kPrefix.size()) return false;
+    if (path.compare(0, kPrefix.size(), kPrefix) != 0) return false;
+    auto u = tryParseUUID(path.substr(kPrefix.size()));
+    if (!u) return false;
+    out = *u;
+    return true;
+  }
+
   // Slash-separated name path. Empty / "/" / the root's own name resolves to
-  // the root. Returns the root itself if not found via a deeper match.
+  // the root. Returns the root itself if not found via a deeper match. Also
+  // accepts `obj://<uuid>` for stable addressing across renames.
   Project::Object *findObjectByPath(Project::Object *root, const std::string &path)
   {
     if (!root) return nullptr;
+    uint64_t uuid = 0;
+    if (tryParseObjUUID(path, uuid)) {
+      return findObjectByUUIDRecursive(root, uuid);
+    }
     std::string p = path;
     while (!p.empty() && p.front() == '/') p.erase(p.begin());
     while (!p.empty() && p.back()  == '/') p.pop_back();
@@ -199,6 +262,10 @@ namespace
     *outParent = nullptr;
     *outIndex = 0;
     if (!root) return nullptr;
+    uint64_t uuid = 0;
+    if (tryParseObjUUID(path, uuid)) {
+      return findObjectByUUIDRecursiveWithParent(root, uuid, outParent, outIndex);
+    }
     std::string p = path;
     while (!p.empty() && p.front() == '/') p.erase(p.begin());
     while (!p.empty() && p.back()  == '/') p.pop_back();
@@ -1902,6 +1969,832 @@ namespace
     emitJSON(out);
     return 0;
   }
+
+  // ── Prefab class variables ─────────────────────────────────────────
+
+  // Set GenericValue contents from a JSON value, given the variable kind.
+  // Returns false on type mismatch so callers can emit a helpful error.
+  bool genericValueFromJSON(GenericValue &out, Project::VarKind kind, const nlohmann::json &v)
+  {
+    switch (kind) {
+      case Project::VarKind::INT:
+        if (!v.is_number_integer()) return false;
+        out.set<int32_t>(v.get<int32_t>()); return true;
+      case Project::VarKind::FLOAT:
+        if (!v.is_number()) return false;
+        out.set<float>(v.get<float>()); return true;
+      case Project::VarKind::BOOL:
+        if (!v.is_boolean()) return false;
+        out.set<bool>(v.get<bool>()); return true;
+      case Project::VarKind::VEC3:
+        if (!v.is_array() || v.size() != 3) return false;
+        out.set<glm::vec3>({v[0].get<float>(), v[1].get<float>(), v[2].get<float>()});
+        return true;
+      case Project::VarKind::QUAT:
+        if (!v.is_array() || v.size() != 4) return false;
+        out.set<glm::quat>({v[3].get<float>(), v[0].get<float>(), v[1].get<float>(), v[2].get<float>()});
+        return true;
+      case Project::VarKind::OBJECT_REF:
+      case Project::VarKind::PREFAB_REF:
+      case Project::VarKind::ASSET_REF:
+        if (!v.is_number_unsigned()) return false;
+        out.set<uint64_t>(v.get<uint64_t>()); return true;
+    }
+    return false;
+  }
+
+  int cmdPrefabAddVariable(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty() || a.type.empty()) {
+      emitErr("--asset, --name, --type (int|float|bool|vec3|quat|object_ref|prefab_ref|asset_ref) are required");
+      return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::VarKind kind{};
+    if (!parseVarKind(a.type, kind)) { emitErr("unknown type: " + a.type); return 1; }
+    for (const auto &v : e->prefab->variables) {
+      if (v.name == a.name) { emitErr("variable already exists: " + a.name); return 1; }
+    }
+    Project::PrefabVarDef v{};
+    v.uuid = Utils::Hash::randomU64();
+    v.name = a.name;
+    v.kind = kind;
+    if (!a.value.empty()) {
+      auto parsed = parseValueJSON(a.value);
+      if ((kind == Project::VarKind::PREFAB_REF || kind == Project::VarKind::ASSET_REF)
+          && parsed.is_number_unsigned()) {
+        v.typeArg = parsed.get<uint64_t>();
+      } else if (!genericValueFromJSON(v.defaultValue, kind, parsed)) {
+        emitErr("--value type does not match var kind"); return 1;
+      }
+    }
+    e->prefab->variables.push_back(v);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["added"] = a.name;
+    out["uuid"] = v.uuid;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabRemoveVariable(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty()) {
+      emitErr("--asset and --name are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    auto before = e->prefab->variables.size();
+    std::erase_if(e->prefab->variables,
+      [&](const Project::PrefabVarDef &v){ return v.name == a.name; });
+    if (e->prefab->variables.size() == before) {
+      emitErr("variable not found: " + a.name); return 1;
+    }
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["removed"] = a.name;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabRenameVariable(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from, --to are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    bool renamed = false;
+    for (auto &v : e->prefab->variables) {
+      if (v.name == a.from) { v.name = a.to; renamed = true; break; }
+    }
+    if (!renamed) { emitErr("variable not found: " + a.from); return 1; }
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["renamed"] = {{"from", a.from}, {"to", a.to}};
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabSetVariableDefault(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty() || a.value.empty()) {
+      emitErr("--asset, --name, --value are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::PrefabVarDef *target = nullptr;
+    for (auto &v : e->prefab->variables) {
+      if (v.name == a.name) { target = &v; break; }
+    }
+    if (!target) { emitErr("variable not found: " + a.name); return 1; }
+    auto parsed = parseValueJSON(a.value);
+    if (!genericValueFromJSON(target->defaultValue, target->kind, parsed)) {
+      emitErr("--value type does not match var kind"); return 1;
+    }
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["updated"] = a.name;
+    emitJSON(out);
+    return 0;
+  }
+
+  // Per-instance variable override on a scene Object that points at a prefab.
+  // Mirrors the editor's "Override" toggle on the prefab variable inspector.
+  int cmdSceneSetVarOverride(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty() || a.value.empty()) {
+      emitErr("--asset, --name (var name), --value are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    if (target->uuidPrefab.value == 0) {
+      emitErr("object is not a prefab instance"); return 1;
+    }
+    auto *prefabEntry = project.getAssets().getEntryByUUID(target->uuidPrefab.value);
+    if (!prefabEntry || !prefabEntry->prefab) {
+      emitErr("backing prefab not found"); return 1;
+    }
+    const Project::PrefabVarDef *varDef = nullptr;
+    for (const auto &v : prefabEntry->prefab->variables) {
+      if (v.name == a.name) { varDef = &v; break; }
+    }
+    if (!varDef) { emitErr("prefab has no variable: " + a.name); return 1; }
+    GenericValue gv{};
+    if (!genericValueFromJSON(gv, varDef->kind, parseValueJSON(a.value))) {
+      emitErr("--value type does not match var kind"); return 1;
+    }
+    target->varOverrides[varDef->uuid] = gv;
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["overridden"] = a.name;
+    out["objUUID"] = target->uuid;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneClearVarOverride(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty()) {
+      emitErr("--asset, --name (var name) are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    if (target->uuidPrefab.value == 0) {
+      emitErr("object is not a prefab instance"); return 1;
+    }
+    auto *prefabEntry = project.getAssets().getEntryByUUID(target->uuidPrefab.value);
+    if (!prefabEntry || !prefabEntry->prefab) {
+      emitErr("backing prefab not found"); return 1;
+    }
+    uint64_t varUUID = 0;
+    for (const auto &v : prefabEntry->prefab->variables) {
+      if (v.name == a.name) { varUUID = v.uuid; break; }
+    }
+    if (varUUID == 0) { emitErr("prefab has no variable: " + a.name); return 1; }
+    if (!target->varOverrides.erase(varUUID)) {
+      emitErr("no override set for: " + a.name); return 1;
+    }
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["cleared"] = a.name;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Scene render layers ────────────────────────────────────────────
+
+  // Validate the layer-bucket name (3D, ptx, 2D) and return a JSON pointer
+  // path so set-conf-style mutation can locate the array.
+  bool resolveLayerBucket(const std::string &type, std::string &outKey)
+  {
+    if (type == "3d" || type == "3D" || type == "layers3D") { outKey = "layers3D"; return true; }
+    if (type == "2d" || type == "2D" || type == "layers2D") { outKey = "layers2D"; return true; }
+    if (type == "ptx" || type == "particles" || type == "layersPtx") { outKey = "layersPtx"; return true; }
+    return false;
+  }
+
+  // Build a fresh LayerConf as JSON with sensible defaults for the 3D bucket.
+  nlohmann::json defaultLayerJSON(const std::string &name)
+  {
+    return {
+      {"name", name},
+      {"depthCompare", true},
+      {"depthWrite", true},
+      {"blender", 0},
+      {"fog", false},
+      {"fogColorMode", 0},
+      {"fogColor", {0, 0, 0, 1}},
+      {"fogMin", 0.0},
+      {"fogMax", 0.0},
+      {"lightMode", 0},
+    };
+  }
+
+  int cmdSceneAddLayer(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.type.empty() || a.name.empty()) {
+      emitErr("--asset (scene), --type (3d|2d|ptx), --name are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    std::string bucket;
+    if (!resolveLayerBucket(a.type, bucket)) {
+      emitErr("--type must be 3d|2d|ptx"); return 1;
+    }
+    auto scene = openScene(project, id);
+    auto sceneJson = nlohmann::json::parse(scene->serialize(), nullptr, false);
+    if (!sceneJson["conf"][bucket].is_array()) {
+      sceneJson["conf"][bucket] = nlohmann::json::array();
+    }
+    sceneJson["conf"][bucket].push_back(defaultLayerJSON(a.name));
+    scene->deserialize(sceneJson.dump());
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["addedIndex"] = (int)sceneJson["conf"][bucket].size() - 1;
+    out["bucket"] = bucket;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneSetLayer(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.type.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --type (bucket), --field (index), --value (partial layer object) are required");
+      return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    std::string bucket;
+    if (!resolveLayerBucket(a.type, bucket)) {
+      emitErr("--type must be 3d|2d|ptx"); return 1;
+    }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    auto scene = openScene(project, id);
+    auto sceneJson = nlohmann::json::parse(scene->serialize(), nullptr, false);
+    auto &arr = sceneJson["conf"][bucket];
+    if (!arr.is_array() || idx < 0 || idx >= (int)arr.size()) {
+      emitErr("layer index out of range"); return 1;
+    }
+    auto v = parseValueJSON(a.value);
+    if (!v.is_object()) { emitErr("--value must be a partial layer object"); return 1; }
+    for (auto it = v.begin(); it != v.end(); ++it) {
+      arr[idx][it.key()] = it.value();
+    }
+    scene->deserialize(sceneJson.dump());
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["updated"] = idx;
+    out["layer"] = arr[idx];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneRemoveLayer(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.type.empty() || a.field.empty()) {
+      emitErr("--asset, --type, --field (index) are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    std::string bucket;
+    if (!resolveLayerBucket(a.type, bucket)) {
+      emitErr("--type must be 3d|2d|ptx"); return 1;
+    }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    auto scene = openScene(project, id);
+    auto sceneJson = nlohmann::json::parse(scene->serialize(), nullptr, false);
+    auto &arr = sceneJson["conf"][bucket];
+    if (!arr.is_array() || idx < 0 || idx >= (int)arr.size()) {
+      emitErr("layer index out of range"); return 1;
+    }
+    arr.erase(arr.begin() + idx);
+    scene->deserialize(sceneJson.dump());
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["removed"] = idx;
+    out["bucket"] = bucket;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Project conf ───────────────────────────────────────────────────
+
+  int cmdProjectDescribe(const CLI::Commands::Args &/*a*/, Project::Project &project)
+  {
+    nlohmann::json out;
+    out["path"] = project.getPath();
+    out["conf"] = nlohmann::json::parse(project.conf.serialize(), nullptr, false);
+    out["sceneCount"] = (int)project.getScenes().getEntries().size();
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdProjectSetConf(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.field.empty() || a.value.empty()) {
+      emitErr("--field, --value are required"); return 1;
+    }
+    // Patch project.p64proj directly: the in-memory Project::deserialize is
+    // private, so we round-trip through the on-disk JSON. The next CLI
+    // invocation will pick up the change naturally; for the response we echo
+    // the patched JSON so the caller can verify.
+    auto cfgPath = fs::path(project.getPath()) / "project.p64proj";
+    auto j = Utils::JSON::loadFile(cfgPath);
+    if (!j.is_object()) { emitErr("project conf is not an object"); return 1; }
+    j[a.field] = parseValueJSON(a.value);
+    Utils::FS::saveTextFile(cfgPath.string(), j.dump(2));
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["conf"] = j;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Folders ────────────────────────────────────────────────────────
+
+  // Resolve the on-disk folder pair (assets/<rel>, src/user/<rel>) for a
+  // virtual folder path. The CLI presents one logical path; under the hood
+  // we mirror across both physical roots so the editor's content browser
+  // sees a consistent tree.
+  std::pair<fs::path, fs::path> folderPaths(Project::Project &project, const std::string &rel)
+  {
+    fs::path projRoot{project.getPath()};
+    return { projRoot / "assets" / rel, projRoot / "src" / "user" / rel };
+  }
+
+  int cmdFolderCreate(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.path.empty()) { emitErr("--path is required"); return 1; }
+    auto [aDir, sDir] = folderPaths(project, a.path);
+    std::error_code ec;
+    fs::create_directories(aDir, ec);
+    fs::create_directories(sDir, ec);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["created"] = a.path;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdFolderRename(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.path.empty() || a.to.empty()) {
+      emitErr("--path (existing folder) and --to (new last segment) are required"); return 1;
+    }
+    fs::path rel{a.path};
+    fs::path newRel = rel.parent_path() / a.to;
+    auto [aOld, sOld] = folderPaths(project, rel.string());
+    auto [aNew, sNew] = folderPaths(project, newRel.string());
+    if (!fs::exists(aOld) && !fs::exists(sOld)) {
+      emitErr("folder not found: " + a.path); return 1;
+    }
+    if (fs::exists(aNew) || fs::exists(sNew)) {
+      emitErr("destination exists"); return 1;
+    }
+    std::error_code ec;
+    if (fs::exists(aOld)) fs::rename(aOld, aNew, ec);
+    if (fs::exists(sOld)) fs::rename(sOld, sNew, ec);
+    project.getScenes().renameSceneFolder(rel.string(), newRel.string());
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["renamed"] = {{"from", rel.string()}, {"to", newRel.string()}};
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdFolderMove(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.path.empty() || a.dest.empty()) {
+      emitErr("--path (folder) and --dest (new parent folder) are required"); return 1;
+    }
+    fs::path rel{a.path};
+    std::string folderName = rel.filename().string();
+    fs::path newRel = fs::path(a.dest) / folderName;
+    auto [aOld, sOld] = folderPaths(project, rel.string());
+    auto [aNew, sNew] = folderPaths(project, newRel.string());
+    if (!fs::exists(aOld) && !fs::exists(sOld)) {
+      emitErr("folder not found: " + a.path); return 1;
+    }
+    if (fs::exists(aNew) || fs::exists(sNew)) {
+      emitErr("destination exists"); return 1;
+    }
+    std::error_code ec;
+    fs::create_directories(aNew.parent_path(), ec);
+    fs::create_directories(sNew.parent_path(), ec);
+    if (fs::exists(aOld)) fs::rename(aOld, aNew, ec);
+    if (fs::exists(sOld)) fs::rename(sOld, sNew, ec);
+    project.getScenes().renameSceneFolder(rel.string(), newRel.string());
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["moved"] = {{"from", rel.string()}, {"to", newRel.string()}};
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdFolderDelete(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.path.empty()) { emitErr("--path is required"); return 1; }
+    auto [aDir, sDir] = folderPaths(project, a.path);
+    if (!fs::exists(aDir) && !fs::exists(sDir)) {
+      emitErr("folder not found: " + a.path); return 1;
+    }
+    std::error_code ec;
+    uintmax_t removed = 0;
+    if (fs::exists(aDir)) removed += fs::remove_all(aDir, ec);
+    if (fs::exists(sDir)) removed += fs::remove_all(sDir, ec);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["deleted"] = a.path;
+    out["removedCount"] = removed;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Asset move ─────────────────────────────────────────────────────
+
+  // Relocate an asset to a different folder under <project>/assets while
+  // preserving its filename and side-car .conf. Companion files outside
+  // <project>/assets (e.g. src/user/.cpp pairs for prefabs) are left alone
+  // because asset folders and source folders are tracked independently.
+  int cmdAssetMove(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.dest.empty()) {
+      emitErr("--asset and --dest are required"); return 1;
+    }
+    auto *e = resolveAsset(project, a.asset);
+    if (!e) { emitErr("asset not found: " + a.asset); return 1; }
+    fs::path src{e->path};
+    fs::path destDir{a.dest};
+    if (!destDir.is_absolute()) destDir = fs::path(project.getPath()) / destDir;
+    std::error_code ec;
+    fs::create_directories(destDir, ec);
+    fs::path dest = destDir / src.filename();
+    if (fs::exists(dest)) { emitErr("destination exists: " + dest.string()); return 1; }
+    fs::rename(src, dest, ec);
+    if (ec) { emitErr("move failed: " + ec.message()); return 1; }
+    fs::path srcConf = src.string() + ".conf";
+    if (fs::exists(srcConf)) {
+      fs::rename(srcConf, dest.string() + ".conf", ec);
+    }
+    project.getAssets().reload();
+    auto *fresh = project.getAssets().getByPath(dest.string());
+    nlohmann::json out;
+    out["moved"] = {{"from", src.string()}, {"to", dest.string()}};
+    if (fresh) out["asset"] = serializeAssetEntry(*fresh, false);
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Material editing ───────────────────────────────────────────────
+
+  int cmdMaterialSetProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --field, --value are required"); return 1;
+    }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::MATERIAL);
+    if (!e || !e->materialAsset) {
+      emitErr("material not found: " + a.asset); return 1;
+    }
+    auto compiled = e->materialAsset->compiled.serialize();
+    if (!compiled.contains(a.field)) {
+      emitErr("material has no field '" + a.field + "'"); return 1;
+    }
+    compiled[a.field] = parseValueJSON(a.value);
+    e->materialAsset->compiled.deserialize(compiled);
+    Utils::FS::saveTextFile(e->path, e->materialAsset->serialize());
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["material"] = compiled;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Conf schema introspection ──────────────────────────────────────
+
+  // Return the keys (and current types) of an asset's .conf. Lets headless
+  // callers discover what `asset-set-conf --field X` will accept without
+  // having to rummage through the .conf file by hand.
+  int cmdAssetDescribeConf(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolveAsset(project, a.asset);
+    if (!e) { emitErr("asset not found: " + a.asset); return 1; }
+    auto j = nlohmann::json::parse(e->conf.serialize(), nullptr, false);
+    nlohmann::json out;
+    out["uuid"] = e->conf.uuid;
+    out["name"] = e->name;
+    out["type"] = fileTypeName(e->type);
+    nlohmann::json fields = nlohmann::json::array();
+    if (j.is_object()) {
+      for (auto it = j.begin(); it != j.end(); ++it) {
+        nlohmann::json f;
+        f["name"] = it.key();
+        f["jsonType"] = it.value().type_name();
+        f["current"] = it.value();
+        fields.push_back(f);
+      }
+    }
+    out["fields"] = fields;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Queries ────────────────────────────────────────────────────────
+
+  // Walk every Object in a tree, calling `visit(obj, parentPathSlashed)`.
+  void walkTree(Project::Object &obj, const std::string &parentPath,
+                const std::function<void(Project::Object&, const std::string&)> &visit)
+  {
+    std::string here = parentPath.empty() ? obj.name : (parentPath + "/" + obj.name);
+    visit(obj, here);
+    for (auto &c : obj.children) {
+      walkTree(*c, here, visit);
+    }
+  }
+
+  int cmdSceneFind(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.comp.empty()) {
+      emitErr("--asset (scene), --comp are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    int compId = findCompId(a.comp);
+    if (compId < 0) { emitErr("unknown component: " + a.comp); return 1; }
+    auto scene = openScene(project, id);
+    nlohmann::json hits = nlohmann::json::array();
+    walkTree(scene->getRootObject(), "",
+      [&](Project::Object &o, const std::string &path) {
+        for (const auto &c : o.components) {
+          if (c.id == compId) {
+            nlohmann::json hit;
+            hit["path"] = path;
+            hit["uuid"] = o.uuid;
+            hits.push_back(hit);
+            break;
+          }
+        }
+      });
+    nlohmann::json out;
+    out["matches"] = hits;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabFind(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.comp.empty()) {
+      emitErr("--asset (prefab/widget), --comp are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    int compId = findCompId(a.comp);
+    if (compId < 0) { emitErr("unknown component: " + a.comp); return 1; }
+    nlohmann::json hits = nlohmann::json::array();
+    walkTree(e->prefab->obj, "",
+      [&](Project::Object &o, const std::string &path) {
+        for (const auto &c : o.components) {
+          if (c.id == compId) {
+            nlohmann::json hit;
+            hit["path"] = path;
+            hit["uuid"] = o.uuid;
+            hits.push_back(hit);
+            break;
+          }
+        }
+      });
+    nlohmann::json out;
+    out["matches"] = hits;
+    emitJSON(out);
+    return 0;
+  }
+
+  // List every scene+object that instantiates the named prefab. Useful for
+  // safe-rename / safe-delete workflows where the caller wants to know
+  // what will break before committing.
+  int cmdPrefabFindReferences(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    uint64_t targetUUID = e->prefab->uuid.value;
+    nlohmann::json refs = nlohmann::json::array();
+    for (const auto &sceneEntry : project.getScenes().getEntries()) {
+      auto scene = openScene(project, sceneEntry.id);
+      walkTree(scene->getRootObject(), "",
+        [&](Project::Object &o, const std::string &path) {
+          if (o.uuidPrefab.value == targetUUID) {
+            nlohmann::json hit;
+            hit["sceneId"]   = sceneEntry.id;
+            hit["sceneName"] = sceneEntry.name;
+            hit["path"]      = path;
+            hit["uuid"]      = o.uuid;
+            refs.push_back(hit);
+          }
+        });
+    }
+    // Also scan other prefabs for variant inheritance and embedded instances.
+    for (const auto &pe : project.getAssets().getTypeEntries(Project::FileType::PREFAB)) {
+      if (!pe.prefab) continue;
+      if (pe.conf.uuid == e->conf.uuid) continue;
+      if (pe.prefab->uuidParentPrefab.value == targetUUID) {
+        nlohmann::json hit;
+        hit["variantOf"] = e->name;
+        hit["prefab"]    = pe.name;
+        hit["uuid"]      = pe.conf.uuid;
+        refs.push_back(hit);
+      }
+    }
+    nlohmann::json out;
+    out["target"] = e->name;
+    out["targetUUID"] = targetUUID;
+    out["references"] = refs;
+    emitJSON(out);
+    return 0;
+  }
+
+  // List assets that no other asset/scene references. Conservative: only
+  // checks for prefab uuid and component data uuid mentions. Caller treats
+  // the result as a candidate list, not a hard "safe to delete" verdict.
+  int cmdAssetFindUnused(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    Project::FileType filter = Project::FileType::UNKNOWN;
+    if (!a.type.empty()) {
+      filter = parseFileTypeName(a.type);
+      if (filter == Project::FileType::UNKNOWN && a.type != "unknown") {
+        emitErr("unknown asset type '" + a.type + "'"); return 1;
+      }
+    }
+
+    // Build a corpus of every JSON document we'd want to grep.
+    std::string corpus;
+    auto append = [&](const std::string &s){ corpus += s; corpus += '\n'; };
+    for (const auto &sceneEntry : project.getScenes().getEntries()) {
+      auto scene = openScene(project, sceneEntry.id);
+      append(scene->serialize());
+    }
+    auto &am = project.getAssets();
+    for (int i = 0; i < (int)Project::FileType::_SIZE; ++i) {
+      for (const auto &pe : am.getTypeEntries((Project::FileType)i)) {
+        if (pe.prefab) append(pe.prefab->serialize());
+        if (pe.materialAsset) append(pe.materialAsset->serialize());
+        if (pe.resource) append(pe.resource->serialize());
+      }
+    }
+
+    nlohmann::json out = nlohmann::json::array();
+    for (int i = 0; i < (int)Project::FileType::_SIZE; ++i) {
+      auto t = (Project::FileType)i;
+      if (filter != Project::FileType::UNKNOWN && t != filter) continue;
+      for (const auto &pe : am.getTypeEntries(t)) {
+        std::string needle = std::to_string(pe.conf.uuid);
+        if (corpus.find(needle) == std::string::npos) {
+          nlohmann::json j;
+          j["uuid"] = pe.conf.uuid;
+          j["name"] = pe.name;
+          j["type"] = fileTypeName(pe.type);
+          j["path"] = pe.path;
+          out.push_back(j);
+        }
+      }
+    }
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Project bootstrap ──────────────────────────────────────────────
+
+  // Mirrors PROJECT_CREATE in editor/globalActions.cpp, but standalone so
+  // it does not require ctx.project state. Resolves the empty-template path
+  // relative to the editor binary's working directory.
+  int cmdProjectCreate(const CLI::Commands::Args &a, Project::Project &/*project*/)
+  {
+    if (a.path.empty() || a.name.empty()) {
+      emitErr("--path (target dir) and --name are required"); return 1;
+    }
+    fs::path target{a.path};
+    std::error_code ec;
+    fs::create_directories(target, ec);
+    if (ec) { emitErr("failed to create dir: " + ec.message()); return 1; }
+    if (!fs::is_empty(target, ec)) {
+      emitErr("target directory is not empty"); return 1;
+    }
+    fs::path templ = fs::path("n64") / "examples" / "empty";
+    if (!fs::exists(templ)) {
+      emitErr("template missing: " + templ.string() + " (run from repo root)");
+      return 1;
+    }
+    fs::copy(templ, target,
+      fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    if (ec) { emitErr("template copy failed: " + ec.message()); return 1; }
+    fs::remove(target / "p64_project.z64", ec);
+    fs::remove(target / "Makefile", ec);
+    fs::remove_all(target / "build", ec);
+    fs::remove_all(target / "filesystem", ec);
+
+    auto cfgPath = target / "project.p64proj";
+    auto cfg = Utils::JSON::loadFile(cfgPath);
+    if (!cfg.is_object()) cfg = nlohmann::json::object();
+    cfg["name"] = a.name;
+    if (!a.value.empty()) cfg["romName"] = a.value;
+    Utils::FS::saveTextFile(cfgPath.string(), cfg.dump(2));
+
+    nlohmann::json out;
+    out["created"] = cfgPath.string();
+    out["name"] = a.name;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Variant patch ops ──────────────────────────────────────────────
+
+  int cmdPrefabListPatches(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant()) {
+      emitErr("not a variant prefab"); return 1;
+    }
+    nlohmann::json out;
+    out["variantOf"] = e->prefab->uuidParentPrefab.value;
+    out["patch"] = e->prefab->patchOps;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabAddPatch(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.value.empty()) {
+      emitErr("--asset and --value (RFC-6902 patch op) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant()) {
+      emitErr("not a variant prefab"); return 1;
+    }
+    auto v = parseValueJSON(a.value);
+    if (!v.is_object() || !v.contains("op") || !v.contains("path")) {
+      emitErr("--value must be an RFC-6902 op object: {op, path, [value]}");
+      return 1;
+    }
+    if (!e->prefab->patchOps.is_array()) e->prefab->patchOps = nlohmann::json::array();
+    e->prefab->patchOps.push_back(v);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["addedIndex"] = (int)e->prefab->patchOps.size() - 1;
+    out["patch"] = e->prefab->patchOps;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabRemovePatch(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty()) {
+      emitErr("--asset and --field (index) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant() || !e->prefab->patchOps.is_array()) {
+      emitErr("no patch ops"); return 1;
+    }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)e->prefab->patchOps.size()) {
+      emitErr("index out of range"); return 1;
+    }
+    e->prefab->patchOps.erase(e->prefab->patchOps.begin() + idx);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["removed"] = idx;
+    out["patch"] = e->prefab->patchOps;
+    emitJSON(out);
+    return 0;
+  }
 }
 
 namespace CLI::Commands
@@ -1984,6 +2877,47 @@ namespace CLI::Commands
     {"restype-rename-prop",     cmdRestypeRenameProp},
     // Events.
     {"event-list",              cmdEventList},
+    // Prefab class variables (Blueprint-style typed props).
+    {"prefab-add-variable",     cmdPrefabAddVariable},
+    {"prefab-remove-variable",  cmdPrefabRemoveVariable},
+    {"prefab-rename-variable",  cmdPrefabRenameVariable},
+    {"prefab-set-variable-default", cmdPrefabSetVariableDefault},
+    {"widget-add-variable",     cmdPrefabAddVariable},
+    {"widget-remove-variable",  cmdPrefabRemoveVariable},
+    {"widget-rename-variable",  cmdPrefabRenameVariable},
+    {"widget-set-variable-default", cmdPrefabSetVariableDefault},
+    // Per-instance variable overrides on scene objects.
+    {"scene-set-var-override",   cmdSceneSetVarOverride},
+    {"scene-clear-var-override", cmdSceneClearVarOverride},
+    // Scene render layer arrays (3D / 2D / particles).
+    {"scene-add-layer",         cmdSceneAddLayer},
+    {"scene-set-layer",         cmdSceneSetLayer},
+    {"scene-remove-layer",      cmdSceneRemoveLayer},
+    // Project-level conf (ROM metadata, boot scenes, cart size, etc.).
+    {"project-describe",        cmdProjectDescribe},
+    {"project-set-conf",        cmdProjectSetConf},
+    // Asset folders (mirrored across assets/ and src/user/).
+    {"folder-create",           cmdFolderCreate},
+    {"folder-rename",           cmdFolderRename},
+    {"folder-move",             cmdFolderMove},
+    {"folder-delete",           cmdFolderDelete},
+    // Asset relocation across folders.
+    {"asset-move",              cmdAssetMove},
+    // Material editing (compiled material fields on .p64mat).
+    {"material-set-prop",       cmdMaterialSetProp},
+    // Conf schema discovery.
+    {"asset-describe-conf",     cmdAssetDescribeConf},
+    // Search / refactor helpers.
+    {"scene-find",              cmdSceneFind},
+    {"prefab-find",             cmdPrefabFind},
+    {"prefab-find-references",  cmdPrefabFindReferences},
+    {"asset-find-unused",       cmdAssetFindUnused},
+    // Bootstrap a fresh project from the empty template.
+    {"project-create",          cmdProjectCreate},
+    // Variant prefab RFC-6902 patch ops.
+    {"prefab-list-patches",     cmdPrefabListPatches},
+    {"prefab-add-patch",        cmdPrefabAddPatch},
+    {"prefab-remove-patch",     cmdPrefabRemovePatch},
   };
 
   bool isExtendedCmd(const std::string &cmd)
