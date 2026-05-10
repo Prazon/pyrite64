@@ -224,7 +224,23 @@ bool Build::buildT3DMAssets(Project::Project &project, SceneCtx &sceneCtx)
           printf("Using custom material writer for '%s'\n", material.name.c_str());
           return matWriter(sceneCtx, f, pyriteMat->second);
         }
-        throw std::runtime_error("Missing material: " + material.name);
+        // No mapped Pyrite material for this glTF material. Throwing here
+        // unwinds back through tiny3d's writeT3DM, which is built without
+        // exception support; on Windows that surfaces as a 0xC0000005
+        // access violation in the editor rather than a clean error. Emit a
+        // flag-less stub material instead so the asset still builds, and
+        // surface a warning so the missing mapping is visible in the log.
+        // The stub matches matWriter's minimum on-disk shape: u32 flags = 0
+        // followed by u32 drawFlags = 0; the device falls back to default
+        // render state for any draw call that uses this slot.
+        Utils::Logger::log(
+          "Missing material mapping for '" + material.name + "' in "
+          + model.path + " — writing default stub. Add the material to "
+          "the asset's .glb.conf data.materials map to customize.",
+          Utils::Logger::LEVEL_WARN);
+        f->write<uint32_t>(0);
+        f->write<uint32_t>(0);
+        return true;
       };
 
       T3DM::writeT3DM(config, t3dm, t3dmPath.string().c_str());
