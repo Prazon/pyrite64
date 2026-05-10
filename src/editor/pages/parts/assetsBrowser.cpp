@@ -1291,19 +1291,19 @@ void Editor::AssetsBrowser::draw() {
 
     auto* dl = ImGui::GetWindowDrawList();
 
-    // Folder occupies the same square as a card's thumbnail area. The MDI
-    // folder glyph (filled when the folder has matching content, outline when
-    // empty) is drawn big and tinted manilla so the silhouette matches UE5
-    // without inventing custom geometry.
+    // Folder occupies the same square as a card's thumbnail area. Always use
+    // the filled MDI folder glyph (the outline variant left a transparent
+    // square in the middle of the card) and convey empty vs has-content via
+    // tint, matching UE5's dimmed-folder convention.
     ImVec2 fMin = {startPos.x + cardPad, startPos.y + cardPad};
     ImVec2 fMax = {fMin.x + imageSize, fMin.y + imageSize};
 
     ImU32 colFolder = filled ? IM_COL32(0xC8, 0x96, 0x5A, 0xFF)
-                              : IM_COL32(0xA8, 0x80, 0x4D, 0xFF);
+                              : IM_COL32(0x70, 0x55, 0x33, 0xFF);
     if (selected)     colFolder = IM_COL32(0xE6, 0xB8, 0x78, 0xFF);
     else if (hovered) colFolder = IM_COL32(0xD2, 0xA0, 0x64, 0xFF);
 
-    const char* iconTxt = filled ? ICON_MDI_FOLDER : ICON_MDI_FOLDER_OUTLINE;
+    const char* iconTxt = ICON_MDI_FOLDER;
     const float glyphSize = imageSize * 0.95f;
     ImFont* font = ImGui::GetFont();
     ImVec2 gts = font->CalcTextSizeA(glyphSize, FLT_MAX, 0.0f, iconTxt);
