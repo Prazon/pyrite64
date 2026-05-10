@@ -155,7 +155,12 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
   while(ptrIn[1] != 0)
   {
     uint8_t compId = ptrIn[0];
-    uint8_t argSize = ptrIn[1] * 4;
+    // sizeDw can exceed 63 for large components (e.g. Path with 163 dwords
+    // = 652 bytes), so a uint8_t holding sizeDw*4 truncates and `ptrIn +=
+    // argSize` lands mid-component, reading garbage as the next compId.
+    // The pre-scan loop uses `auto` here which promotes to int — keep
+    // these in sync.
+    uint32_t argSize = (uint32_t)ptrIn[1] * 4u;
 
     const auto &compDef = COMP_TABLE[compId];
     // debugf("Alloc: comp %d (arg: %d)\n", compId, argSize);
