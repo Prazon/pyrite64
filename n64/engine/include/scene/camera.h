@@ -34,6 +34,14 @@ namespace P64
       void update(float deltaTime);
       void attach();
 
+      // False when setScreenArea collapsed the viewport to zero (e.g. an
+      // inactive split-screen port). Scene::draw uses this to skip the
+      // per-camera 3D pass; t3d_viewport_attach divides by viewport size
+      // and would crash otherwise.
+      [[nodiscard]] bool hasArea() const {
+        return viewports.size[0] > 0 && viewports.size[1] > 0;
+      }
+
       /**
        * Re-applies the scissor-area defined via the viewport.
        * This can be useful if you changed the scissor-area and now wish to reset it.

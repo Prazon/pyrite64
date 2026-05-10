@@ -294,6 +294,10 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
   // 3D Pass, for every active camera
   for(auto &cam : cameras)
   {
+    // Inactive split-screen ports collapse their viewport to (0,0,0,0)
+    // (see CameraRig360). Skip them — t3d_viewport_attach divides by
+    // viewport size.
+    if(!cam->hasArea()) continue;
     camMain = cam;
     cam->attach();
 
