@@ -20,7 +20,10 @@
 #include "../project/component/components.h"
 #include "../project/scene/object.h"
 #include "../project/scene/prefab.h"
+#include "../project/scene/scene.h"
+#include "../project/scene/sceneManager.h"
 #include "../project/assets/resourceInstance.h"
+#include "../project/assets/resourceType.h"
 #include "../project/prefabFunctions.h"
 #include "../utils/fs.h"
 #include "../utils/hash.h"
@@ -294,6 +297,51 @@ namespace
   void savePrefabAt(const std::string &absPath, const Project::Prefab &prefab)
   {
     Utils::FS::saveTextFile(absPath, prefab.serialize());
+  }
+
+  // ── Scene helpers ──────────────────────────────────────────────────────
+
+  // Resolve a scene by id (decimal string or json int) or by exact name.
+  // Returns -1 on failure. Accepts the same spelling tolerance as the asset
+  // resolver so CLI consumers can use either form.
+  int resolveSceneId(Project::Project &project, const std::string &key)
+  {
+    if (key.empty()) return -1;
+    if (auto u = tryParseUUID(key)) {
+      int candidate = (int)*u;
+      for (const auto &e : project.getScenes().getEntries()) {
+        if (e.id == candidate) return candidate;
+      }
+    }
+    for (const auto &e : project.getScenes().getEntries()) {
+      if (e.name == key) return e.id;
+    }
+    return -1;
+  }
+
+  // Build, mutate, save lifecycle. The CLI always works on a fresh Scene
+  // instance rather than driving SceneManager::loadedScene so we never
+  // disturb editor state (selection, undo history) and so concurrent CLI
+  // invocations don't collide.
+  std::shared_ptr<Project::Scene> openScene(Project::Project &project, int id)
+  {
+    auto scene = std::make_shared<Project::Scene>(id, project.getPath());
+    return scene;
+  }
+
+  void saveScene(Project::Project &project, Project::Scene &scene)
+  {
+    scene.save();
+    project.getScenes().reload();
+  }
+
+  nlohmann::json sceneEntryJSON(const Project::SceneEntry &e)
+  {
+    nlohmann::json j;
+    j["id"] = e.id;
+    j["name"] = e.name;
+    if (!e.relPath.empty()) j["relPath"] = e.relPath;
+    return j;
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -939,6 +987,921 @@ namespace
     emitJSON(out);
     return 0;
   }
+
+  // ── Scene lifecycle ────────────────────────────────────────────────
+
+  int cmdSceneList(const CLI::Commands::Args &/*a*/, Project::Project &project)
+  {
+    nlohmann::json out = nlohmann::json::array();
+    for (const auto &e : project.getScenes().getEntries()) {
+      out.push_back(sceneEntryJSON(e));
+    }
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneCreate(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.name.empty()) { emitErr("--name is required"); return 1; }
+    auto &mgr = project.getScenes();
+    mgr.add();
+    // SceneManager::add() creates an empty directory. Pick the new scene
+    // (highest id) and write a real scene.json with the requested name and
+    // relPath so it shows up properly in the content browser.
+    int newId = -1;
+    for (const auto &e : mgr.getEntries()) {
+      if (e.id > newId) newId = e.id;
+    }
+    if (newId < 0) { emitErr("scene create failed"); return 1; }
+    auto scene = openScene(project, newId);
+    scene->conf.name.value = a.name;
+    if (!a.dir.empty()) scene->relPath = a.dir;
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["created"] = newId;
+    out["name"] = a.name;
+    if (!a.dir.empty()) out["relPath"] = a.dir;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneDescribe(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required (scene id or name)"); return 1; }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    nlohmann::json out;
+    out["id"] = id;
+    out["name"] = scene->conf.name.value;
+    if (!scene->relPath.empty()) out["relPath"] = scene->relPath;
+    out["scene"] = nlohmann::json::parse(scene->serialize(), nullptr, false);
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneRename(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.to.empty()) { emitErr("--asset and --to are required"); return 1; }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    project.getScenes().setSceneName(id, a.to);
+    nlohmann::json out;
+    out["renamed"] = {{"id", id}, {"to", a.to}};
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneSetRelpath(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    // --value can be empty to move the scene back to the content-root folder.
+    auto v = a.value.empty() ? std::string{} : parseValueJSON(a.value).get<std::string>();
+    project.getScenes().setSceneRelPath(id, v);
+    nlohmann::json out;
+    out["updated"] = {{"id", id}, {"relPath", v}};
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneDuplicate(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto &mgr = project.getScenes();
+    int beforeMax = -1;
+    for (const auto &e : mgr.getEntries()) if (e.id > beforeMax) beforeMax = e.id;
+    mgr.duplicate(id);
+    int newId = -1;
+    for (const auto &e : mgr.getEntries()) if (e.id > newId) newId = e.id;
+    if (newId <= beforeMax) { emitErr("scene duplicate failed"); return 1; }
+    nlohmann::json out;
+    out["duplicated"] = {{"from", id}, {"to", newId}};
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneDelete(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    if (project.getScenes().getEntries().size() <= 1) {
+      emitErr("refusing to delete the only scene");
+      return 1;
+    }
+    project.getScenes().remove(id);
+    nlohmann::json out;
+    out["deleted"] = id;
+    emitJSON(out);
+    return 0;
+  }
+
+  // Patch one field in SceneConf. Round-trips through the JSON form like
+  // asset-set-conf so the same JSON shape works for every field.
+  int cmdSceneSetConf(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --field, --value are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto sceneJson = nlohmann::json::parse(scene->serialize(), nullptr, false);
+    if (!sceneJson.is_object() || !sceneJson.contains("conf") || !sceneJson["conf"].is_object()) {
+      emitErr("scene conf is not an object (corrupt scene?)"); return 1;
+    }
+    sceneJson["conf"][a.field] = parseValueJSON(a.value);
+    scene->deserialize(sceneJson.dump());
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["scene"] = nlohmann::json::parse(scene->serialize(), nullptr, false);
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Scene tree editing ─────────────────────────────────────────────
+
+  int cmdSceneAddObject(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty()) {
+      emitErr("--asset and --name are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *parent = findObjectByPath(&scene->getRootObject(), a.parent);
+    if (!parent) { emitErr("parent path not found: " + a.parent); return 1; }
+    auto obj = scene->addObject(*parent);
+    obj->name = a.name;
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["addedObject"] = a.name;
+    out["uuid"] = obj->uuid;
+    out["sceneId"] = id;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneRemoveObject(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.path.empty()) {
+      emitErr("--asset and --path are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    Project::Object *parentObj = nullptr;
+    size_t idx = 0;
+    auto *target = findObjectByPathWithParent(&scene->getRootObject(), a.path, &parentObj, &idx);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    if (!parentObj) { emitErr("cannot remove the scene root"); return 1; }
+    scene->removeObject(*target);
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["removedPath"] = a.path;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneSetTransform(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --field, --value are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+
+    auto v = parseValueJSON(a.value);
+    bool ok = true;
+    if (a.field == "pos" || a.field == "scale") {
+      if (!v.is_array() || v.size() != 3) ok = false;
+      else {
+        glm::vec3 vec{ v[0].get<float>(), v[1].get<float>(), v[2].get<float>() };
+        if (a.field == "pos") target->pos.value = vec; else target->scale.value = vec;
+      }
+    } else if (a.field == "rot") {
+      if (!v.is_array() || v.size() != 4) ok = false;
+      else target->rot.value = {v[0].get<float>(), v[1].get<float>(), v[2].get<float>(), v[3].get<float>()};
+    } else if (a.field == "name") {
+      if (!v.is_string()) ok = false; else target->name = v.get<std::string>();
+    } else if (a.field == "enabled") {
+      if (!v.is_boolean()) ok = false; else target->enabled = v.get<bool>();
+    } else if (a.field == "selectable") {
+      if (!v.is_boolean()) ok = false; else target->selectable = v.get<bool>();
+    } else if (a.field == "isCanvas2D") {
+      if (!v.is_boolean()) ok = false; else target->isCanvas2D = v.get<bool>();
+    } else if (a.field == "anchor2D") {
+      if (!v.is_number_integer()) ok = false; else target->anchor2D = (uint8_t)v.get<int>();
+    } else if (a.field == "layerIndex2D") {
+      if (!v.is_number_integer()) ok = false; else target->layerIndex2D = (uint8_t)v.get<int>();
+    } else {
+      emitErr("unknown field '" + a.field + "' (allowed: pos, rot, scale, name, enabled, selectable, isCanvas2D, anchor2D, layerIndex2D)");
+      return 1;
+    }
+    if (!ok) { emitErr("--value did not match expected type for field '" + a.field + "'"); return 1; }
+
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["obj"] = target->serialize();
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneAddComponent(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.comp.empty()) {
+      emitErr("--asset and --comp are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    int compId = findCompId(a.comp);
+    if (compId < 0) { emitErr("unknown component: " + a.comp); return 1; }
+    target->addComponent(compId);
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["added"] = Project::Component::TABLE[compId].name;
+    out["obj"] = target->serialize();
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneRemoveComponent(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.comp.empty()) {
+      emitErr("--asset and --comp are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    auto *entry = findComponent(*target, a.comp);
+    if (!entry) { emitErr("component not present: " + a.comp); return 1; }
+    target->removeComponent(entry->uuid);
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["removed"] = a.comp;
+    out["obj"] = target->serialize();
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneSetProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.comp.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --comp, --field, --value are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    auto *entry = findComponent(*target, a.comp);
+    if (!entry) { emitErr("component not present: " + a.comp); return 1; }
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    if (!data.is_object()) { emitErr("component data is not a JSON object"); return 1; }
+    if (!data.contains(a.field)) {
+      emitErr("component '" + std::string(info.name) + "' has no field '" + a.field + "'");
+      return 1;
+    }
+    data[a.field] = parseValueJSON(a.value);
+    entry->data = info.funcDeserialize(data);
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["obj"] = target->serialize();
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSceneMoveObject(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.path.empty()) {
+      emitErr("--asset and --path are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    auto *newParent = findObjectByPath(&scene->getRootObject(), a.parent);
+    if (!newParent) { emitErr("parent path not found: " + a.parent); return 1; }
+    if (!scene->moveObject(target->uuid, newParent->uuid, /*asChild=*/true)) {
+      emitErr("move failed (target == new parent or new parent is a descendant)");
+      return 1;
+    }
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["moved"] = a.path;
+    out["under"] = a.parent;
+    emitJSON(out);
+    return 0;
+  }
+
+  // Spawn a prefab/widget instance under the chosen parent path. Mirrors the
+  // editor's drag-drop-into-hierarchy gesture so headless callers can compose
+  // scenes from prefabs the same way the GUI does.
+  int cmdSceneAddPrefabInstance(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty()) {
+      emitErr("--asset (scene) and --from (prefab/widget) are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto *prefabEntry = resolvePrefabOrWidget(project, a.from);
+    if (!prefabEntry || !prefabEntry->prefab) {
+      emitErr("prefab not found: " + a.from); return 1;
+    }
+    auto scene = openScene(project, id);
+    auto *parent = findObjectByPath(&scene->getRootObject(), a.parent);
+    if (!parent) { emitErr("parent path not found: " + a.parent); return 1; }
+
+    auto inst = scene->addPrefabInstance(prefabEntry->prefab->uuid.value, parent);
+    if (!inst) { emitErr("addPrefabInstance failed"); return 1; }
+    if (!a.name.empty()) inst->name = a.name;
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["instanced"] = inst->name;
+    out["uuid"] = inst->uuid;
+    out["fromPrefab"] = prefabEntry->name;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Prefab reparent / promote ─────────────────────────────────────
+
+  int cmdPrefabMoveObject(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.path.empty()) {
+      emitErr("--asset and --path are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *srcParent = nullptr;
+    size_t srcIdx = 0;
+    auto *target = findObjectByPathWithParent(&e->prefab->obj, a.path, &srcParent, &srcIdx);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    if (!srcParent) { emitErr("cannot reparent the prefab root"); return 1; }
+    auto *newParent = findObjectByPath(&e->prefab->obj, a.parent);
+    if (!newParent) { emitErr("parent path not found: " + a.parent); return 1; }
+    // Block moves into self/descendant: walk newParent up the parent chain.
+    {
+      auto isDescendant = [](const Project::Object *node, uint32_t ancestorUUID) {
+        for (auto *cur = node; cur; cur = cur->parent) {
+          if (cur->uuid == ancestorUUID) return true;
+        }
+        return false;
+      };
+      if (newParent == target || isDescendant(newParent, target->uuid)) {
+        emitErr("cannot move into self or descendant"); return 1;
+      }
+    }
+    auto held = srcParent->children[srcIdx];
+    srcParent->children.erase(srcParent->children.begin() + srcIdx);
+    held->parent = newParent;
+    newParent->children.push_back(held);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["moved"] = a.path;
+    out["under"] = a.parent;
+    emitJSON(out);
+    return 0;
+  }
+
+  // Make the named object the prefab's new top-level node, demoting the old
+  // root to a child of it. Mirrors PrefabEditor's "Make Root" action.
+  // Implemented via JSON round-trip because Object's user-declared
+  // Object(Object&) ctor suppresses the implicit copy/move ctors and the
+  // tree mutation needs deep clones.
+  int cmdPrefabPromoteRoot(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.path.empty()) {
+      emitErr("--asset and --path are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *srcParent = nullptr;
+    size_t srcIdx = 0;
+    auto *target = findObjectByPathWithParent(&e->prefab->obj, a.path, &srcParent, &srcIdx);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    if (target == &e->prefab->obj) { emitErr("already the prefab root"); return 1; }
+    if (!srcParent) { emitErr("orphan target"); return 1; }
+
+    // Snapshot the target's serialized form before mutating, then detach it
+    // from its current parent so the leftover tree is the demoted subtree.
+    auto targetJson = target->serialize();
+    srcParent->children.erase(srcParent->children.begin() + srcIdx);
+    auto oldRootJson = e->prefab->obj.serialize();
+
+    // Build the new root: target's own subtree plus the demoted old root as
+    // a final child, preserving every remaining lineage.
+    nlohmann::json newJson = targetJson;
+    if (!newJson.contains("children") || !newJson["children"].is_array()) {
+      newJson["children"] = nlohmann::json::array();
+    }
+    newJson["children"].push_back(oldRootJson);
+
+    e->prefab->obj = Project::Object{};
+    e->prefab->obj.deserialize(nullptr, newJson);
+
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["promoted"] = a.path;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Path component granular ops ───────────────────────────────────
+
+  // Resolve the Path component on the named object. Returns nullptr after
+  // emitting a CLI error so callers can simply early-return on null.
+  Project::Component::Entry *resolvePathComp(
+    Project::AssetManagerEntry *e,
+    const std::string &objPath,
+    Project::Object **outObj)
+  {
+    auto *target = findObjectByPath(&e->prefab->obj, objPath);
+    if (!target) { emitErr("path not found: " + objPath); return nullptr; }
+    auto *entry = findComponent(*target, "Path");
+    if (!entry) { emitErr("object has no Path component"); return nullptr; }
+    *outObj = target;
+    return entry;
+  }
+
+  void writePathBack(
+    Project::Project &project,
+    Project::AssetManagerEntry *e,
+    Project::Component::Entry *entry,
+    nlohmann::json &data)
+  {
+    const auto &info = Project::Component::TABLE[entry->id];
+    entry->data = info.funcDeserialize(data);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+  }
+
+  int cmdPathAddPoint(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.value.empty()) {
+      emitErr("--asset and --value (e.g. '[x,y,z]') are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *obj = nullptr;
+    auto *entry = resolvePathComp(e, a.path, &obj);
+    if (!entry) return 1;
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    if (!data["points"].is_array()) data["points"] = nlohmann::json::array();
+    auto v = parseValueJSON(a.value);
+    nlohmann::json point;
+    if (v.is_array() && v.size() == 3) {
+      point = { {"pos", v}, {"tension", 0.5}, {"branchId", 0}, {"flags", 0} };
+    } else if (v.is_object() && v.contains("pos")) {
+      point = v;
+      if (!point.contains("tension"))  point["tension"]  = 0.5;
+      if (!point.contains("branchId")) point["branchId"] = 0;
+      if (!point.contains("flags"))    point["flags"]    = 0;
+    } else {
+      emitErr("--value must be [x,y,z] or {pos:[x,y,z], tension, branchId, flags}");
+      return 1;
+    }
+    data["points"].push_back(point);
+    writePathBack(project, e, entry, data);
+    nlohmann::json out;
+    out["addedIndex"] = (int)data["points"].size() - 1;
+    out["points"] = data["points"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPathInsertPoint(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --field (index), --value are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *obj = nullptr;
+    auto *entry = resolvePathComp(e, a.path, &obj);
+    if (!entry) return 1;
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    if (!data["points"].is_array()) data["points"] = nlohmann::json::array();
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx > (int)data["points"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    auto v = parseValueJSON(a.value);
+    nlohmann::json point;
+    if (v.is_array() && v.size() == 3) {
+      point = { {"pos", v}, {"tension", 0.5}, {"branchId", 0}, {"flags", 0} };
+    } else if (v.is_object() && v.contains("pos")) {
+      point = v;
+      if (!point.contains("tension"))  point["tension"]  = 0.5;
+      if (!point.contains("branchId")) point["branchId"] = 0;
+      if (!point.contains("flags"))    point["flags"]    = 0;
+    } else {
+      emitErr("--value must be [x,y,z] or full point object"); return 1;
+    }
+    data["points"].insert(data["points"].begin() + idx, point);
+    writePathBack(project, e, entry, data);
+    nlohmann::json out;
+    out["insertedAt"] = idx;
+    out["points"] = data["points"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPathSetPoint(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --field (index), --value are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *obj = nullptr;
+    auto *entry = resolvePathComp(e, a.path, &obj);
+    if (!entry) return 1;
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    if (!data["points"].is_array()) { emitErr("no points to update"); return 1; }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)data["points"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    auto v = parseValueJSON(a.value);
+    if (v.is_array() && v.size() == 3) {
+      data["points"][idx]["pos"] = v;
+    } else if (v.is_object()) {
+      // Patch only the keys that were supplied so callers can tweak one knob.
+      for (auto it = v.begin(); it != v.end(); ++it) {
+        data["points"][idx][it.key()] = it.value();
+      }
+    } else {
+      emitErr("--value must be [x,y,z] or partial point object"); return 1;
+    }
+    writePathBack(project, e, entry, data);
+    nlohmann::json out;
+    out["updated"] = idx;
+    out["point"] = data["points"][idx];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPathRemovePoint(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty()) {
+      emitErr("--asset and --field (index) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *obj = nullptr;
+    auto *entry = resolvePathComp(e, a.path, &obj);
+    if (!entry) return 1;
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    if (!data["points"].is_array()) { emitErr("no points"); return 1; }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)data["points"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    data["points"].erase(data["points"].begin() + idx);
+    writePathBack(project, e, entry, data);
+    nlohmann::json out;
+    out["removed"] = idx;
+    out["points"] = data["points"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPathAddBranch(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.value.empty()) {
+      emitErr("--asset and --value (branch object) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *obj = nullptr;
+    auto *entry = resolvePathComp(e, a.path, &obj);
+    if (!entry) return 1;
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    if (!data["branches"].is_array()) data["branches"] = nlohmann::json::array();
+    auto v = parseValueJSON(a.value);
+    if (!v.is_object()) {
+      emitErr("--value must be an object: {fromIdx, branchId, op, flag, value}");
+      return 1;
+    }
+    nlohmann::json br;
+    br["fromIdx"]  = v.value("fromIdx",  0);
+    br["branchId"] = v.value("branchId", 1);
+    br["op"]       = v.value("op",       0);
+    br["flag"]     = v.value("flag",     std::string{});
+    br["value"]    = v.value("value",    0.0f);
+    data["branches"].push_back(br);
+    writePathBack(project, e, entry, data);
+    nlohmann::json out;
+    out["addedIndex"] = (int)data["branches"].size() - 1;
+    out["branches"] = data["branches"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPathSetBranch(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --field (index), --value are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *obj = nullptr;
+    auto *entry = resolvePathComp(e, a.path, &obj);
+    if (!entry) return 1;
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    if (!data["branches"].is_array()) { emitErr("no branches"); return 1; }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)data["branches"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    auto v = parseValueJSON(a.value);
+    if (!v.is_object()) { emitErr("--value must be a partial branch object"); return 1; }
+    for (auto it = v.begin(); it != v.end(); ++it) {
+      data["branches"][idx][it.key()] = it.value();
+    }
+    writePathBack(project, e, entry, data);
+    nlohmann::json out;
+    out["updated"] = idx;
+    out["branch"] = data["branches"][idx];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPathRemoveBranch(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty()) {
+      emitErr("--asset and --field (index) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    Project::Object *obj = nullptr;
+    auto *entry = resolvePathComp(e, a.path, &obj);
+    if (!entry) return 1;
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    if (!data["branches"].is_array()) { emitErr("no branches"); return 1; }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)data["branches"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    data["branches"].erase(data["branches"].begin() + idx);
+    writePathBack(project, e, entry, data);
+    nlohmann::json out;
+    out["removed"] = idx;
+    out["branches"] = data["branches"];
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Resource type schema ──────────────────────────────────────────
+
+  // Map a CLI-friendly type spelling to a VarKind. Keep names lowercase to
+  // match the asset-list filter style used elsewhere in the CLI.
+  bool parseVarKind(const std::string &s, Project::VarKind &out)
+  {
+    std::string n = s;
+    std::transform(n.begin(), n.end(), n.begin(),
+      [](unsigned char c){ return (char)std::tolower(c); });
+    if (n == "int" || n == "int32")           { out = Project::VarKind::INT;        return true; }
+    if (n == "float")                         { out = Project::VarKind::FLOAT;      return true; }
+    if (n == "bool")                          { out = Project::VarKind::BOOL;       return true; }
+    if (n == "vec3")                          { out = Project::VarKind::VEC3;       return true; }
+    if (n == "quat")                          { out = Project::VarKind::QUAT;       return true; }
+    if (n == "object_ref" || n == "objectref"){ out = Project::VarKind::OBJECT_REF; return true; }
+    if (n == "prefab_ref" || n == "prefabref"){ out = Project::VarKind::PREFAB_REF; return true; }
+    if (n == "asset_ref"  || n == "assetref") { out = Project::VarKind::ASSET_REF;  return true; }
+    return false;
+  }
+
+  // Round-trip the .p64restype JSON: load, mutate fields[], write back. We
+  // touch the file directly because AssetManagerEntry::resourceType is
+  // recomputed during reload(), so reading from-and-writing-to disk is the
+  // source of truth.
+  Project::Resource::Type loadRestype(Project::AssetManagerEntry *e)
+  {
+    Project::Resource::Type t{};
+    t.deserialize(Utils::FS::loadTextFile(e->path));
+    return t;
+  }
+
+  void saveRestype(Project::Project &project, Project::AssetManagerEntry *e, const Project::Resource::Type &t)
+  {
+    Utils::FS::saveTextFile(e->path, t.serialize());
+    project.getAssets().reload();
+  }
+
+  int cmdRestypeCreate(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.name.empty()) { emitErr("--name is required"); return 1; }
+    uint64_t uuid = project.getAssets().createResourceType(a.name, a.dir);
+    if (uuid == 0) { emitErr("createResourceType failed (name conflict?)"); return 1; }
+    auto *e = project.getAssets().getEntryByUUID(uuid);
+    nlohmann::json out;
+    out["created"] = a.name + ".p64restype";
+    if (e) out["asset"] = serializeAssetEntry(*e, true);
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdRestypeAddProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty() || a.type.empty()) {
+      emitErr("--asset, --name, --type (int|float|bool|vec3|quat|object_ref|prefab_ref|asset_ref) are required");
+      return 1;
+    }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::RESOURCE_TYPE);
+    if (!e) { emitErr("resource type not found: " + a.asset); return 1; }
+    Project::VarKind kind{};
+    if (!parseVarKind(a.type, kind)) { emitErr("unknown type: " + a.type); return 1; }
+    auto t = loadRestype(e);
+    for (const auto &f : t.fields) {
+      if (f.name == a.name) { emitErr("field already exists: " + a.name); return 1; }
+    }
+    Project::VarDef v{};
+    v.uuid = Utils::Hash::randomU64();
+    v.name = a.name;
+    v.kind = kind;
+    if (!a.value.empty()) {
+      // For PREFAB_REF / ASSET_REF the typeArg is a uuid; for the rest the
+      // value is treated as the default. Numeric --value parses as typeArg
+      // when it looks like a uuid, otherwise it is stored as the default.
+      auto parsed = parseValueJSON(a.value);
+      if ((kind == Project::VarKind::PREFAB_REF || kind == Project::VarKind::ASSET_REF)
+          && parsed.is_number_unsigned()) {
+        v.typeArg = parsed.get<uint64_t>();
+      } else {
+        v.defaultValue.deserialize(parsed.is_string() ? parsed.get<std::string>() : parsed.dump());
+      }
+    }
+    t.fields.push_back(v);
+    saveRestype(project, e, t);
+    nlohmann::json out;
+    out["added"] = a.name;
+    out["uuid"] = v.uuid;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdRestypeRemoveProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty()) {
+      emitErr("--asset and --name are required"); return 1;
+    }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::RESOURCE_TYPE);
+    if (!e) { emitErr("resource type not found: " + a.asset); return 1; }
+    auto t = loadRestype(e);
+    auto before = t.fields.size();
+    std::erase_if(t.fields, [&](const Project::VarDef &f){ return f.name == a.name; });
+    if (t.fields.size() == before) { emitErr("field not found: " + a.name); return 1; }
+    saveRestype(project, e, t);
+    nlohmann::json out;
+    out["removed"] = a.name;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdRestypeRenameProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from, --to are required"); return 1;
+    }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::RESOURCE_TYPE);
+    if (!e) { emitErr("resource type not found: " + a.asset); return 1; }
+    auto t = loadRestype(e);
+    bool renamed = false;
+    for (auto &f : t.fields) {
+      if (f.name == a.from) { f.name = a.to; renamed = true; break; }
+    }
+    if (!renamed) { emitErr("field not found: " + a.from); return 1; }
+    saveRestype(project, e, t);
+    nlohmann::json out;
+    out["renamed"] = {{"from", a.from}, {"to", a.to}};
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Events ─────────────────────────────────────────────────────────
+
+  // Map between event names and the on-device EVENT_TYPE_* sentinel values.
+  // Mirrors n64/engine/include/scene/event.h.  Names are matched
+  // case-insensitively against the suffix after EVENT_TYPE_.
+  bool resolveEventValue(const std::string &key, uint16_t &out)
+  {
+    std::string n = key;
+    std::transform(n.begin(), n.end(), n.begin(),
+      [](unsigned char c){ return (char)std::toupper(c); });
+    if (n == "ENABLE")  { out = (uint16_t)(0xFFFF - 0); return true; }
+    if (n == "DISABLE") { out = (uint16_t)(0xFFFF - 1); return true; }
+    if (n == "READY")   { out = (uint16_t)(0xFFFF - 2); return true; }
+    return false;
+  }
+
+  int cmdEventList(const CLI::Commands::Args &/*a*/, Project::Project &/*project*/)
+  {
+    nlohmann::json out;
+    out["builtins"] = nlohmann::json::array();
+    auto add = [&](const char *name, uint16_t v, const char *desc) {
+      nlohmann::json j;
+      j["name"]  = name;
+      j["value"] = v;
+      j["description"] = desc;
+      out["builtins"].push_back(j);
+    };
+    add("ENABLE",  (uint16_t)(0xFFFF - 0), "fires when an Object is enabled at runtime");
+    add("DISABLE", (uint16_t)(0xFFFF - 1), "fires when an Object is disabled at runtime");
+    add("READY",   (uint16_t)(0xFFFF - 2), "fires once after the scene finishes loading");
+    out["customRange"] = {{"start", 0x0000}, {"end", 0xF000}};
+    emitJSON(out);
+    return 0;
+  }
+
+  // Sugar for setting Button2D-style eventType fields. Resolves --to from
+  // either an event name (ENABLE/DISABLE/READY) or a raw integer in the
+  // custom range.  Defaults --comp to Button2D so menu authoring stays
+  // terse, but explicitly accepts other components that expose an
+  // eventType-shaped field.
+  int cmdWidgetBindEvent(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.to.empty()) {
+      emitErr("--asset and --to (event name or numeric value) are required");
+      return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    auto *target = findObjectByPath(&e->prefab->obj, a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    std::string compKey = a.comp.empty() ? std::string{"Button2D"} : a.comp;
+    auto *entry = findComponent(*target, compKey);
+    if (!entry) { emitErr("component not present: " + compKey); return 1; }
+    const auto &info = Project::Component::TABLE[entry->id];
+    auto data = info.funcSerialize(*entry);
+    std::string fieldName = a.field.empty() ? std::string{"eventType"} : a.field;
+    if (!data.is_object() || !data.contains(fieldName)) {
+      emitErr("component '" + std::string(info.name) + "' has no field '" + fieldName + "'");
+      return 1;
+    }
+    uint16_t evt = 0;
+    if (resolveEventValue(a.to, evt)) {
+      data[fieldName] = (int)evt;
+    } else {
+      auto v = parseValueJSON(a.to);
+      if (!v.is_number_integer()) {
+        emitErr("--to must be ENABLE/DISABLE/READY or a 16-bit integer");
+        return 1;
+      }
+      data[fieldName] = v;
+    }
+    entry->data = info.funcDeserialize(data);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["bound"] = a.to;
+    out["field"] = fieldName;
+    out["value"] = data[fieldName];
+    emitJSON(out);
+    return 0;
+  }
 }
 
 namespace CLI::Commands
@@ -982,6 +1945,45 @@ namespace CLI::Commands
     {"widget-remove-component", cmdPrefabRemoveComponent},
     {"widget-set-prop",         cmdPrefabSetProp},
     {"widget-set-transform",    cmdPrefabSetTransform},
+    {"widget-move-object",      cmdPrefabMoveObject},
+    {"widget-promote-root",     cmdPrefabPromoteRoot},
+    {"widget-bind-event",       cmdWidgetBindEvent},
+    // Scenes (full CLI parity with prefabs so headless callers can
+    // compose entire levels without the editor).
+    {"scene-list",              cmdSceneList},
+    {"scene-create",            cmdSceneCreate},
+    {"scene-describe",          cmdSceneDescribe},
+    {"scene-rename",            cmdSceneRename},
+    {"scene-set-relpath",       cmdSceneSetRelpath},
+    {"scene-duplicate",         cmdSceneDuplicate},
+    {"scene-delete",            cmdSceneDelete},
+    {"scene-set-conf",          cmdSceneSetConf},
+    {"scene-add-object",        cmdSceneAddObject},
+    {"scene-remove-object",     cmdSceneRemoveObject},
+    {"scene-set-transform",     cmdSceneSetTransform},
+    {"scene-add-component",     cmdSceneAddComponent},
+    {"scene-remove-component",  cmdSceneRemoveComponent},
+    {"scene-set-prop",          cmdSceneSetProp},
+    {"scene-move-object",       cmdSceneMoveObject},
+    {"scene-add-prefab-instance", cmdSceneAddPrefabInstance},
+    // Prefab structural extras.
+    {"prefab-move-object",      cmdPrefabMoveObject},
+    {"prefab-promote-root",     cmdPrefabPromoteRoot},
+    // Path component granular ops (Catmull-Rom spline authoring).
+    {"path-add-point",          cmdPathAddPoint},
+    {"path-insert-point",       cmdPathInsertPoint},
+    {"path-set-point",          cmdPathSetPoint},
+    {"path-remove-point",       cmdPathRemovePoint},
+    {"path-add-branch",         cmdPathAddBranch},
+    {"path-set-branch",         cmdPathSetBranch},
+    {"path-remove-branch",      cmdPathRemoveBranch},
+    // Resource type schema authoring.
+    {"restype-create",          cmdRestypeCreate},
+    {"restype-add-prop",        cmdRestypeAddProp},
+    {"restype-remove-prop",     cmdRestypeRemoveProp},
+    {"restype-rename-prop",     cmdRestypeRenameProp},
+    // Events.
+    {"event-list",              cmdEventList},
   };
 
   bool isExtendedCmd(const std::string &cmd)
