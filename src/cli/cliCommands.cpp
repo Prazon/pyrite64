@@ -1764,6 +1764,267 @@ namespace
     return 0;
   }
 
+  // ── Scene-side Path authoring ─────────────────────────────────────
+  // Same granular ops as path-*, but operate on a Path component sitting on
+  // an object inside a scene rather than inside a prefab/widget. Lets callers
+  // place a one-off rail in a level without having to wrap it in a prefab.
+
+  struct ScenePathCtx {
+    Project::Scene *scene = nullptr;
+    Project::Object *obj = nullptr;
+    Project::Component::Entry *entry = nullptr;
+  };
+
+  bool resolveScenePathComp(
+    Project::Project &project,
+    const std::string &assetKey,
+    const std::string &objPath,
+    ScenePathCtx &out)
+  {
+    int id = resolveSceneId(project, assetKey);
+    if (id < 0) { emitErr("scene not found: " + assetKey); return false; }
+    auto *scene = openScene(project, id);
+    if (!scene) { emitErr("could not open scene: " + assetKey); return false; }
+    auto *target = findObjectByPath(&scene->getRootObject(), objPath);
+    if (!target) { emitErr("path not found: " + objPath); return false; }
+    auto *entry = findComponent(*target, "Path");
+    if (!entry) { emitErr("object has no Path component"); return false; }
+    out.scene = scene;
+    out.obj = target;
+    out.entry = entry;
+    return true;
+  }
+
+  // Re-deserialize the Path data into the live entry and persist the scene.
+  // saveScene() already triggers a reload, so unlike the prefab path we don't
+  // need a second reload step here.
+  void writeScenePathBack(
+    Project::Project &project,
+    ScenePathCtx &ctx,
+    nlohmann::json &data)
+  {
+    const auto &info = Project::Component::TABLE[ctx.entry->id];
+    ctx.entry->data = info.funcDeserialize(data);
+    saveScene(project, *ctx.scene);
+  }
+
+  int cmdScenePathAddPoint(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.value.empty()) {
+      emitErr("--asset (scene) and --value (e.g. '[x,y,z]') are required"); return 1;
+    }
+    ScenePathCtx ctx;
+    if (!resolveScenePathComp(project, a.asset, a.path, ctx)) return 1;
+    const auto &info = Project::Component::TABLE[ctx.entry->id];
+    auto data = info.funcSerialize(*ctx.entry);
+    if (!data["points"].is_array()) data["points"] = nlohmann::json::array();
+    auto v = parseValueJSON(a.value);
+    nlohmann::json point;
+    if (v.is_array() && v.size() == 3) {
+      point = { {"pos", v}, {"tension", 0.5}, {"branchId", 0}, {"flags", 0} };
+    } else if (v.is_object() && v.contains("pos")) {
+      point = v;
+      if (!point.contains("tension"))  point["tension"]  = 0.5;
+      if (!point.contains("branchId")) point["branchId"] = 0;
+      if (!point.contains("flags"))    point["flags"]    = 0;
+    } else {
+      emitErr("--value must be [x,y,z] or {pos:[x,y,z], tension, branchId, flags}");
+      return 1;
+    }
+    data["points"].push_back(point);
+    writeScenePathBack(project, ctx, data);
+    nlohmann::json out;
+    out["addedIndex"] = (int)data["points"].size() - 1;
+    out["points"] = data["points"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdScenePathInsertPoint(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset (scene), --field (index), --value are required"); return 1;
+    }
+    ScenePathCtx ctx;
+    if (!resolveScenePathComp(project, a.asset, a.path, ctx)) return 1;
+    const auto &info = Project::Component::TABLE[ctx.entry->id];
+    auto data = info.funcSerialize(*ctx.entry);
+    if (!data["points"].is_array()) data["points"] = nlohmann::json::array();
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx > (int)data["points"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    auto v = parseValueJSON(a.value);
+    nlohmann::json point;
+    if (v.is_array() && v.size() == 3) {
+      point = { {"pos", v}, {"tension", 0.5}, {"branchId", 0}, {"flags", 0} };
+    } else if (v.is_object() && v.contains("pos")) {
+      point = v;
+      if (!point.contains("tension"))  point["tension"]  = 0.5;
+      if (!point.contains("branchId")) point["branchId"] = 0;
+      if (!point.contains("flags"))    point["flags"]    = 0;
+    } else {
+      emitErr("--value must be [x,y,z] or full point object"); return 1;
+    }
+    data["points"].insert(data["points"].begin() + idx, point);
+    writeScenePathBack(project, ctx, data);
+    nlohmann::json out;
+    out["insertedAt"] = idx;
+    out["points"] = data["points"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdScenePathSetPoint(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset (scene), --field (index), --value are required"); return 1;
+    }
+    ScenePathCtx ctx;
+    if (!resolveScenePathComp(project, a.asset, a.path, ctx)) return 1;
+    const auto &info = Project::Component::TABLE[ctx.entry->id];
+    auto data = info.funcSerialize(*ctx.entry);
+    if (!data["points"].is_array()) { emitErr("no points to update"); return 1; }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)data["points"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    auto v = parseValueJSON(a.value);
+    if (v.is_array() && v.size() == 3) {
+      data["points"][idx]["pos"] = v;
+    } else if (v.is_object()) {
+      for (auto it = v.begin(); it != v.end(); ++it) {
+        data["points"][idx][it.key()] = it.value();
+      }
+    } else {
+      emitErr("--value must be [x,y,z] or partial point object"); return 1;
+    }
+    writeScenePathBack(project, ctx, data);
+    nlohmann::json out;
+    out["updated"] = idx;
+    out["point"] = data["points"][idx];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdScenePathRemovePoint(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty()) {
+      emitErr("--asset (scene) and --field (index) are required"); return 1;
+    }
+    ScenePathCtx ctx;
+    if (!resolveScenePathComp(project, a.asset, a.path, ctx)) return 1;
+    const auto &info = Project::Component::TABLE[ctx.entry->id];
+    auto data = info.funcSerialize(*ctx.entry);
+    if (!data["points"].is_array()) { emitErr("no points"); return 1; }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)data["points"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    data["points"].erase(data["points"].begin() + idx);
+    writeScenePathBack(project, ctx, data);
+    nlohmann::json out;
+    out["removed"] = idx;
+    out["points"] = data["points"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdScenePathAddBranch(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.value.empty()) {
+      emitErr("--asset (scene) and --value (branch object) are required"); return 1;
+    }
+    ScenePathCtx ctx;
+    if (!resolveScenePathComp(project, a.asset, a.path, ctx)) return 1;
+    const auto &info = Project::Component::TABLE[ctx.entry->id];
+    auto data = info.funcSerialize(*ctx.entry);
+    if (!data["branches"].is_array()) data["branches"] = nlohmann::json::array();
+    auto v = parseValueJSON(a.value);
+    if (!v.is_object()) {
+      emitErr("--value must be an object: {fromIdx, branchId, op, flag, value}");
+      return 1;
+    }
+    nlohmann::json br;
+    br["fromIdx"]  = v.value("fromIdx",  0);
+    br["branchId"] = v.value("branchId", 1);
+    br["op"]       = v.value("op",       0);
+    br["flag"]     = v.value("flag",     std::string{});
+    br["value"]    = v.value("value",    0.0f);
+    data["branches"].push_back(br);
+    writeScenePathBack(project, ctx, data);
+    nlohmann::json out;
+    out["addedIndex"] = (int)data["branches"].size() - 1;
+    out["branches"] = data["branches"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdScenePathSetBranch(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset (scene), --field (index), --value are required"); return 1;
+    }
+    ScenePathCtx ctx;
+    if (!resolveScenePathComp(project, a.asset, a.path, ctx)) return 1;
+    const auto &info = Project::Component::TABLE[ctx.entry->id];
+    auto data = info.funcSerialize(*ctx.entry);
+    if (!data["branches"].is_array()) { emitErr("no branches"); return 1; }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)data["branches"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    auto v = parseValueJSON(a.value);
+    if (!v.is_object()) { emitErr("--value must be a partial branch object"); return 1; }
+    for (auto it = v.begin(); it != v.end(); ++it) {
+      data["branches"][idx][it.key()] = it.value();
+    }
+    writeScenePathBack(project, ctx, data);
+    nlohmann::json out;
+    out["updated"] = idx;
+    out["branch"] = data["branches"][idx];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdScenePathRemoveBranch(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty()) {
+      emitErr("--asset (scene) and --field (index) are required"); return 1;
+    }
+    ScenePathCtx ctx;
+    if (!resolveScenePathComp(project, a.asset, a.path, ctx)) return 1;
+    const auto &info = Project::Component::TABLE[ctx.entry->id];
+    auto data = info.funcSerialize(*ctx.entry);
+    if (!data["branches"].is_array()) { emitErr("no branches"); return 1; }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    if (idx < 0 || idx >= (int)data["branches"].size()) {
+      emitErr("index out of range"); return 1;
+    }
+    data["branches"].erase(data["branches"].begin() + idx);
+    writeScenePathBack(project, ctx, data);
+    nlohmann::json out;
+    out["removed"] = idx;
+    out["branches"] = data["branches"];
+    emitJSON(out);
+    return 0;
+  }
+
   // ── Resource type schema ──────────────────────────────────────────
 
   // Map a CLI-friendly type spelling to a VarKind. Keep names lowercase to
@@ -2873,6 +3134,15 @@ namespace CLI::Commands
     {"path-add-branch",         cmdPathAddBranch},
     {"path-set-branch",         cmdPathSetBranch},
     {"path-remove-branch",      cmdPathRemoveBranch},
+    // Scene-side Path authoring (same ops, but the Path component lives on
+    // an object inside a scene rather than inside a prefab/widget).
+    {"scene-path-add-point",    cmdScenePathAddPoint},
+    {"scene-path-insert-point", cmdScenePathInsertPoint},
+    {"scene-path-set-point",    cmdScenePathSetPoint},
+    {"scene-path-remove-point", cmdScenePathRemovePoint},
+    {"scene-path-add-branch",   cmdScenePathAddBranch},
+    {"scene-path-set-branch",   cmdScenePathSetBranch},
+    {"scene-path-remove-branch", cmdScenePathRemoveBranch},
     // Resource type schema authoring.
     {"restype-create",          cmdRestypeCreate},
     {"restype-add-prop",        cmdRestypeAddProp},
