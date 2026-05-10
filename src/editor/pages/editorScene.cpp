@@ -428,10 +428,11 @@ void Editor::Scene::draw()
   ImGui::Begin("MAIN_DOCK", NULL, host_window_flags);
   ImGui::PopStyleVar(3);
 
-  // Outer dockspace. Layout-id bumped to "DockSpaceV2" so the previous
-  // single-region layout from imgui.ini doesn't override the new
-  // top/bottom + nested-Scene-Editor structure on first run after upgrade.
-  auto outerDockID = ImGui::GetID("DockSpaceV2");
+  // Outer dockspace. Layout-id bumped to V3 to force a clean rebuild for
+  // returning users whose imgui.ini had Files/Log/Compile Errors split out
+  // of the bottom tab strip; otherwise stale per-window DockIds keep them
+  // floating after Reset Layout.
+  auto outerDockID = ImGui::GetID("DockSpaceV3");
   auto outerNode = ImGui::DockBuilderGetNode(outerDockID);
   outerDockID = ImGui::DockSpace(outerDockID, ImVec2(0.0f, 0.0f), 0, 0);
   ImGui::End();
@@ -969,6 +970,7 @@ void Editor::Scene::draw()
         if(ImGui::MenuItem("Reset Layout")) {
           // Nuke both dockspaces; they get rebuilt next frame from defaults.
           ImGui::DockBuilderRemoveNode(ImGui::GetID("DockSpaceV2"));
+          ImGui::DockBuilderRemoveNode(ImGui::GetID("DockSpaceV3"));
           ImGui::DockBuilderRemoveNode(ImGui::GetID("SceneEditorDockV2"));
           ImGui::DockBuilderRemoveNode(ImGui::GetID("SceneEditorDockV3"));
           ImGui::DockBuilderRemoveNode(ImGui::GetID("SceneEditorDockV4"));
