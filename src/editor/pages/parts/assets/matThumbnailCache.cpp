@@ -112,34 +112,25 @@ bool Editor::MaterialThumbnailCache::renderAndPersist(
   }
   entry.viewport->setMaterial(mat);
 
-  // Render at the persisted thumb resolution, not the requested card size.
-  // A consistent on-disk size keeps cache hits fast and predictable, and the
-  // browser samples the texture down to whatever the card needs anyway.
+  // The first render of any material kicks off the host cube's GPU upload via
+  // a one-time copy pass that runs at the start of the NEXT frame; the render
+  // queued this frame draws with un-uploaded vertex data and produces an
+  // empty framebuffer. Skip persisting on warmup frames — once the host is
+  // uploaded the next renderAndPersist call captures a real image.
+  bool wasHostUploaded = entry.viewport->isHostUploaded();
+
   ImVec2 renderSize{(float)THUMB_PERSIST_PX, (float)THUMB_PERSIST_PX};
   auto *tex = entry.viewport->renderHeadless(renderSize);
-  if (!tex) return false;
   (void)size; // size kept in the API for parity but ignored — see above.
+
+  if (!tex) return wasHostUploaded ? false : true;
+  if (!wasHostUploaded) return true; // budget consumed; warmup only
 
   entry.dirty = false;
   entry.everRendered = true;
-
-  // Read the framebuffer back and persist as PNG so the next session can
-  // skip the render entirely. A failed save isn't fatal; the cache will
-  // simply re-render next time.
-  std::vector<uint8_t> rgba{};
-  uint32_t w = 0, h = 0;
-  if (entry.viewport->readPixels(rgba, w, h)) {
-    auto pngPath = thumbPath(uuid);
-    if (!pngPath.empty()) {
-      if (!savePngFromBytes(pngPath, rgba, w, h)) {
-        Utils::Logger::log(
-          "MaterialThumbnailCache: IMG_SavePNG failed for "
-          + pngPath.string(),
-          Utils::Logger::LEVEL_WARN
-        );
-      }
-    }
-  }
+  // Defer the readPixels+save by one frame: readPixels here would capture
+  // the framebuffer BEFORE this frame's queued render pass executes.
+  entry.persistDeferred = true;
   return true;
 }
 
@@ -156,6 +147,24 @@ SDL_GPUTexture* Editor::MaterialThumbnailCache::fetch(
     it = entries.emplace(uuid, std::move(ent)).first;
   }
   auto &entry = *it->second;
+
+  // Pending persist from the previous frame: by now the queued render has
+  // executed and the framebuffer holds the actual content, so readPixels
+  // sees the rendered material rather than the pre-render clear.
+  if (entry.persistDeferred && entry.viewport) {
+    std::vector<uint8_t> rgba{};
+    uint32_t w = 0, h = 0;
+    if (entry.viewport->readPixels(rgba, w, h)) {
+      auto pngPath = thumbPath(uuid);
+      if (!pngPath.empty() && !savePngFromBytes(pngPath, rgba, w, h)) {
+        Utils::Logger::log(
+          "MaterialThumbnailCache: IMG_SavePNG failed for " + pngPath.string(),
+          Utils::Logger::LEVEL_WARN
+        );
+      }
+    }
+    entry.persistDeferred = false;
+  }
 
   bool needRender = entry.dirty || (!entry.everRendered && !entry.loadedTex);
   if (needRender && rendersThisFrame < MAX_PER_FRAME) {

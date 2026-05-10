@@ -41,6 +41,10 @@ namespace Editor
         std::unique_ptr<Renderer::Texture> loadedTex{};
         bool dirty{true};
         bool everRendered{false};
+        // A render was queued this frame whose framebuffer should be read
+        // back and persisted on the NEXT fetch — gives the queued GPU pass
+        // time to run before readPixels samples the FB.
+        bool persistDeferred{false};
       };
       std::unordered_map<uint64_t, std::unique_ptr<Entry>> entries{};
       int rendersThisFrame{0};

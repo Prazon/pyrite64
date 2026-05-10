@@ -99,10 +99,8 @@ bool Editor::ModelThumbnailCache::tryLoadFromDisk(uint64_t uuid, Entry &entry)
 bool Editor::ModelThumbnailCache::renderAndPersist(
   const Project::AssetManagerEntry &asset, Entry &entry)
 {
-  // Mesh hasn't been built yet (or the asset has no geometry): can't render
-  // anything meaningful. Caller falls back to the glyph until a later frame
-  // when the mesh is ready.
-  if (!asset.mesh3D || !asset.mesh3D->isLoaded()) return false;
+  // No geometry to render at all: bail. Caller falls back to the glyph.
+  if (!asset.mesh3D) return false;
 
   if (!entry.viewport) {
     entry.viewport = std::make_unique<AssetPreviewViewport>();
@@ -114,26 +112,27 @@ bool Editor::ModelThumbnailCache::renderAndPersist(
     entry.boundMeshRaw = meshRaw;
   }
 
+  // Renders that hit a not-yet-uploaded mesh are warmups: AssetPreviewViewport's
+  // onRenderPass kicks off the GPU upload via a one-time copy pass that runs
+  // at the start of the NEXT frame. The render this frame draws with garbage
+  // GPU vertex state. Don't mark the entry as rendered or persist anything;
+  // the cache will re-enter renderAndPersist next frame when isLoaded() is
+  // true and the upload has actually happened.
+  bool wasLoaded = asset.mesh3D->isLoaded();
+
   ImVec2 renderSize{(float)THUMB_PERSIST_PX, (float)THUMB_PERSIST_PX};
   entry.viewport->renderHeadless(renderSize);
-  if (!entry.viewport->getTexture()) return false;
+  if (!entry.viewport->getTexture()) return wasLoaded ? false : true;
+
+  if (!wasLoaded) return true; // budget consumed; warmup only
 
   entry.dirty = false;
   entry.everRendered = true;
-
-  std::vector<uint8_t> rgba{};
-  uint32_t w = 0, h = 0;
-  if (entry.viewport->readPixels(rgba, w, h)) {
-    auto pngPath = thumbPath(asset.getUUID());
-    if (!pngPath.empty()) {
-      if (!savePngFromBytes(pngPath, rgba, w, h)) {
-        Utils::Logger::log(
-          "ModelThumbnailCache: IMG_SavePNG failed for " + pngPath.string(),
-          Utils::Logger::LEVEL_WARN
-        );
-      }
-    }
-  }
+  // Defer the readPixels+save by one frame. readPixels here would capture
+  // the framebuffer BEFORE this frame's queued render pass executes (UI
+  // build happens before GPU passes), so the saved PNG would be one frame
+  // stale — empty for first touches.
+  entry.persistDeferred = true;
   return true;
 }
 
@@ -148,6 +147,24 @@ SDL_GPUTexture* Editor::ModelThumbnailCache::fetch(
     it = entries.emplace(uuid, std::move(ent)).first;
   }
   auto &entry = *it->second;
+
+  // Pending persist from the previous frame: by now the queued render has
+  // executed and the framebuffer holds the actual content, so readPixels
+  // sees the rendered mesh rather than the pre-render clear.
+  if (entry.persistDeferred && entry.viewport) {
+    std::vector<uint8_t> rgba{};
+    uint32_t w = 0, h = 0;
+    if (entry.viewport->readPixels(rgba, w, h)) {
+      auto pngPath = thumbPath(uuid);
+      if (!pngPath.empty() && !savePngFromBytes(pngPath, rgba, w, h)) {
+        Utils::Logger::log(
+          "ModelThumbnailCache: IMG_SavePNG failed for " + pngPath.string(),
+          Utils::Logger::LEVEL_WARN
+        );
+      }
+    }
+    entry.persistDeferred = false;
+  }
 
   bool needRender = entry.dirty || (!entry.everRendered && !entry.loadedTex);
   if (needRender && rendersThisFrame < MAX_PER_FRAME) {

@@ -64,5 +64,14 @@ namespace Editor
       // Read the most-recent render back to RGBA8 bytes for persisting to
       // disk. Returns false if no render has happened yet.
       bool readPixels(std::vector<uint8_t> &out, uint32_t &outW, uint32_t &outH);
+
+      // True once the host cube's GPU vertex data has actually been uploaded
+      // (i.e., a previous frame's copy pass has run). renderAndPersist callers
+      // should gate first-render-is-good logic on this — a render kicked off
+      // before this returns true will draw with un-uploaded vertex state and
+      // produce an empty framebuffer.
+      bool isHostUploaded() const {
+        return hostLoaded && hostMesh && hostMesh->isLoaded();
+      }
   };
 }

@@ -39,6 +39,10 @@ namespace Editor
         std::unique_ptr<Renderer::Texture> loadedTex{};
         bool dirty{true};
         bool everRendered{false};
+        // True after a render was queued whose framebuffer should be read
+        // back and persisted on the NEXT fetch — gives the queued GPU
+        // render time to actually run before readPixels samples the FB.
+        bool persistDeferred{false};
         // Once the live viewport has been bound to a mesh, remember whose
         // mesh raw-pointer we used so we can re-bind if the asset reloads
         // and the underlying N64Mesh handle changes.
