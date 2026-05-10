@@ -102,6 +102,22 @@ bool Build::buildProject(const std::string &configPath, bool runMake)
 {
   Project::Project project{configPath};
   auto path = project.getPath();
+
+  // Component lifecycle code (scene reload below, per-component init paths)
+  // dereferences ctx.project->getScenes().getLoadedScene() for things like
+  // viewport-size fallbacks and renderPipeline lookup. The GUI path already
+  // sets ctx.project to its loaded Project before invoking us, but the CLI
+  // build dispatch in cli.cpp does not; without this guard --cmd build
+  // segfaults the moment a scene with such a component reloads. Only swap
+  // when no Project is currently bound so the GUI's main-thread reads of
+  // ctx.project aren't disturbed by background-thread builds.
+  Project::Project *prevProject = ctx.project;
+  if (!ctx.project) ctx.project = &project;
+  struct CtxProjectRestore {
+    Project::Project *prev;
+    ~CtxProjectRestore() { ctx.project = prev; }
+  } ctxRestore{prevProject};
+
   // Reset structured graph diagnostics. The Compile Errors panel reads this
   // list and auto-focuses when its revision counter changes, so clearing here
   // also closes the panel from any previous build.
