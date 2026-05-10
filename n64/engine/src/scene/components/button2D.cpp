@@ -80,7 +80,7 @@ namespace P64::Comp
       WidgetFocus::focusNext();
     } else if (pressed.a) {
       data->isPressed = 1;
-      Scene::getCurrent().sendEvent(obj.id, obj.id, data->eventType, 0);
+      SceneManager::getCurrent().sendEvent(obj.id, obj.id, data->eventType, 0);
     }
   }
 
