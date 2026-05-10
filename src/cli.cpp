@@ -73,6 +73,13 @@ CLI::Result CLI::run(int argc, char** argv)
 
   auto cmd = prog.get<std::string>("--cmd");
 
+  // Make every CLI write hit the OS immediately. Default Windows stdio is
+  // fully-buffered when the handle isn't a console (e.g. `> file` redirect),
+  // which means a crash mid-build loses every queued log line and leaves the
+  // user with a 0-byte log file. Diagnostics first, performance second.
+  setvbuf(stdout, nullptr, _IONBF, 0);
+  setvbuf(stderr, nullptr, _IONBF, 0);
+
   Utils::Logger::setOutput([](const std::string &msg) {
     fputs(msg.c_str(), stdout);
   });
