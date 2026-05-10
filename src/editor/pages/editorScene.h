@@ -189,6 +189,11 @@ namespace Editor
       void openResourceTypeEditor(uint64_t assetUUID);
       void openResourceInstanceEditor(uint64_t assetUUID);
 
+      // Open the standalone NODE_GRAPH editor for the given asset. Idempotent
+      // — re-opens focus the existing window rather than spawning a duplicate
+      // tab. Same lifecycle pattern as the prefab/material editors above.
+      void openNodeGraphEditor(uint64_t assetUUID);
+
       // Material thumbnail cache accessor — used by MaterialEditor::save()
       // to invalidate a saved material's thumbnail and by AssetsBrowser to
       // fetch / display them.

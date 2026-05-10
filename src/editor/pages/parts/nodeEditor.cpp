@@ -117,7 +117,15 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   if(!isInit)
   {
     isInit = true;
-    ImGui::SetNextWindowSize({800,600}, ImGuiCond_Once);
+    auto *mvp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowSize({800,600}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(
+      {
+        mvp->Pos.x + (mvp->Size.x - 800.0f) * 0.5f,
+        mvp->Pos.y + (mvp->Size.y - 600.0f) * 0.5f,
+      },
+      ImGuiCond_FirstUseEver
+    );
   }
 
   // Dock as a sibling tab of Scene Editor on first open. Stable ###suffix
@@ -125,17 +133,12 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   // legacy imgui.ini entries that had no ### at all.
   Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
 
-  auto *mvp = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(
-    {
-      mvp->Pos.x + (mvp->Size.x - 800.0f) * 0.5f,
-      mvp->Pos.y + (mvp->Size.y - 600.0f) * 0.5f,
-    },
-    ImGuiCond_FirstUseEver
-  );
-
   uint64_t uuid = currentAsset ? currentAsset->getUUID() : 0;
-  std::string winName = name + "###NodeEditorWin_" + std::to_string(uuid);
+  // Title mirrors PrefabEventGraphEditor: graph icon prefix + dirty
+  // indicator. Unsaved-document flag below puts the standard ImGui dot in
+  // the close-button slot.
+  std::string title = std::string{ICON_MDI_GRAPH " "} + name + (dirty ? " *" : "");
+  std::string winName = title + "###NodeEditorWin_" + std::to_string(uuid);
 
   if(forceFocusNextFrame) {
     ImGui::SetNextWindowFocus();
@@ -143,9 +146,16 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   }
 
   bool isOpen = true;
-  ImGui::Begin(winName.c_str(), &isOpen, ImGuiWindowFlags_NoCollapse);
+  ImGui::Begin(winName.c_str(), &isOpen,
+    ImGuiWindowFlags_NoCollapse
+    | (dirty ? ImGuiWindowFlags_UnsavedDocument : 0));
 
-  // Compile toolbar — Unreal-Blueprint-style "validate this graph now" button.
+  // Toolbar — Save lives here so the user doesn't have to rely on Ctrl+S
+  // alone, matching the prefab event graph editor's UX.
+  if(ImGui::Button(ICON_MDI_CONTENT_SAVE " Save")) save();
+  ImGui::SameLine();
+
+  // Compile button — Unreal-Blueprint-style "validate this graph now".
   // Clears just this asset's diagnostics so unrelated errors from a prior
   // full build (or other open graphs) survive, then re-runs Graph::validate
   // against the live in-editor graph. The CompileErrorsWindow auto-pops on
@@ -172,7 +182,15 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
         errsThisAsset, errsThisAsset == 1 ? "" : "s");
       ImGui::PopStyleColor();
     }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s)", currentAsset->path.c_str());
     ImGui::Separator();
+  }
+
+  // Ctrl+S → save while focused on this graph window.
+  if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+    ImGuiIO &io = ImGui::GetIO();
+    if(io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save();
   }
 
   ImVec2 canvasMin  = ImGui::GetCursorScreenPos();

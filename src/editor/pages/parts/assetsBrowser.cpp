@@ -81,8 +81,8 @@ namespace
       case FileType::FONT:              return IM_COL32(0xFF, 0xE6, 0x3C, 0xFF); // yellow
       case FileType::MATERIAL:          return IM_COL32(0x32, 0xC8, 0x46, 0xFF); // green
       case FileType::CODE_OBJ:
-      case FileType::CODE_GLOBAL:
-      case FileType::NODE_GRAPH:        return IM_COL32(0x96, 0x96, 0x96, 0xFF); // grey
+      case FileType::CODE_GLOBAL:       return IM_COL32(0x96, 0x96, 0x96, 0xFF); // grey
+      case FileType::NODE_GRAPH:        return IM_COL32(0x14, 0xC8, 0xC8, 0xFF); // teal
       default:                          return IM_COL32(0x6E, 0x6E, 0x6E, 0xFF); // fallback grey
     }
   }
@@ -1751,6 +1751,9 @@ void Editor::AssetsBrowser::draw() {
           handled = true;
         } else if (asset.type == FileType::RESOURCE_INSTANCE) {
           ctx.editorScene->openResourceInstanceEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::NODE_GRAPH) {
+          ctx.editorScene->openNodeGraphEditor(asset.getUUID());
           handled = true;
         }
       }

@@ -48,14 +48,13 @@ Editor::Scene::Scene()
 {
   Editor::Actions::registerAction(Editor::Actions::Type::OPEN_NODE_GRAPH, [this](const std::string& asset)
   {
-    printf("OPEN_NODE_GRAPH action called with asset: %s\n", asset.c_str());
     if(!ctx.project)return false;
-    auto assetEntry = ctx.project->getAssets().getEntryByUUID(std::stoull(asset));
-    if(assetEntry) {
-      nodeEditors.push_back(std::make_unique<NodeEditor>(assetEntry->getUUID()));
-      return true;
-    }
-    return false;
+    uint64_t uuid{};
+    try { uuid = std::stoull(asset); } catch (...) { return false; }
+    auto assetEntry = ctx.project->getAssets().getEntryByUUID(uuid);
+    if(!assetEntry) return false;
+    openNodeGraphEditor(uuid);
+    return true;
   });
   needsSanityCheck = true;
 
@@ -217,6 +216,22 @@ void Editor::Scene::openCodeEditorByPath(const std::string &absolutePath, ImGuiI
   auto editor = std::make_shared<CodeEditor>(synthUUID, absolutePath);
   if (dockTarget) editor->setFirstDockTarget(dockTarget);
   codeEditors[synthUUID] = std::move(editor);
+}
+
+void Editor::Scene::openNodeGraphEditor(uint64_t assetUUID)
+{
+  auto matches = [&](const std::shared_ptr<NodeEditor> &ed) {
+    return ed && ed->getAssetUUID() == assetUUID;
+  };
+  auto it = std::find_if(nodeEditors.begin(), nodeEditors.end(), matches);
+  if (it != nodeEditors.end()) {
+    (*it)->focus();
+    return;
+  }
+  if (!ctx.project) return;
+  auto *entry = ctx.project->getAssets().getEntryByUUID(assetUUID);
+  if (!entry) return;
+  nodeEditors.push_back(std::make_shared<NodeEditor>(assetUUID));
 }
 
 void Editor::Scene::openPrefabEditor(uint64_t assetUUID)
