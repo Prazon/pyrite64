@@ -51,7 +51,7 @@ namespace Editor
       // the auto-frame distance; minZoomFrac / maxZoomFrac are the dolly
       // bounds. A zero zoom-frac disables that side of the clamp (model
       // previews want free zoom; material previews override these).
-      float     frameMargin{2.4f};
+      float     frameMargin{1.5f};
       float     minZoomFrac{0.0f};
       float     maxZoomFrac{0.0f};
 

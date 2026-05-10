@@ -60,6 +60,15 @@ void Editor::AssetPreviewViewport::setMesh(uint64_t assetUUID,
   } else {
     renderObj.removeMesh();
   }
+
+  // Default to an isometric-ish 3/4 view so a fresh preview reads as a
+  // sculpted shape rather than a flat silhouette. The user can orbit from
+  // here; subsequent reframes (resize, mesh swap) preserve the rotation
+  // unless the binding actually changes.
+  glm::quat yaw   = glm::angleAxis(glm::radians( 35.0f), glm::vec3(0, 1, 0));
+  glm::quat pitch = glm::angleAxis(glm::radians(-25.0f), glm::vec3(1, 0, 0));
+  camera.rot     = yaw * pitch;
+  camera.rotBase = camera.rot;
 }
 
 void Editor::AssetPreviewViewport::clear()
