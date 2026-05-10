@@ -65,6 +65,13 @@ bool Editor::ModelThumbnailCache::tryLoadFromDisk(uint64_t uuid, Entry &entry)
   if (!fs::exists(pngPath, ec)) return false;
   if (!ctx.gpu) return false;
 
+  // Reject suspiciously small PNGs as stale. The pre-fix render path could
+  // save a 128x128 PNG of the framebuffer's clear color (~143 bytes); a real
+  // thumbnail decompresses to at least a few KB. Rendering one extra frame
+  // costs a frame; serving a blank from cache would never self-heal because
+  // isCacheStale only triggers when the source asset's mtime advances.
+  if (fs::file_size(pngPath, ec) < 512) return false;
+
   // Staleness check defers to the asset entry; caller only invokes this on
   // first touch, so we look up the entry here rather than threading it in.
   if (ctx.project) {
