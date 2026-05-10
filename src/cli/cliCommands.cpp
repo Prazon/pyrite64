@@ -386,19 +386,22 @@ namespace
     return -1;
   }
 
-  // Build, mutate, save lifecycle. The CLI always works on a fresh Scene
-  // instance rather than driving SceneManager::loadedScene so we never
-  // disturb editor state (selection, undo history) and so concurrent CLI
-  // invocations don't collide.
-  std::shared_ptr<Project::Scene> openScene(Project::Project &project, int id)
+  // Build, mutate, save lifecycle. We route through SceneManager::loadScene
+  // (rather than just constructing a free Scene) because some component
+  // init paths reach into ctx.project->getScenes().getLoadedScene() — Camera
+  // pulls fbWidth/fbHeight from it, AnimModel and Model read renderPipeline
+  // and layers3D, etc. In CLI mode there is no GUI loader to populate that,
+  // so we set it explicitly. UndoRedo and mainSelection clears triggered by
+  // loadScene are pure data clears and harmless when no GUI is running.
+  Project::Scene *openScene(Project::Project &project, int id)
   {
-    auto scene = std::make_shared<Project::Scene>(id, project.getPath());
-    return scene;
+    project.getScenes().loadScene(id);
+    return project.getScenes().getLoadedScene();
   }
 
-  void saveScene(Project::Project &project, Project::Scene &scene)
+  void saveScene(Project::Project &project, Project::Scene & /*unused*/)
   {
-    scene.save();
+    project.getScenes().save();
     project.getScenes().reload();
   }
 
