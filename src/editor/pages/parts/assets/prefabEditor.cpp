@@ -186,6 +186,7 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   // Dock as a sibling tab of "Scene Editor" in the outer top region on
   // first open — so focusing this editor swaps the upper area instead of
   // squeezing into the same panel as the 3D-Viewport.
+  bool isFirstDockFrame = firstDockFrame;
   Editor::setupAssetEditorDocking(defDockId, firstDockFrame);
 
   auto *mvp = ImGui::GetMainViewport();
@@ -197,7 +198,11 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
     },
     ImGuiCond_FirstUseEver
   );
-  if (forceFocusNextFrame) {
+  // Focus runs the frame AFTER docking settles. Combining SetNextWindowDockID
+  // (Always) with SetNextWindowFocus on the same frame loses the focus to the
+  // dock operation, leaving the new tab opened-but-unselected behind Scene
+  // Editor.
+  if (forceFocusNextFrame && !isFirstDockFrame) {
     ImGui::SetNextWindowFocus();
     forceFocusNextFrame = false;
   }
@@ -230,7 +235,11 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   // default UE-style layout; afterwards ImGui's own .ini persistence keeps
   // user rearrangements stuck.
   const std::string uuidStr = std::to_string(assetUUID);
-  const std::string dockId = "PrefabDock_" + uuidStr;
+  // V2 bump: when the Asset tab was added, returning users with an existing
+  // PrefabDock_<uuid> kept their old layout and the Asset window had no
+  // DockId, leaving it floating. Forcing a fresh build under PrefabDockV2
+  // re-seats every panel including Asset.
+  const std::string dockId = "PrefabDockV2_" + uuidStr;
   ImGuiID dockspaceID = ImGui::GetID(dockId.c_str());
   bool firstBuild = (ImGui::DockBuilderGetNode(dockspaceID) == nullptr);
   ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), 0);
