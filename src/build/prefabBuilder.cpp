@@ -247,7 +247,9 @@ namespace
     cpp += "#include \"prefabVars.h\"\n";
     cpp += "#include <scene/object.h>\n";
     cpp += "#include <cstdint>\n";
-    cpp += "#include <math.h>\n\n";
+    cpp += "#include <math.h>\n";
+    cpp += "#include <string>\n";
+    cpp += "#include <cstdio>\n\n";
 
     // Surface the user-namespace headers for every prefab that has a user
     // .h on disk — needed so PrefabFunc-emitted calls into User::<X>::*

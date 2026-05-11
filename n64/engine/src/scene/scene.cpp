@@ -71,6 +71,16 @@ P64::Scene::Scene(uint16_t sceneId, Scene** ref)
   Debug::init();
   Debug::Overlay::init();
 
+  // Seed the C RNG once at scene boot so RandomFloat / RandomInt graph
+  // nodes don't re-seed every frame and the Pixic test runs are at
+  // least reproducible per-boot. get_ticks() is a libdragon counter
+  // that's monotonic across the boot path; suitable as a seed.
+  static bool s_rngSeeded = false;
+  if (!s_rngSeeded) {
+    srand((unsigned)get_ticks());
+    s_rngSeeded = true;
+  }
+
   loadSceneConfig();
   P64::AudioManager::init(conf.audioFreq);
 

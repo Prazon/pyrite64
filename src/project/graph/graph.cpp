@@ -54,6 +54,14 @@
 #include "nodes/nodeCmpLe.h"
 #include "nodes/nodeCmpGt.h"
 #include "nodes/nodeCmpGe.h"
+#include "nodes/nodeRandomFloat.h"
+#include "nodes/nodeRandomInt.h"
+#include "nodes/nodeStringConst.h"
+#include "nodes/nodeStringConcat.h"
+#include "nodes/nodeToString.h"
+#include "nodes/nodeStringLength.h"
+#include "nodes/nodeSubstring.h"
+#include "nodes/nodeStringFormat.h"
 
 namespace Project::Graph::Node
 {
@@ -169,6 +177,14 @@ namespace Project::Graph
     TABLE_ENTRY(CmpLe),           // 40
     TABLE_ENTRY(CmpGt),           // 41
     TABLE_ENTRY(CmpGe),           // 42
+    TABLE_ENTRY(RandomFloat),     // 43
+    TABLE_ENTRY(RandomInt),       // 44
+    TABLE_ENTRY(StringConst),     // 45
+    TABLE_ENTRY(StringConcat),    // 46
+    TABLE_ENTRY(ToString),        // 47
+    TABLE_ENTRY(StringLength),    // 48
+    TABLE_ENTRY(Substring),       // 49
+    TABLE_ENTRY(StringFormat),    // 50
   });
 
   const std::vector<std::string> & Graph::getNodeNames()
@@ -194,6 +210,9 @@ namespace Project::Graph
     using ::Project::Graph::PinDataType;
     constexpr TypeMask EXEC  = TypeMask{1u} << static_cast<uint32_t>(PinDataType::Exec);
     constexpr TypeMask FLOAT = TypeMask{1u} << static_cast<uint32_t>(PinDataType::Float);
+    constexpr TypeMask INT   = TypeMask{1u} << static_cast<uint32_t>(PinDataType::Int);
+    constexpr TypeMask BOOL  = TypeMask{1u} << static_cast<uint32_t>(PinDataType::Bool);
+    constexpr TypeMask STR   = TypeMask{1u} << static_cast<uint32_t>(PinDataType::String);
 
     static const Entry table[] = {
       // typeIndex, name,                                                 category,         inTypes,       outTypes
@@ -240,6 +259,14 @@ namespace Project::Graph
       { 40, Node::CmpLe::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
       { 41, Node::CmpGt::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
       { 42, Node::CmpGe::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
+      { 43, Node::RandomFloat::NAME,   "Random",       EXEC | FLOAT, EXEC | FLOAT  },
+      { 44, Node::RandomInt::NAME,     "Random",       EXEC | INT,   EXEC | INT    },
+      { 45, Node::StringConst::NAME,   "String",       0,            STR           },
+      { 46, Node::StringConcat::NAME,  "String",       EXEC | STR,   EXEC | STR    },
+      { 47, Node::ToString::NAME,      "String",       EXEC | FLOAT, EXEC | STR    },
+      { 48, Node::StringLength::NAME,  "String",       EXEC | STR,   EXEC | INT    },
+      { 49, Node::Substring::NAME,     "String",       EXEC | STR | INT, EXEC | STR },
+      { 50, Node::StringFormat::NAME,  "String",       EXEC | STR,   EXEC | STR    },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Palette entries out of sync with NODE_TABLE");
@@ -537,6 +564,8 @@ namespace Project::Graph
     source += R"(#include <scene/object.h>)" "\n";
     source += R"(#include <scene/scene.h>)" "\n";
     source += R"(#include <math.h>)" "\n";   // Group A math nodes use fmodf/sqrtf/fabsf/etc.
+    source += R"(#include <string>)" "\n";   // Group C string nodes use std::string
+    source += R"(#include <cstdio>)" "\n";   // StringFormat uses snprintf
     source += "\n";
 
     source += "namespace P64::NodeGraph::G" + Utils::toHex64(uuid) + " {\n";
