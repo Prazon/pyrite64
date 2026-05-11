@@ -20,6 +20,7 @@
 #include "../../../../project/materialGraph/graph.h"
 #include "matPreviewViewport.h"
 #include "../../../graphMinimap.h"
+#include "../../../marqueeSelect.h"
 
 namespace Editor
 {
@@ -62,6 +63,9 @@ namespace Editor
 
       // Minimap drag state.
       Editor::GraphMinimap::State minimap{};
+
+      // Marquee box-select state.
+      Editor::MarqueeSelect::State marquee{};
 
     public:
       explicit MaterialEditor(uint64_t materialAssetUUID);

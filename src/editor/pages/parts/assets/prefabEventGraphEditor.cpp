@@ -22,6 +22,7 @@
 #include "../../../nodeFinder.h"
 #include "../../../graphMinimap.h"
 #include "../../../rerouteHandler.h"
+#include "../../../marqueeSelect.h"
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
 #include "../../../../project/graph/nodes/nodePrefabFunc.h"
 #include "../../../../project/graph/nodes/nodePrefabVarGet.h"
@@ -351,6 +352,10 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
 
   // Reroute insertion on double-click of an exec wire.
   Editor::RerouteHandler::handle(graph);
+
+  // Marquee box-select.
+  Editor::MarqueeSelect::apply<Project::Graph::Graph,
+                               Project::Graph::Node::Base>(graph, marquee);
 
   // Bottom-right minimap.
   Editor::GraphMinimap::draw<Project::Graph::Graph,

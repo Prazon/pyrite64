@@ -26,6 +26,7 @@
 #include "../../nodeFinder.h"
 #include "../../graphMinimap.h"
 #include "../../rerouteHandler.h"
+#include "../../marqueeSelect.h"
 
 namespace
 {
@@ -299,6 +300,10 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   // routing knot. No-op when the user double-clicks on empty space or
   // on a non-exec wire.
   Editor::RerouteHandler::handle(graph);
+
+  // Marquee box-select: LMB drag on empty grid space.
+  Editor::MarqueeSelect::apply<Project::Graph::Graph,
+                               Project::Graph::Node::Base>(graph, marquee);
 
   // Bottom-right minimap overlay. Drawn after update() so node
   // positions and selection state are current; sits on the foreground

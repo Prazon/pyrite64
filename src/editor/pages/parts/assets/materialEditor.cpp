@@ -20,6 +20,7 @@
 #include "../../../nodeClipboard.h"
 #include "../../../graphHotkeys.h"
 #include "../../../graphMinimap.h"
+#include "../../../marqueeSelect.h"
 #include "../../../imgui/helper.h"
 #include "../assetInspector.h"
 #include "../../editorScene.h"
@@ -312,6 +313,10 @@ bool Editor::MaterialEditor::draw(ImGuiID defDockId)
       graph, canvasSize, &Editor::NodeClipboard::materialGraph());
   }
   graph.graph.update();
+
+  // Marquee box-select on empty grid space.
+  Editor::MarqueeSelect::apply<Project::MaterialGraph::Graph,
+                               Project::MaterialGraph::Node::Base>(graph, marquee);
 
   // Bottom-right minimap.
   Editor::GraphMinimap::draw<Project::MaterialGraph::Graph,

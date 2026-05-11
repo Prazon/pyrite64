@@ -296,6 +296,7 @@ add_executable(pyrite64 src/main.cpp
         src/editor/graphMinimap.h
         src/editor/rerouteHandler.h
         src/editor/rerouteHandler.cpp
+        src/editor/marqueeSelect.h
         src/project/compile/compileErrors.h
         src/project/compile/compileErrors.cpp
         src/build/nodeGraphBuilder.cpp
