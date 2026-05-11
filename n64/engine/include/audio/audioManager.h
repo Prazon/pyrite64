@@ -38,6 +38,14 @@ namespace P64::Audio
       void setVolume(float volume);
       void setSpeed(float speed);
       bool isDone();
+
+      // Linearly ramp this handle's volume from its current value to
+      // `targetVolume` over `durationMs`. If stopAtEnd is true the audio
+      // is stopped when the ramp completes -- useful for fade-out-and-
+      // free transitions. Calling fadeTo on a handle that's already
+      // fading replaces the in-flight ramp from the current interpolated
+      // value, so cross-fading just calls fadeTo on both old + new.
+      void fadeTo(float targetVolume, uint32_t durationMs, bool stopAtEnd = false);
   };
 }
 

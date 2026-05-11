@@ -25,6 +25,13 @@ namespace
     float speed{1.0f};
     uint16_t uuid{0};
     uint8_t isXM{0}; // (turn into flags once more settings are needed)
+    uint8_t fading{0};
+    uint8_t fadeStopAtEnd{0};
+    uint8_t _pad{0};
+    float fadeFromVol{0.0f};
+    float fadeTargetVol{0.0f};
+    uint32_t fadeStartTicks{0};
+    uint32_t fadeDurationTicks{0};
 
     [[nodiscard]] bool hasAudio() const { return audioWAV != nullptr || audioXM != nullptr; }
     void clear() { *this = Slot{}; }
@@ -102,6 +109,32 @@ namespace P64::AudioManager
 
       if(isPlaying)
       {
+        // Apply any in-flight volume ramp first so the updated slot.volume
+        // is what gets pushed to the mixer below.
+        auto &slot = slots[i];
+        if (slot.fading) {
+          uint32_t now = (uint32_t)get_ticks();
+          uint32_t elapsed = now - slot.fadeStartTicks;
+          if (slot.fadeDurationTicks == 0 || elapsed >= slot.fadeDurationTicks) {
+            slot.volume = slot.fadeTargetVol;
+            bool stopAtEnd = slot.fadeStopAtEnd != 0;
+            slot.fading = 0;
+            slot.fadeStopAtEnd = 0;
+            if (stopAtEnd) {
+              uint16_t uuid = slot.uuid;
+              if (slot.isXM) {
+                xm64player_stop(slot.audioXM);
+                for(uint32_t k=i; k<CHANNEL_COUNT && slots[k].uuid == uuid; ++k) slots[k].clear();
+              } else {
+                mixer_ch_stop((int)i);
+              }
+              continue;
+            }
+          } else {
+            float t = (float)elapsed / (float)slot.fadeDurationTicks;
+            slot.volume = slot.fadeFromVol + (slot.fadeTargetVol - slot.fadeFromVol) * t;
+          }
+        }
         // apply master volume (@TODO: implement and handle 3D sound / panning)
         updateVolume(i);
         uint16_t uuid = slots[i].uuid;
@@ -224,6 +257,23 @@ void P64::Audio::Handle::setSpeed(float speed)
   entry->speed = speed;
   float freq = entry->audioWAV->wave.frequency * speed;
   mixer_ch_set_freq(slot, freq);
+}
+
+void P64::Audio::Handle::fadeTo(float targetVolume, uint32_t durationMs, bool stopAtEnd)
+{
+  auto entry = &slots[slot];
+  if(entry->uuid != uuid) return;
+  // Snapshot the current (possibly mid-fade) volume as the new from.
+  entry->fadeFromVol       = entry->volume;
+  entry->fadeTargetVol     = targetVolume;
+  entry->fadeStartTicks    = (uint32_t)get_ticks();
+  entry->fadeDurationTicks = TICKS_FROM_MS(durationMs);
+  entry->fadeStopAtEnd     = stopAtEnd ? 1 : 0;
+  entry->fading            = 1;
+  if (durationMs == 0) {
+    // Snap immediately; update() will finalize on its next tick.
+    entry->volume = targetVolume;
+  }
 }
 
 bool P64::Audio::Handle::isDone() {
