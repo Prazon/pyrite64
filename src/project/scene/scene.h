@@ -36,6 +36,11 @@ namespace Project
     PROP_BOOL(doClearColor);
     PROP_BOOL(doClearDepth);
     PROP_S32(renderPipeline);
+    // 0 = Mode3D (default, runs full 3D pass with optional 2D overlay),
+    // 1 = Mode2D (skips the 3D pass entirely; pure-2D scenes only walk
+    // RENDER_LAYER_2D objects). Persisted as a single byte at engine load
+    // time, defaulting to 0 so existing scenes are unaffected.
+    PROP_S32(renderMode);
     PROP_S32(frameLimit);
     PROP_S32(filter);
     PROP_S32(audioFreq);

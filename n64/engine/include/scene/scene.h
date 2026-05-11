@@ -52,10 +52,21 @@ namespace P64
     color_t clearColor{};
     uint32_t objectCount{};
 
+    // Mode3D (default): full 3D pass walks objects + camera projection, then
+    // a 2D overlay pass walks RENDER_LAYER_2D objects in screen space.
+    // Mode2D: skip the 3D pass entirely; only the 2D walk runs. Cuts per-
+    // frame fixed cost (t3d_frame_start, camera setup, depth pre-pass)
+    // for pure-2D scenes (Pixic and similar).
+    enum class RenderMode : uint8_t
+    {
+      MODE_3D = 0,
+      MODE_2D = 1,
+    };
+
     Pipeline pipeline{};
     uint8_t frameSkip{};
     uint8_t filter{};
-    uint8_t padding[1]{};
+    uint8_t renderMode{};   // RenderMode; was padding[1]. 0 = MODE_3D.
 
     uint16_t audioFreq{};
     uint16_t physicsTickRate{};
