@@ -36,7 +36,8 @@ namespace Project::Graph::Node
         if (ctx.inValUUIDs && ctx.inValUUIDs->size() >= 2) {
           auto a = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
           auto v = MathHelpers::resOrZero(ctx.inValUUIDs->at(1));
-          ctx.line("(" + a + ").push_back((float)(" + v + "));");
+          ctx.line("(" + a + ").push_back("
+                   "(typename std::remove_reference_t<decltype(" + a + ")>::value_type)(" + v + "));");
         }
       }
   };

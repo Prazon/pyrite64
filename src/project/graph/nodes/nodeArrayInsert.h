@@ -42,7 +42,8 @@ namespace Project::Graph::Node
           // needing the user to wire ArrayLength first.
           ctx.line("{ size_t t_i = (size_t)((int)(" + i + ")); "
                    "if (t_i > (" + a + ").size()) t_i = (" + a + ").size(); "
-                   "(" + a + ").insert((" + a + ").begin() + t_i, (float)(" + v + ")); }");
+                   "(" + a + ").insert((" + a + ").begin() + t_i, "
+                   "(typename std::remove_reference_t<decltype(" + a + ")>::value_type)(" + v + ")); }");
         }
       }
   };

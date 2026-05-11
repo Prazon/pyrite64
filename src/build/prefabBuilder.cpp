@@ -381,11 +381,65 @@ namespace
       nctx.insideLoopBody = savedFlag;
     };
 
-    // Walk every top-level node (loop bodies are inlined recursively).
-    // Populates nctx.source with NODE_<uuid> blocks and nctx.vars with
-    // every globalVar declared during build().
+    // Pure-eval pre-pass: nodes opted in via canBePure() with no
+    // incoming exec edge are emitted at function-top in topological-
+    // dependency order via buildAsPure(). Their globalVar inits
+    // inline the expression, so downstream consumers see a valid
+    // value without needing an explicit exec wire through the math.
+    // Mirrors graph.cpp's parallel pass.
+    std::unordered_set<uint64_t> emittedPure;
+    {
+      auto execStyle2 = ::Project::Graph::pinStyle(::Project::Graph::PinDataType::Exec).get();
+      std::unordered_set<uint64_t> hasIncomingExec;
+      for (const auto &weak : graph.graph.getLinks()) {
+        auto link = weak.lock();
+        if (!link) continue;
+        auto rightPin = link->right();
+        if (!rightPin) continue;
+        if (rightPin->getStyle().get() != execStyle2) continue;
+        auto rightNode = dynamic_cast<Project::Graph::Node::Base*>(rightPin->getParent());
+        if (rightNode) hasIncomingExec.insert(rightNode->uuid);
+      }
+
+      std::function<void(Project::Graph::Node::Base*)> emitPure;
+      emitPure = [&](Project::Graph::Node::Base *n) {
+        if (emittedPure.count(n->uuid)) return;
+        emittedPure.insert(n->uuid);
+        auto inIt = ingoingVals.find(n->uuid);
+        if (inIt != ingoingVals.end()) {
+          for (uint64_t inUUID : inIt->second) {
+            if (inUUID == 0) continue;
+            auto it = nodeMap.find(inUUID);
+            if (it == nodeMap.end()) continue;
+            auto* up = it->second;
+            if (up->canBePure() && !hasIncomingExec.count(up->uuid)) {
+              emitPure(up);
+            }
+          }
+        }
+        auto savedOut = nctx.outUUIDs;
+        auto savedIn  = nctx.inValUUIDs;
+        auto outIt = outgoing.find(n->uuid);
+        auto inIt2 = ingoingVals.find(n->uuid);
+        nctx.outUUIDs   = outIt != outgoing.end() ? &outIt->second : &emptyVec;
+        nctx.inValUUIDs = inIt2 != ingoingVals.end() ? &inIt2->second : &emptyVec;
+        n->buildAsPure(nctx);
+        nctx.outUUIDs   = savedOut;
+        nctx.inValUUIDs = savedIn;
+      };
+
+      for (auto* n : allNodes) {
+        if (!n->canBePure()) continue;
+        if (hasIncomingExec.count(n->uuid)) continue;
+        emitPure(n);
+      }
+    }
+
+    // Walk every top-level node (loop bodies are inlined recursively;
+    // pure-emitted nodes are skipped — they live entirely in vars).
     for (auto* n : allNodes) {
       if (loopOwner.count(n->uuid)) continue;
+      if (emittedPure.count(n->uuid)) continue;
       emitNode(n, false);
     }
 
@@ -422,7 +476,9 @@ namespace
     cpp += "#include <cstdint>\n";
     cpp += "#include <math.h>\n";
     cpp += "#include <string>\n";
-    cpp += "#include <cstdio>\n\n";
+    cpp += "#include <cstdio>\n";
+    cpp += "#include <vector>\n";
+    cpp += "#include <type_traits>\n\n"; // array element-kind inference via decltype
 
     // Surface the user-namespace headers for every prefab that has a user
     // .h on disk — needed so PrefabFunc-emitted calls into User::<X>::*

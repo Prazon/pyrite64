@@ -144,5 +144,17 @@ namespace Project::Graph::Node
       virtual bool isLoop() const { return false; }
       virtual void buildLoopHeader(BuildCtx &) {}
       virtual void buildLoopFooter(BuildCtx &ctx) { ctx.line("}"); }
+
+      // Pure-evaluation hook: when canBePure() returns true and the
+      // node has no incoming exec edge in the live graph, the build
+      // pass calls buildAsPure() at function-top in topological-
+      // dependency order instead of treating the node as an exec
+      // step. The default implementation delegates to build() so
+      // nodes that opt-in get the same emission unless they need a
+      // distinct init form (most math nodes inline the expression
+      // straight into the globalVar initializer to avoid the
+      // separate "res = ...;" line that build() would emit).
+      virtual bool canBePure() const { return false; }
+      virtual void buildAsPure(BuildCtx &ctx) { build(ctx); }
   };
 }

@@ -920,6 +920,7 @@ void Editor::PrefabEditor::drawVariableDetails()
     static const char* kindNames[] = {
       "Int", "Float", "Bool", "Vec3", "Quat",
       "Object Ref", "Prefab Ref", "Asset Ref",
+      "Array",
     };
     int kindIdx = static_cast<int>(v.kind);
     if (ImGui::Combo("##varkind", &kindIdx, kindNames, IM_ARRAYSIZE(kindNames))) {
@@ -935,6 +936,17 @@ void Editor::PrefabEditor::drawVariableDetails()
         case Project::PrefabVarKind::OBJECT_REF:
         case Project::PrefabVarKind::PREFAB_REF:
         case Project::PrefabVarKind::ASSET_REF:  v.defaultValue.set<uint64_t>(0); break;
+        case Project::PrefabVarKind::ARRAY:      v.typeArg = 1; break; // default element kind = Float
+      }
+    }
+
+    if (v.kind == Project::PrefabVarKind::ARRAY) {
+      ImTable::add("Element");
+      ImGui::SetNextItemWidth(-1);
+      static const char* elemNames[] = { "Int", "Float", "Bool" };
+      int elemIdx = std::min<int>(2, std::max<int>(0, static_cast<int>(v.typeArg)));
+      if (ImGui::Combo("##varelem", &elemIdx, elemNames, IM_ARRAYSIZE(elemNames))) {
+        v.typeArg = static_cast<uint16_t>(elemIdx);
       }
     }
 
@@ -994,6 +1006,7 @@ void Editor::PrefabEditor::drawVariableDetails()
       case Project::PrefabVarKind::OBJECT_REF: ImGui::TextDisabled("(null — set per instance)"); break;
       case Project::PrefabVarKind::PREFAB_REF: ImGui::TextDisabled("(null — set per instance)"); break;
       case Project::PrefabVarKind::ASSET_REF:  ImGui::TextDisabled("(asset ref - TODO)"); break;
+      case Project::PrefabVarKind::ARRAY:      ImGui::TextDisabled("(empty — populate via ArrayMake/Push at runtime)"); break;
     }
 
     ImTable::end();

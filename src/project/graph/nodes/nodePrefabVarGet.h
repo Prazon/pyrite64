@@ -3,6 +3,7 @@
 #include "baseNode.h"
 #include "../../../utils/hash.h"
 #include "../../../project/scene/prefab.h"
+#include "../../../project/prefabScaffolder.h"
 
 namespace Project::Graph::Node
 {
@@ -23,6 +24,11 @@ namespace Project::Graph::Node
       // when the host prefab is unavailable (standalone NodeEditor).
       std::string varName{};
       uint8_t varKind{0};
+      // Element kind for ARRAY-typed vars (mirrors PrefabVarKind: 0=Int,
+      // 1=Float, 2=Bool). Only consulted when varKind == 8 (ARRAY); the
+      // emitted std::vector<E> picks E from this. Synced from the prefab's
+      // PrefabVarDef.typeArg when the var is bound via the dropdown.
+      uint8_t elemKind{1};
 
       constexpr static const char* NAME = ICON_MDI_VARIABLE " Get Variable";
 
@@ -39,6 +45,7 @@ namespace Project::Graph::Node
           case 5: return PinDataType::Object;  // OBJECT_REF
           case 6: return PinDataType::Class;   // PREFAB_REF
           case 7: return PinDataType::Object;  // ASSET_REF
+          case 8: return PinDataType::Wildcard; // ARRAY (color matches array nodes)
         }
         return PinDataType::Wildcard;
       }
@@ -110,6 +117,9 @@ namespace Project::Graph::Node
                 varUUID = v.uuid;
                 varName = v.name;
                 varKind = static_cast<uint8_t>(v.kind);
+                // Sync elemKind from PrefabVarDef.typeArg so ARRAY codegen
+                // emits the right std::vector<E> without a second click.
+                elemKind = v.typeArg;
                 updateTitle();
               }
             }
@@ -118,18 +128,65 @@ namespace Project::Graph::Node
         } else {
           ImGui::TextDisabled("%s", varName.empty() ? "(no var)" : varName.c_str());
         }
+        // ARRAY-kind vars surface a small "(vector<E>)" hint so users
+        // can sanity-check the element type without opening the prefab
+        // variables panel. Kind 8 == ARRAY.
+        if (varKind == 8) {
+          const char* lbl = "?";
+          switch (elemKind) {
+            case 0: lbl = "int"; break;
+            case 1: lbl = "float"; break;
+            case 2: lbl = "bool"; break;
+          }
+          ImGui::SameLine();
+          ImGui::TextDisabled("(vector<%s>)", lbl);
+        }
+        // Tier 2 autofix: if the node references a variable uuid that
+        // the host prefab no longer defines (rename / delete on a
+        // saved graph), offer a one-click backfill. The new VarDef
+        // reuses the saved uuid so existing nodes stay bound and the
+        // generated POD struct picks the slot back up on the next
+        // build.
+        if (pctx.prefab && varUUID != 0) {
+          bool found = false;
+          for (const auto &v : pctx.prefab->variables) {
+            if (v.uuid == varUUID) { found = true; break; }
+          }
+          if (!found) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+              IM_COL32(0xC0, 0x70, 0x30, 0xFF));
+            if (ImGui::SmallButton("Create variable")) {
+              ::Project::PrefabScaffolder::UnknownVarRef ref;
+              ref.varName  = varName;
+              ref.varKind  = varKind;
+              ref.varUUID  = varUUID;
+              ref.nodeUUID = uuid;
+              // pctx.prefab is exposed as const* to discourage casual
+              // mutation from node draw paths; the autofix is an explicit
+              // user action so the cast is intentional.
+              auto *mutPrefab = const_cast<::Project::Prefab*>(pctx.prefab);
+              ::Project::PrefabScaffolder::autofixVariables(
+                *mutPrefab, {ref});
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::TextDisabled("(missing)");
+          }
+        }
       }
 
       void serialize(nlohmann::json &j) override {
         j["varUUID"] = varUUID;
         j["varName"] = varName;
         j["varKind"] = varKind;
+        j["elemKind"] = elemKind;
       }
 
       void deserialize(nlohmann::json &j) override {
         varUUID = j.value("varUUID", uint64_t{0});
         varName = j.value("varName", "");
         varKind = j.value("varKind", uint8_t{0});
+        elemKind = j.value("elemKind", uint8_t{1});
         updateTitle();
       }
 
@@ -148,16 +205,39 @@ namespace Project::Graph::Node
         return "int32_t";
       }
 
+      // Element-type C name for ARRAY kind. Matches ArrayMake's encoding:
+      // 0=int32_t, 1=float, 2=bool. Kept here so ARRAY codegen stays
+      // self-contained without a cross-include into nodeArrayMake.h.
+      static const char* arrayElemCType(uint8_t e) {
+        switch (e) {
+          case 0: return "int32_t";
+          case 1: return "float";
+          case 2: return "bool";
+        }
+        return "float";
+      }
+
       void build(BuildCtx &ctx) override {
         if (varUUID == 0) {
           ctx.line("/* PrefabVarGet: empty variable — skipped */");
           return;
         }
-        std::string localName = "v_" + Utils::toHex64(uuid);
-        std::string cType = kindToCType(varKind);
-        ctx.line(std::string{cType} + " " + localName
-                 + " = self->getPrefabVar<" + cType + ">("
-                 + std::to_string(varUUID) + "ull);");
+        std::string resVar = "res_" + Utils::toHex64(uuid);
+        if (varKind == 8) {
+          // ARRAY: getPrefabVarRef returns a pointer into the placement-
+          // new'd std::vector<E> in the object's var blob. Emit a
+          // reference (auto&) so downstream array nodes mutate the
+          // actual storage rather than a copy. Persists across OnTick
+          // dispatches because the storage lives on the Object.
+          std::string vecType = std::string{"std::vector<"} + arrayElemCType(elemKind) + ">";
+          ctx.line("auto& " + resVar + " = *self->getPrefabVarRef<" + vecType + ">("
+                   + std::to_string(varUUID) + "ull);");
+        } else {
+          std::string cType = kindToCType(varKind);
+          ctx.line(std::string{cType} + " " + resVar
+                   + " = self->getPrefabVar<" + cType + ">("
+                   + std::to_string(varUUID) + "ull);");
+        }
       }
   };
 }

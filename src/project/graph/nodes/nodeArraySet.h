@@ -43,7 +43,8 @@ namespace Project::Graph::Node
           auto i = MathHelpers::resOrZero(ctx.inValUUIDs->at(1));
           auto v = MathHelpers::resOrZero(ctx.inValUUIDs->at(2));
           ctx.line("{ size_t t_i = (size_t)((int)(" + i + ")); "
-                   "if (t_i < (" + a + ").size()) (" + a + ")[t_i] = (float)(" + v + "); }");
+                   "if (t_i < (" + a + ").size()) (" + a + ")[t_i] = "
+                   "(typename std::remove_reference_t<decltype(" + a + ")>::value_type)(" + v + "); }");
         }
       }
   };

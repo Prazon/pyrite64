@@ -32,16 +32,15 @@ namespace Project::Graph::Node
       void serialize(nlohmann::json &) override {}
       void deserialize(nlohmann::json &) override {}
 
-      void build(BuildCtx &ctx) override
-      {
-        auto resVar = "res_" + Utils::toHex64(uuid);
-        ctx.globalVar("int", resVar, 0);
-        if (ctx.inValUUIDs && ctx.inValUUIDs->size() >= 2) {
-          auto a = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
-          auto b = MathHelpers::resOrZero(ctx.inValUUIDs->at(1));
-          // Logical XOR via comparison so bool semantics survive non-{0,1} inputs.
-          ctx.line(resVar + " = ((" + a + ") != 0) != ((" + b + ") != 0);");
-        }
+      bool canBePure() const override { return true; }
+      void build(BuildCtx &ctx) override { emit(ctx, false); }
+      void buildAsPure(BuildCtx &ctx) override { emit(ctx, true); }
+    private:
+      void emit(BuildCtx &ctx, bool asPure) {
+        auto [a, b] = MathHelpers::resolveAB(ctx);
+        // Logical XOR via comparison so bool semantics survive non-{0,1} inputs.
+        std::string expr = "((" + a + ") != 0) != ((" + b + ") != 0)";
+        MathHelpers::emitInt(ctx, uuid, expr, asPure);
       }
   };
 }

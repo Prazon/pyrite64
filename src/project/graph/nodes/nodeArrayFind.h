@@ -44,7 +44,8 @@ namespace Project::Graph::Node
           auto v = MathHelpers::resOrZero(ctx.inValUUIDs->at(1));
           ctx.line(resVar + " = -1;");
           ctx.line("for (size_t t_i = 0; t_i < (" + a + ").size(); ++t_i) "
-                   "if ((" + a + ")[t_i] == (float)(" + v + ")) { "
+                   "if ((" + a + ")[t_i] == "
+                   "(typename std::remove_reference_t<decltype(" + a + ")>::value_type)(" + v + ")) { "
                    + resVar + " = (int)t_i; break; }");
         }
       }

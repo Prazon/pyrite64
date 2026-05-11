@@ -31,14 +31,13 @@ namespace Project::Graph::Node
       void serialize(nlohmann::json &) override {}
       void deserialize(nlohmann::json &) override {}
 
-      void build(BuildCtx &ctx) override
-      {
-        auto resVar = "res_" + Utils::toHex64(uuid);
-        ctx.globalVar("int", resVar, 0);
-        if (ctx.inValUUIDs && !ctx.inValUUIDs->empty()) {
-          auto a = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
-          ctx.line(resVar + " = !(" + a + ");");
-        }
+      bool canBePure() const override { return true; }
+      void build(BuildCtx &ctx) override { emit(ctx, false); }
+      void buildAsPure(BuildCtx &ctx) override { emit(ctx, true); }
+    private:
+      void emit(BuildCtx &ctx, bool asPure) {
+        auto a = MathHelpers::resolveA(ctx);
+        MathHelpers::emitInt(ctx, uuid, "!(" + a + ")", asPure);
       }
   };
 }

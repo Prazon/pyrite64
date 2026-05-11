@@ -41,8 +41,12 @@ namespace Project::Graph::Node
         if (ctx.inValUUIDs && ctx.inValUUIDs->size() >= 2) {
           auto a = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
           auto i = MathHelpers::resOrZero(ctx.inValUUIDs->at(1));
+          // Cast element to float so res_<uuid> stays the lingua-franca
+          // value type. Lossy for non-numeric element kinds (string,
+          // future structs); a typed-output ArrayGet is tracked in
+          // graph-gaps.md.
           ctx.line("{ size_t t_i = (size_t)((int)(" + i + ")); "
-                   + resVar + " = (t_i < (" + a + ").size()) ? (" + a + ")[t_i] : 0.0f; }");
+                   + resVar + " = (t_i < (" + a + ").size()) ? (float)((" + a + ")[t_i]) : 0.0f; }");
         }
       }
   };

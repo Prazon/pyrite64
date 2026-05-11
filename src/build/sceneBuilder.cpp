@@ -163,7 +163,13 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
 
       ctx.fileObj.write<uint64_t>(v.uuid);
       ctx.fileObj.write<uint8_t>(static_cast<uint8_t>(v.kind));
-      ctx.fileObj.write<uint8_t>(0);
+      // pad1 carries the ARRAY element kind so the runtime can placement-
+      // new the right std::vector<E> into the value slot once that path
+      // exists. Other kinds leave it 0; v1 runtime ignores the byte.
+      ctx.fileObj.write<uint8_t>(
+        v.kind == Project::PrefabVarKind::ARRAY
+          ? static_cast<uint8_t>(v.typeArg & 0xFF)
+          : uint8_t{0});
       ctx.fileObj.write<uint8_t>(0);
       ctx.fileObj.write<uint8_t>(0);
 

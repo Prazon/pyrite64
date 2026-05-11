@@ -26,6 +26,7 @@
 #include "../project/assets/resourceInstance.h"
 #include "../project/assets/resourceType.h"
 #include "../project/prefabFunctions.h"
+#include "../project/prefabScaffolder.h"
 #include "../project/graph/graph.h"
 #include "../project/materialGraph/graph.h"
 #include "../project/assets/materialAsset.h"
@@ -598,12 +599,22 @@ namespace
     prefab.obj.uuid = (uint32_t)Utils::Hash::randomU64();
     prefab.obj.scale.value = {1.0f, 1.0f, 1.0f};
     prefab.obj.rot.value = {0, 0, 0, 1};
+    // Scaffold default lifecycle: PrefabEvent + matching PrefabFunc nodes
+    // pre-wired, plus the OnReady/OnEnable/OnDisable P64_NODE stubs in
+    // src/user/<Prefab>.{h,cpp}. --no-scaffold opts out for callers that
+    // want a bare prefab.
+    if (!a.noScaffold) {
+      Project::PrefabScaffolder::seedDefaultsForNewPrefab(
+        project.getPath(), prefab, outPath.filename().string());
+    } else {
+      Project::ensurePrefabUserSource(project.getPath(), outPath.filename().string());
+    }
     Utils::FS::saveTextFile(outPath.string(), prefab.serialize());
-    Project::ensurePrefabUserSource(project.getPath(), outPath.filename().string());
     project.getAssets().reload();
     auto *e = project.getAssets().getByPath(outPath.string());
     nlohmann::json out;
     out["created"] = outPath.string();
+    out["scaffolded"] = !a.noScaffold;
     if (e) out["asset"] = serializeAssetEntry(*e, true);
     emitJSON(out);
     return 0;
@@ -961,6 +972,75 @@ namespace
       j["params"] = f.params;
       j["line"] = f.line;
       out.push_back(j);
+    }
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Prefab scaffolding (Tier 1 + Tier 2 backfill) ──────────────────
+
+  // Re-run the Tier 1 scaffold against an existing prefab. Useful for
+  // prefabs that pre-date the auto-scaffold or that had their event graph
+  // wiped. Idempotent: only adds what's missing on each side.
+  int cmdPrefabScaffoldDefaults(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    auto added = Project::PrefabScaffolder::seedLifecycleFunctions(
+      project.getPath(), e->name);
+    bool graphChanged = Project::PrefabScaffolder::seedDefaultEventGraph(*e->prefab);
+    if (graphChanged) savePrefabAt(e->path, *e->prefab);
+    nlohmann::json out;
+    out["asset"]        = e->name;
+    out["functions"]    = added;
+    out["graphSeeded"]  = graphChanged;
+    emitJSON(out);
+    return 0;
+  }
+
+  // Tier 2: report PrefabFunc nodes referencing missing P64_NODE stubs and
+  // PrefabVarGet nodes referencing missing variables. With --autofix, append
+  // the stubs / variable defs needed to satisfy them.
+  int cmdPrefabGraphValidate(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+
+    auto fnRefs  = Project::PrefabScaffolder::findUnknownFuncRefs(
+      project.getPath(), e->name, *e->prefab);
+    auto varRefs = Project::PrefabScaffolder::findUnknownVarRefs(*e->prefab);
+
+    nlohmann::json out;
+    out["asset"] = e->name;
+    {
+      nlohmann::json arr = nlohmann::json::array();
+      for (const auto &r : fnRefs) {
+        arr.push_back({{"funcName", r.funcName}, {"nodeUUID", r.nodeUUID}});
+      }
+      out["unknownFunctions"] = arr;
+    }
+    {
+      nlohmann::json arr = nlohmann::json::array();
+      for (const auto &r : varRefs) {
+        arr.push_back({
+          {"varName", r.varName}, {"varKind", r.varKind},
+          {"varUUID", r.varUUID}, {"nodeUUID", r.nodeUUID},
+        });
+      }
+      out["unknownVariables"] = arr;
+    }
+
+    if (a.autofix) {
+      auto fixedFns = Project::PrefabScaffolder::autofixFunctions(
+        project.getPath(), e->name, fnRefs);
+      auto fixedVars = Project::PrefabScaffolder::autofixVariables(
+        *e->prefab, varRefs);
+      if (!fixedVars.empty()) savePrefabAt(e->path, *e->prefab);
+      out["addedFunctions"] = fixedFns;
+      out["addedVariables"] = fixedVars;
+      project.getAssets().reload();
     }
     emitJSON(out);
     return 0;
@@ -2052,6 +2132,22 @@ namespace
     if (n == "object_ref" || n == "objectref"){ out = Project::VarKind::OBJECT_REF; return true; }
     if (n == "prefab_ref" || n == "prefabref"){ out = Project::VarKind::PREFAB_REF; return true; }
     if (n == "asset_ref"  || n == "assetref") { out = Project::VarKind::ASSET_REF;  return true; }
+    if (n == "array")                          { out = Project::VarKind::ARRAY;     return true; }
+    return false;
+  }
+
+  // Map the --element-kind CLI string to the typeArg value the prefab
+  // var stores. Mirrors ArrayMake / PrefabVarGet element-kind encoding:
+  // 0=int, 1=float, 2=bool. Returns false on unknown spelling so the
+  // caller can emit a clean error.
+  bool parseElementKind(const std::string &s, uint16_t &out)
+  {
+    std::string n = s;
+    std::transform(n.begin(), n.end(), n.begin(),
+      [](unsigned char c){ return (char)std::tolower(c); });
+    if (n == "int" || n == "int32") { out = 0; return true; }
+    if (n == "float")               { out = 1; return true; }
+    if (n == "bool")                { out = 2; return true; }
     return false;
   }
 
@@ -2306,7 +2402,7 @@ namespace
   int cmdPrefabAddVariable(const CLI::Commands::Args &a, Project::Project &project)
   {
     if (a.asset.empty() || a.name.empty() || a.type.empty()) {
-      emitErr("--asset, --name, --type (int|float|bool|vec3|quat|object_ref|prefab_ref|asset_ref) are required");
+      emitErr("--asset, --name, --type (int|float|bool|vec3|quat|object_ref|prefab_ref|asset_ref|array) are required");
       return 1;
     }
     auto *e = resolvePrefabOrWidget(project, a.asset);
@@ -2320,11 +2416,26 @@ namespace
     v.uuid = Utils::Hash::randomU64();
     v.name = a.name;
     v.kind = kind;
+    if (kind == Project::VarKind::ARRAY) {
+      if (a.elementKind.empty()) {
+        emitErr("--element-kind (int|float|bool) is required when --type=array");
+        return 1;
+      }
+      uint16_t ek = 1;
+      if (!parseElementKind(a.elementKind, ek)) {
+        emitErr("unknown element kind: " + a.elementKind); return 1;
+      }
+      v.typeArg = ek;
+    }
     if (!a.value.empty()) {
       auto parsed = parseValueJSON(a.value);
       if ((kind == Project::VarKind::PREFAB_REF || kind == Project::VarKind::ASSET_REF)
           && parsed.is_number_unsigned()) {
         v.typeArg = parsed.get<uint64_t>();
+      } else if (kind == Project::VarKind::ARRAY) {
+        // ARRAY default is always empty in v1; ignore --value rather
+        // than failing so prefab-set-prop can author per-element initial
+        // contents at build time later.
       } else if (!genericValueFromJSON(v.defaultValue, kind, parsed)) {
         emitErr("--value type does not match var kind"); return 1;
       }
@@ -4512,6 +4623,11 @@ namespace CLI::Commands
     {"restype-rename-prop",     cmdRestypeRenameProp},
     // Events.
     {"event-list",              cmdEventList},
+    // Prefab scaffolding (Tier 1 defaults + Tier 2 backfill).
+    {"prefab-scaffold-defaults", cmdPrefabScaffoldDefaults},
+    {"prefab-graph-validate",    cmdPrefabGraphValidate},
+    {"widget-scaffold-defaults", cmdPrefabScaffoldDefaults},
+    {"widget-graph-validate",    cmdPrefabGraphValidate},
     // Prefab class variables (Blueprint-style typed props).
     {"prefab-add-variable",     cmdPrefabAddVariable},
     {"prefab-remove-variable",  cmdPrefabRemoveVariable},
@@ -4626,6 +4742,18 @@ namespace CLI::Commands
     add("--from",    "Old name (for *-rename-* commands).");
     add("--to",      "New name (for *-rename-* commands).");
     add("--restype", "Resource type asset (uuid or name) for resource-create.");
+    add("--element-kind", "Element scalar kind for ARRAY-typed prefab vars (int|float|bool). Required when --type=array.");
+    // Boolean toggles. argparse's implicit_value/default_value duo makes
+    // these `--flag`-only (no value needed); the readArgs side pulls them
+    // straight as bools.
+    prog.add_argument("--no-scaffold")
+      .default_value(false)
+      .implicit_value(true)
+      .help("Skip scaffolding default lifecycle events / P64_NODE stubs when creating a prefab.");
+    prog.add_argument("--autofix")
+      .default_value(false)
+      .implicit_value(true)
+      .help("Apply autofixes (e.g. backfill missing P64_NODE stubs or variable defs) instead of just reporting.");
   }
 
   void readArgs(argparse::ArgumentParser &prog, Args &args)
@@ -4646,6 +4774,9 @@ namespace CLI::Commands
     args.from    = get("--from");
     args.to      = get("--to");
     args.restype = get("--restype");
+    args.elementKind = get("--element-kind");
+    args.noScaffold = prog.get<bool>("--no-scaffold");
+    args.autofix    = prog.get<bool>("--autofix");
   }
 
   int dispatch(const Args &args, Project::Project &project)

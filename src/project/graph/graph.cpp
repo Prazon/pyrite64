@@ -614,6 +614,8 @@ namespace Project::Graph
     source += R"(#include <math.h>)" "\n";   // Group A math nodes use fmodf/sqrtf/fabsf/etc.
     source += R"(#include <string>)" "\n";   // Group C string nodes use std::string
     source += R"(#include <cstdio>)" "\n";   // StringFormat uses snprintf
+    source += R"(#include <vector>)" "\n";   // Group D arrays
+    source += R"(#include <type_traits>)" "\n"; // decltype(arr)::value_type element-kind inference
     source += "\n";
 
     source += "namespace P64::NodeGraph::G" + Utils::toHex64(uuid) + " {\n";
@@ -737,10 +739,66 @@ namespace Project::Graph
       nodeCtx.insideLoopBody = savedFlag;
     };
 
+    // Pure-eval pre-pass: any node opted in via canBePure() that has
+    // no incoming exec edge gets its globalVar emitted at function-top
+    // in topological-dependency order, with its expression inlined
+    // into the initializer (no NODE block, no exec wires required).
+    // This enables UE-style "value Add fed straight into Set" without
+    // needing a redundant exec wire through the math.
+    std::unordered_set<uint64_t> emittedPure;
+    {
+      auto execStyle2 = ::Project::Graph::pinStyle(::Project::Graph::PinDataType::Exec).get();
+      std::unordered_set<uint64_t> hasIncomingExec;
+      for (const auto &weak : graph.getLinks()) {
+        auto link = weak.lock();
+        if (!link) continue;
+        auto rightPin = link->right();
+        if (!rightPin) continue;
+        if (rightPin->getStyle().get() != execStyle2) continue;
+        auto rightNode = (Node::Base*)rightPin->getParent();
+        if (rightNode) hasIncomingExec.insert(rightNode->uuid);
+      }
+
+      std::function<void(Node::Base*)> emitPure;
+      emitPure = [&](Node::Base *n) {
+        if (emittedPure.count(n->uuid)) return;
+        emittedPure.insert(n->uuid);
+        // Recurse into pure-eligible value-input deps first so this
+        // node's initializer references already-declared globalVars.
+        auto inIt = nodeIngoingValMap.find(n->uuid);
+        if (inIt != nodeIngoingValMap.end()) {
+          for (uint64_t inUUID : inIt->second) {
+            if (inUUID == 0) continue;
+            auto it = nodeMap.find(inUUID);
+            if (it == nodeMap.end()) continue;
+            auto* up = it->second;
+            if (up->canBePure() && !hasIncomingExec.count(up->uuid)) {
+              emitPure(up);
+            }
+          }
+        }
+        auto savedOut = nodeCtx.outUUIDs;
+        auto savedIn  = nodeCtx.inValUUIDs;
+        nodeCtx.outUUIDs   = &nodeOutgoingMap[n->uuid];
+        nodeCtx.inValUUIDs = &nodeIngoingValMap[n->uuid];
+        n->buildAsPure(nodeCtx);
+        nodeCtx.outUUIDs   = savedOut;
+        nodeCtx.inValUUIDs = savedIn;
+      };
+
+      for (auto* n : nodeVec) {
+        if (!n->canBePure()) continue;
+        if (hasIncomingExec.count(n->uuid)) continue;
+        emitPure(n);
+      }
+    }
+
     // Top-level emission: skip nodes owned by a loop (they're
-    // inlined via emitNode's loop recursion).
+    // inlined via emitNode's loop recursion) and skip pure nodes
+    // already emitted at function top.
     for (const auto &node : nodeVec) {
       if (loopOwner.count(node->uuid)) continue;
+      if (emittedPure.count(node->uuid)) continue;
       emitNode(node, false);
     }
 

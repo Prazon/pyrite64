@@ -550,6 +550,13 @@ void Editor::ObjectInspector::draw(Project::Scene &scene, Project::Selection &se
               ImGui::TextDisabled("(asset ref - TODO)");
               break;
             }
+            case Project::PrefabVarKind::ARRAY: {
+              // Per-instance ARRAY overrides aren't authored in the
+              // inspector. The class-default is always empty; populate
+              // at runtime via ArrayMake or ArrayPush.
+              ImGui::TextDisabled("(empty — runtime-populated)");
+              break;
+            }
           }
           ImGui::PopID();
 

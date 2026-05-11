@@ -5,6 +5,8 @@
 #include <libdragon.h>
 #include <cstdint>
 #include <malloc.h>
+#include <vector>
+#include <new>
 #include "scene/scene.h"
 #include "lib/math.h"
 #include "scene/componentTable.h"
@@ -206,12 +208,33 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
   // code never sees a marker that only matters at load time.
   if(obj->flags & ObjectFlags::HAS_PREFAB_VARS) {
     constexpr uint32_t VAR_RECORD_BYTES = 32;
+    constexpr uint32_t VAR_VALUE_OFFSET = 12;
     auto *varDest = (uint8_t*)objCompDataPtr;
     obj->varDataOffset = (uint16_t)(varDest - (uint8_t*)obj);
     objFile += 8; // skip prefabUUID(4) + varCount(2) + pad(2)
     uint32_t varBytes = (uint32_t)obj->varCount * VAR_RECORD_BYTES;
     if(varBytes > 0) __builtin_memcpy(varDest, objFile, varBytes);
     objFile += varBytes;
+
+    // Placement-new ARRAY vars so std::vector<E>'s pointers are well-
+    // formed. The 20-byte value slot fits a libstdc++ vector (3 ptrs =
+    // 12 B on 32-bit MIPS) with room to spare. Object::~Object pairs
+    // these with ~vector calls so heap allocs unwind on scene unload.
+    static_assert(sizeof(std::vector<float>) <= 20,
+      "std::vector<E> exceeds 20-byte prefab-var value slot");
+    for(uint32_t i = 0; i < obj->varCount; ++i) {
+      auto *rec = varDest + i * VAR_RECORD_BYTES;
+      uint8_t kind = rec[8];
+      uint8_t elemKind = rec[9];
+      if(kind == 8) {
+        void *valPtr = rec + VAR_VALUE_OFFSET;
+        switch(elemKind) {
+          case 0: new (valPtr) std::vector<int32_t>(); break;
+          case 1: new (valPtr) std::vector<float>(); break;
+          case 2: new (valPtr) std::vector<bool>(); break;
+        }
+      }
+    }
     obj->flags &= ~ObjectFlags::HAS_PREFAB_VARS;
   }
 

@@ -31,15 +31,15 @@ namespace Project::Graph::Node
       void serialize(nlohmann::json &) override {}
       void deserialize(nlohmann::json &) override {}
 
-      void build(BuildCtx &ctx) override
-      {
-        auto resVar = "res_" + Utils::toHex64(uuid);
-        ctx.globalVar("float", resVar, 0.0f);
-        if (ctx.inValUUIDs && !ctx.inValUUIDs->empty()) {
-          auto x = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
-          // Three-way sign: -1 / 0 / +1. Matches PICO-8's sgn semantics.
-          ctx.line(resVar + " = (float)(((" + x + ") > 0.0f) - ((" + x + ") < 0.0f));");
-        }
+      bool canBePure() const override { return true; }
+      void build(BuildCtx &ctx) override { emit(ctx, false); }
+      void buildAsPure(BuildCtx &ctx) override { emit(ctx, true); }
+    private:
+      void emit(BuildCtx &ctx, bool asPure) {
+        auto x = MathHelpers::resolveA(ctx);
+        // Three-way sign: -1 / 0 / +1. Matches PICO-8's sgn semantics.
+        std::string expr = "((" + x + ") > 0.0f) - ((" + x + ") < 0.0f)";
+        MathHelpers::emitFloat(ctx, uuid, expr, asPure);
       }
   };
 }

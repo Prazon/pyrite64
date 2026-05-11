@@ -25,4 +25,50 @@ namespace Project::Graph::Node::MathHelpers
     if (inputUUID == 0) return "0";
     return "res_" + Utils::toHex64(inputUUID);
   }
+
+  // Emit a float-typed scalar result. In pure-pass mode the expression
+  // is inlined into the globalVar initializer (no exec line); in normal
+  // mode the globalVar is zero-initialized and assigned inside the
+  // NODE block. Centralizes the if (asPure) split so per-node
+  // build/buildAsPure pairs stay one-line wrappers.
+  inline void emitFloat(BuildCtx &ctx, uint64_t uuid,
+                        const std::string &cExpr, bool asPure)
+  {
+    std::string resVar = "res_" + Utils::toHex64(uuid);
+    if (asPure) {
+      ctx.globalVar("float", resVar, std::string{"(float)("} + cExpr + ")");
+    } else {
+      ctx.globalVar("float", resVar, 0.0f);
+      ctx.line(resVar + " = (float)(" + cExpr + ");");
+    }
+  }
+
+  inline void emitInt(BuildCtx &ctx, uint64_t uuid,
+                      const std::string &cExpr, bool asPure)
+  {
+    std::string resVar = "res_" + Utils::toHex64(uuid);
+    if (asPure) {
+      ctx.globalVar("int", resVar, std::string{"(int)("} + cExpr + ")");
+    } else {
+      ctx.globalVar("int", resVar, 0);
+      ctx.line(resVar + " = (int)(" + cExpr + ");");
+    }
+  }
+
+  // Two-input value resolver. Returns operand strings or "0" fallback.
+  inline std::pair<std::string,std::string> resolveAB(BuildCtx &ctx)
+  {
+    std::string a = "0", b = "0";
+    if (ctx.inValUUIDs && ctx.inValUUIDs->size() >= 2) {
+      a = resOrZero(ctx.inValUUIDs->at(0));
+      b = resOrZero(ctx.inValUUIDs->at(1));
+    }
+    return {a, b};
+  }
+
+  inline std::string resolveA(BuildCtx &ctx)
+  {
+    if (ctx.inValUUIDs && !ctx.inValUUIDs->empty()) return resOrZero(ctx.inValUUIDs->at(0));
+    return "0";
+  }
 }

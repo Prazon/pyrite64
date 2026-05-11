@@ -29,6 +29,9 @@ namespace CLI::Commands
     std::string from;
     std::string to;
     std::string restype;
+    std::string elementKind; // --element-kind for ARRAY-typed prefab vars
+    bool noScaffold{false};
+    bool autofix{false};
   };
 
   // Returns true iff `cmd` is one we handle here (not build/clean/empty).

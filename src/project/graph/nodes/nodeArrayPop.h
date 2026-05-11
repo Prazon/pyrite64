@@ -40,7 +40,7 @@ namespace Project::Graph::Node
         if (ctx.inValUUIDs && !ctx.inValUUIDs->empty()) {
           auto a = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
           ctx.line("if (!(" + a + ").empty()) { "
-                   + resVar + " = (" + a + ").back(); (" + a + ").pop_back(); } else { "
+                   + resVar + " = (float)((" + a + ").back()); (" + a + ").pop_back(); } else { "
                    + resVar + " = 0.0f; }");
         }
       }

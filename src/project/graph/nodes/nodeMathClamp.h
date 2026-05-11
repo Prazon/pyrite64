@@ -33,17 +33,20 @@ namespace Project::Graph::Node
       void serialize(nlohmann::json &) override {}
       void deserialize(nlohmann::json &) override {}
 
-      void build(BuildCtx &ctx) override
-      {
-        auto resVar = "res_" + Utils::toHex64(uuid);
-        ctx.globalVar("float", resVar, 0.0f);
+      bool canBePure() const override { return true; }
+      void build(BuildCtx &ctx) override { emit(ctx, false); }
+      void buildAsPure(BuildCtx &ctx) override { emit(ctx, true); }
+    private:
+      void emit(BuildCtx &ctx, bool asPure) {
+        std::string v = "0", mn = "0", mx = "0";
         if (ctx.inValUUIDs && ctx.inValUUIDs->size() >= 3) {
-          auto v   = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
-          auto mn  = MathHelpers::resOrZero(ctx.inValUUIDs->at(1));
-          auto mx  = MathHelpers::resOrZero(ctx.inValUUIDs->at(2));
-          ctx.line(resVar + " = fmaxf((float)(" + mn + "), fminf((float)("
-                          + v + "), (float)(" + mx + ")));");
+          v  = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
+          mn = MathHelpers::resOrZero(ctx.inValUUIDs->at(1));
+          mx = MathHelpers::resOrZero(ctx.inValUUIDs->at(2));
         }
+        std::string expr = "fmaxf((float)(" + mn + "), fminf((float)("
+                         + v + "), (float)(" + mx + ")))";
+        MathHelpers::emitFloat(ctx, uuid, expr, asPure);
       }
   };
 }

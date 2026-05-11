@@ -32,19 +32,16 @@ namespace Project::Graph::Node
       void serialize(nlohmann::json &) override {}
       void deserialize(nlohmann::json &) override {}
 
-      void build(BuildCtx &ctx) override
-      {
-        auto resVar = "res_" + Utils::toHex64(uuid);
-        ctx.globalVar("float", resVar, 0.0f);
-        if (ctx.inValUUIDs && ctx.inValUUIDs->size() >= 2) {
-          auto a = MathHelpers::resOrZero(ctx.inValUUIDs->at(0));
-          auto b = MathHelpers::resOrZero(ctx.inValUUIDs->at(1));
-          // Guard against integer divide-by-zero on the runtime side.
-          // Keeps codegen simple and avoids needing a divide-by-zero
-          // exception path in the generated code.
-          ctx.line(resVar + " = (float)((" + b + ") != 0 ? ("
-                          + a + " / (float)(" + b + ")) : 0);");
-        }
+      bool canBePure() const override { return true; }
+      void build(BuildCtx &ctx) override { emit(ctx, false); }
+      void buildAsPure(BuildCtx &ctx) override { emit(ctx, true); }
+    private:
+      void emit(BuildCtx &ctx, bool asPure) {
+        auto [a, b] = MathHelpers::resolveAB(ctx);
+        // Divide-by-zero short-circuits to 0 — keeps generated code
+        // freeze-free without needing an exception path.
+        std::string expr = "(" + b + ") != 0 ? ((" + a + ") / (float)(" + b + ")) : 0";
+        MathHelpers::emitFloat(ctx, uuid, expr, asPure);
       }
   };
 }
