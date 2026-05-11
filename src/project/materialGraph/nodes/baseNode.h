@@ -9,6 +9,7 @@
 #include "IconsMaterialDesignIcons.h"
 
 #include "../../assets/material.h"
+#include "../../graph/nodeStyles.h"
 
 namespace Project::MaterialGraph::Node
 {

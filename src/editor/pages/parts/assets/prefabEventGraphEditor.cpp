@@ -14,6 +14,7 @@
 #include "../../../../utils/logger.h"
 #include "../../../../project/compile/compileErrors.h"
 #include "../../../../project/graph/nodes/baseNode.h"
+#include "../../../../project/graph/nodeStyles.h"
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
 #include "../../../../project/graph/nodes/nodePrefabFunc.h"
 #include "../../../../project/graph/nodes/nodePrefabVarGet.h"
@@ -48,21 +49,7 @@ namespace
 Editor::PrefabEventGraphEditor::PrefabEventGraphEditor(uint64_t prefabAssetUUID)
   : assetUUID(prefabAssetUUID)
 {
-  // Apply the same pin styling NodeEditor does — keeps prefab event graphs
-  // visually consistent with standalone node-graph assets.
-  auto &stylePin = *Project::Graph::Node::PIN_STYLE_LOGIC;
-  stylePin = ImFlow::PinStyle{
-    IM_COL32(0xAA, 0xAA, 0xAA, 0xFF),
-    3, 6.0f, 7.0f, 6.5f, 1.3f
-  };
-  stylePin.extra.padding.y = 16;
-
-  auto &stylePinVal = *Project::Graph::Node::PIN_STYLE_VALUE;
-  stylePinVal = ImFlow::PinStyle{
-    IM_COL32(0xFF, 0x99, 0x55, 0xFF),
-    0, 6.0f, 7.0f, 6.5f, 1.3f
-  };
-  stylePinVal.extra.padding.y = 16;
+  Project::Graph::initNodeStyles();
 
   if (!ctx.project) return;
   auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);

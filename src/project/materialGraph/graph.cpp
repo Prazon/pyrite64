@@ -19,7 +19,12 @@
 
 namespace Project::MaterialGraph::Node
 {
-  std::shared_ptr<ImFlow::PinStyle> PIN_STYLE_MATPROP = ImFlow::PinStyle::brown();
+  // Material props all share a single typed pin. Routed through the
+  // canonical Struct singleton so the wire colour matches UE5's
+  // FVector/Struct blue (#0059CC), keeping every graph in the editor on
+  // the same palette.
+  std::shared_ptr<ImFlow::PinStyle> PIN_STYLE_MATPROP =
+    ::Project::Graph::pinStyle(::Project::Graph::PinDataType::MatProp);
 }
 
 namespace

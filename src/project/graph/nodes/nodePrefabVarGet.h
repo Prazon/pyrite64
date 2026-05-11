@@ -26,24 +26,24 @@ namespace Project::Graph::Node
 
       constexpr static const char* NAME = ICON_MDI_VARIABLE " Get Variable";
 
-      // Title bar colour by variable kind. Matches the pill palette in
-      // PrefabEditor's My-Prefab Variables panel so the node visually
-      // identifies which kind it carries at a glance (UE-Blueprint style).
-      static ImU32 kindToColor(uint8_t k) {
+      // Map a PrefabVarKind to the canonical UE5 PinDataType so this node
+      // shares wires/colours with everything else in the graph. The
+      // unbound case stays as wildcard grey, matching UE's "untyped" pin.
+      static PinDataType kindToPinType(uint8_t k) {
         switch (k) {
-          case 0: return IM_COL32( 77, 204, 217, 255); // INT        — cyan
-          case 1: return IM_COL32(115, 217,  77, 255); // FLOAT      — green
-          case 2: return IM_COL32(217,  51,  51, 255); // BOOL       — red
-          case 3: return IM_COL32(242, 217,  64, 255); // VEC3       — yellow
-          case 4: return IM_COL32(242, 140,  51, 255); // QUAT       — orange
-          case 5: return IM_COL32( 77, 140, 242, 255); // OBJECT_REF — blue
-          case 6: return IM_COL32(217,  77, 217, 255); // PREFAB_REF — magenta
-          case 7: return IM_COL32(166, 166, 166, 255); // ASSET_REF  — grey
+          case 0: return PinDataType::Int;     // INT
+          case 1: return PinDataType::Float;   // FLOAT
+          case 2: return PinDataType::Bool;    // BOOL
+          case 3: return PinDataType::Struct;  // VEC3 (UE5 colours FVector blue)
+          case 4: return PinDataType::Rotator; // QUAT
+          case 5: return PinDataType::Object;  // OBJECT_REF
+          case 6: return PinDataType::Class;   // PREFAB_REF
+          case 7: return PinDataType::Object;  // ASSET_REF
         }
-        // Unset / empty: keep the original brown so an unbound node is
-        // visually distinct from any kind-coloured one.
-        return IM_COL32(0xCC, 0x88, 0x55, 255);
+        return PinDataType::Wildcard;
       }
+
+      static ImU32 kindToColor(uint8_t k) { return pinColor(kindToPinType(k)); }
 
       // Per-instance pin style so the output socket + the wires drawn from
       // it can be tinted by the variable's kind (Unreal-Blueprint behavior:
@@ -52,38 +52,24 @@ namespace Project::Graph::Node
       std::shared_ptr<ImFlow::PinStyle> pinStyle{};
 
       void applyKindStyle() {
-        const bool bound = !varName.empty();
-        const ImU32 kindCol = bound ? kindToColor(varKind)
-                                    : IM_COL32(0xCC, 0x88, 0x55, 255);
-
-        // Unreal "Get" node aesthetic: a saturated kind-coloured header bar
-        // over a darker body. Going uniform-kind-colour for the whole node
-        // makes the output socket disappear against the body — the socket
-        // sits on the right edge so half the circle overlaps the body fill.
-        // Darkening the body restores the contrast while keeping the pill
-        // shape and kind-colour identity. Body tint = kindCol * 0.30 so the
-        // hue still reads but the brightness drops well below the pin.
-        auto darken = [](ImU32 col, float k) -> ImU32 {
-          int r = (int)((col >>  0) & 0xFF);
-          int g = (int)((col >>  8) & 0xFF);
-          int b = (int)((col >> 16) & 0xFF);
-          r = (int)(r * k); g = (int)(g * k); b = (int)(b * k);
-          return IM_COL32(r, g, b, 255);
-        };
-        const ImU32 bodyCol = darken(kindCol, 0.30f);
-
-        auto ns = std::make_shared<ImFlow::NodeStyle>(
-          kindCol, ImColor(0, 0, 0, 255), 8.0f
-        );
-        ns->bg            = bodyCol;
-        ns->border_color  = IM_COL32(0, 0, 0, 200);
-        ns->padding       = ImVec4(10.0f, 4.0f, 10.0f, 4.0f);
+        // Pure-function pill (Variable Get). Header carries the kind
+        // colour; body is the canonical dark grey from makeNodeStyle.
+        // Mutating the existing pin style in place keeps the wires drawn
+        // from this output in the same colour without rebuilding pins.
+        auto ns = makeNodeStyle(NodeCategory::PureFunctionCall);
+        const ImU32 kindCol = !varName.empty()
+          ? kindToColor(varKind)
+          : pinColor(PinDataType::Wildcard);
+        ns->header_bg = kindCol;
+        // Re-pick title text contrast for the kind colour.
+        const float r = ((kindCol >>  0) & 0xFF) / 255.0f;
+        const float g = ((kindCol >>  8) & 0xFF) / 255.0f;
+        const float b = ((kindCol >> 16) & 0xFF) / 255.0f;
+        const float lum = 0.299f * r + 0.587f * g + 0.114f * b;
+        ns->header_title_color = lum > 0.6f
+          ? ImColor(20, 20, 20, 255) : ImColor(245, 245, 245, 255);
         setStyle(std::move(ns));
 
-        // Mutate the pin style in place so the existing OutPin (created in
-        // the ctor) and every link drawn from it pick up the new colour
-        // without rebuilding the pin. Pin keeps full saturation so it pops
-        // against the darker body half it overlaps.
         if (pinStyle) pinStyle->color = kindCol;
       }
 

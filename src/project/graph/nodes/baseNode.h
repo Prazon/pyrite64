@@ -8,6 +8,7 @@
 #include "json.hpp"
 #include "IconsMaterialDesignIcons.h"
 #include "../../../utils/string.h"
+#include "../nodeStyles.h"
 #include "imgui/misc/cpp/imgui_stdlib.h"
 
 namespace Project { class Prefab; }

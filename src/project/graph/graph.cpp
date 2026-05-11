@@ -81,8 +81,15 @@ namespace
 
 namespace Project::Graph::Node
 {
-  std::shared_ptr<ImFlow::PinStyle> PIN_STYLE_LOGIC = ImFlow::PinStyle::green();
-  std::shared_ptr<ImFlow::PinStyle> PIN_STYLE_VALUE = ImFlow::PinStyle::brown();
+  // Legacy aliases: the validator at Graph::validate() distinguishes
+  // exec edges from data edges by pointer identity against these two
+  // shared_ptrs (see isLogicPin lambda below). Routing them through the
+  // canonical PinDataType singletons keeps that test working while every
+  // node migrates to the typed pinStyle(...) API.
+  std::shared_ptr<ImFlow::PinStyle> PIN_STYLE_LOGIC =
+    ::Project::Graph::pinStyle(::Project::Graph::PinDataType::Exec);
+  std::shared_ptr<ImFlow::PinStyle> PIN_STYLE_VALUE =
+    ::Project::Graph::pinStyle(::Project::Graph::PinDataType::Float);
 }
 
 namespace Project::Graph

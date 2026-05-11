@@ -16,6 +16,7 @@
 #include "ImNodeFlow.h"
 #include "json.hpp"
 #include "../../../project/graph/nodes/baseNode.h"
+#include "../../../project/graph/nodeStyles.h"
 #include "../../../project/compile/compileErrors.h"
 #include "../../../utils/fs.h"
 
@@ -26,23 +27,10 @@ namespace
 
 Editor::NodeEditor::NodeEditor(uint64_t assetUUID)
 {
-  auto &stylePin = *Project::Graph::Node::PIN_STYLE_LOGIC;
-  stylePin = ImFlow::PinStyle{
-    IM_COL32(0xAA, 0xAA, 0xAA, 0xFF),
-    3, // shape
-    6.0f, 7.0f, 6.5f, // radius: base, hover, connected
-    1.3f // thickness
-  };
-  stylePin.extra.padding.y = 16;
-
-  auto &stylePinVal = *Project::Graph::Node::PIN_STYLE_VALUE;
-  stylePinVal = ImFlow::PinStyle{
-    IM_COL32(0xFF, 0x99, 0x55, 0xFF),
-    0, // shape
-    6.0f, 7.0f, 6.5f, // radius: base, hover, connected
-    1.3f // thickness
-  };
-  stylePinVal.extra.padding.y = 16;
+  // Pin/node visuals (UE5-faithful palette) live in nodeStyles.cpp. This
+  // call is idempotent so the prefab event graph editor and material
+  // editor can each fire it on construction without ordering concerns.
+  Project::Graph::initNodeStyles();
 
   currentAsset = ctx.project->getAssets().getEntryByUUID(assetUUID);
   auto loadedState = currentAsset ? Utils::FS::loadTextFile(currentAsset->path) : "{}";

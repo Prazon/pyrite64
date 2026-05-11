@@ -21,8 +21,8 @@ namespace Project::MaterialGraph::Node
       {
         uuid = Utils::Hash::randomU64();
         setTitle(NAME);
-        setStyle(std::make_shared<ImFlow::NodeStyle>(
-          IM_COL32(180, 180, 180, 255), ImColor(0, 0, 0, 255), 4.0f));
+        setStyle(::Project::Graph::makeNodeStyle(
+          ::Project::Graph::NodeCategory::MaterialGraphRoot));
 
         // Per-section IN pins. Labels are advisory — connection filter
         // accepts any MatProp output; the compile pass reads from any

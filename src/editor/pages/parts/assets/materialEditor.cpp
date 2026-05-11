@@ -15,6 +15,7 @@
 #include "../../../../utils/fs.h"
 #include "../../../../utils/logger.h"
 #include "../../../../project/materialGraph/nodes/baseNode.h"
+#include "../../../../project/graph/nodeStyles.h"
 #include "../../../imgui/helper.h"
 #include "../assetInspector.h"
 #include "../../editorScene.h"
@@ -45,15 +46,7 @@ namespace
 Editor::MaterialEditor::MaterialEditor(uint64_t materialAssetUUID)
   : assetUUID(materialAssetUUID)
 {
-  // Bronze pin colour for material props — distinct from the green
-  // (logic) and brown (value) pin styles used by the script/event graph.
-  // Same shape so users get muscle memory between graph kinds.
-  auto &style = *Project::MaterialGraph::Node::PIN_STYLE_MATPROP;
-  style = ImFlow::PinStyle{
-    IM_COL32(0xFF, 0xC8, 0x66, 0xFF),
-    0, 6.0f, 7.0f, 6.5f, 1.3f
-  };
-  style.extra.padding.y = 16;
+  Project::Graph::initNodeStyles();
 
   if (!ctx.project) return;
   auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);

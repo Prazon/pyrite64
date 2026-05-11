@@ -70,9 +70,7 @@ namespace Project::Graph::Node
       {
         uuid = Utils::Hash::randomU64();
         updateTitle();
-        // Red-ish entry node so it stands out from regular nodes; matches
-        // the visual weight UE5 gives event nodes in the Event Graph.
-        setStyle(std::make_shared<ImFlow::NodeStyle>(IM_COL32(0xCC, 0x44, 0x44, 0xFF), ImColor(0,0,0,255), 4.0f));
+        setStyle(makeNodeStyle(NodeCategory::Event));
         addOUT<TypeLogic>("", PIN_STYLE_LOGIC);
       }
 

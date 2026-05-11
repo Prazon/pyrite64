@@ -22,8 +22,7 @@ namespace Project::Graph::Node
       {
         uuid = Utils::Hash::randomU64();
         setTitle(NAME);
-        // Remove visible style, set fully transparent background and border
-        setStyle(std::make_shared<ImFlow::NodeStyle>(IM_COL32(0, 0, 0, 0x20), ImColor(0xFF, 0xFF, 0xFF, 0xFF), 0.0f));
+        setStyle(makeNodeStyle(NodeCategory::Comment));
       }
 
       void draw() override {

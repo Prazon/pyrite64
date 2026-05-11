@@ -21,7 +21,7 @@ namespace Project::Graph::Node
       {
         uuid = Utils::Hash::randomU64();
         setTitle(NAME);
-        setStyle(std::make_shared<ImFlow::NodeStyle>(IM_COL32(0xFF, 0x99, 0x55, 0xFF), ImColor(0,0,0,255), 4.0f));
+        setStyle(makeNodeStyle(NodeCategory::Switch));
 
         addIN<TypeLogic>("", ImFlow::ConnectionFilter::SameType(), PIN_STYLE_LOGIC);
         addIN<TypeValue>("", ImFlow::ConnectionFilter::SameType(), PIN_STYLE_VALUE);

@@ -27,8 +27,8 @@ namespace Project::MaterialGraph::Node
       {
         uuid = Utils::Hash::randomU64();
         setTitle(NAME);
-        setStyle(std::make_shared<ImFlow::NodeStyle>(
-          IM_COL32(220, 120, 90, 255), ImColor(0, 0, 0, 255), 4.0f));
+        setStyle(::Project::Graph::makeNodeStyle(
+          ::Project::Graph::NodeCategory::MaterialConstant));
         addOUT<TypeMatProp>("", PIN_STYLE_MATPROP);
       }
 
