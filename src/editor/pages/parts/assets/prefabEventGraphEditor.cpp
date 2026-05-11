@@ -19,6 +19,9 @@
 #include "../../../nodeClipboard.h"
 #include "../../../graphHotkeys.h"
 #include "../../../commentFrames.h"
+#include "../../../nodeFinder.h"
+#include "../../../graphMinimap.h"
+#include "../../../rerouteHandler.h"
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
 #include "../../../../project/graph/nodes/nodePrefabFunc.h"
 #include "../../../../project/graph/nodes/nodePrefabVarGet.h"
@@ -256,6 +259,22 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
       paletteSpawnPos = graph.graph.screen2grid(ImGui::GetMousePos());
       ImGui::OpenPopup("##nodePaletteTab");
     }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+      finder.openPopup();
+    }
+  }
+  if (finder.wantsOpen()) {
+    ImGui::OpenPopup("##nodeFinder");
+    finder.clearWantOpen();
+  }
+  if (ImGui::BeginPopup("##nodeFinder")) {
+    uint64_t hit = finder.draw<Project::Graph::Graph,
+                               Project::Graph::Node::Base>(graph);
+    if (hit) {
+      requestFocusNode(hit);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
   }
   if (ImGui::BeginPopup("##nodePaletteTab")) {
     uint32_t typeIdx = 0;
@@ -329,6 +348,14 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
   graph.graph.update();
 
   commentFrames.postUpdate(graph);
+
+  // Reroute insertion on double-click of an exec wire.
+  Editor::RerouteHandler::handle(graph);
+
+  // Bottom-right minimap.
+  Editor::GraphMinimap::draw<Project::Graph::Graph,
+                             Project::Graph::Node::Base>(
+    graph, canvasMin, canvasSize, minimap);
 
   // Bad-node outline: persistent red rect on every node referenced by an
   // ERROR for this asset. See nodeEditor.cpp for the parallel block —

@@ -6,6 +6,8 @@
 
 #include "../../../../project/graph/graph.h"
 #include "../../../commentFrames.h"
+#include "../../../nodeFinder.h"
+#include "../../../graphMinimap.h"
 
 namespace Editor
 {
@@ -48,6 +50,12 @@ namespace Editor
 
       // Comment-frame paint + drag-containment state.
       Editor::CommentFrames::State commentFrames{};
+
+      // Find-by-title overlay (Ctrl+F).
+      Editor::NodeFinder::State finder{};
+
+      // Minimap drag state.
+      Editor::GraphMinimap::State minimap{};
 
     public:
       explicit PrefabEventGraphEditor(uint64_t prefabAssetUUID);

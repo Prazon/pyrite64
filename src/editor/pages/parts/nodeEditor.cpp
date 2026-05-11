@@ -23,6 +23,9 @@
 #include "../../nodeClipboard.h"
 #include "../../graphHotkeys.h"
 #include "../../commentFrames.h"
+#include "../../nodeFinder.h"
+#include "../../graphMinimap.h"
+#include "../../rerouteHandler.h"
 
 namespace
 {
@@ -212,6 +215,22 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
       paletteSpawnPos = graph.graph.screen2grid(ImGui::GetMousePos());
       ImGui::OpenPopup("##nodePaletteTab");
     }
+    if(io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+      finder.openPopup();
+    }
+  }
+  if(finder.wantsOpen()) {
+    ImGui::OpenPopup("##nodeFinder");
+    finder.clearWantOpen();
+  }
+  if(ImGui::BeginPopup("##nodeFinder")) {
+    uint64_t hit = finder.draw<Project::Graph::Graph,
+                               Project::Graph::Node::Base>(graph);
+    if(hit) {
+      requestFocusNode(hit);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
   }
   if(ImGui::BeginPopup("##nodePaletteTab")) {
     uint32_t typeIdx = 0;
@@ -275,6 +294,18 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   graph.graph.update();
 
   commentFrames.postUpdate(graph);
+
+  // Reroute insertion: double-click on an exec wire splits it with a
+  // routing knot. No-op when the user double-clicks on empty space or
+  // on a non-exec wire.
+  Editor::RerouteHandler::handle(graph);
+
+  // Bottom-right minimap overlay. Drawn after update() so node
+  // positions and selection state are current; sits on the foreground
+  // draw list so it floats over the graph chrome.
+  Editor::GraphMinimap::draw<Project::Graph::Graph,
+                             Project::Graph::Node::Base>(
+    graph, canvasMin, canvasSize, minimap);
 
   // Bad-node outline: persistent red rect on every node referenced by an
   // ERROR for this asset. Cleared implicitly when the user hits Compile

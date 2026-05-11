@@ -19,6 +19,7 @@
 #include "../../../nodePalette.h"
 #include "../../../nodeClipboard.h"
 #include "../../../graphHotkeys.h"
+#include "../../../graphMinimap.h"
 #include "../../../imgui/helper.h"
 #include "../assetInspector.h"
 #include "../../editorScene.h"
@@ -298,6 +299,7 @@ bool Editor::MaterialEditor::draw(ImGuiID defDockId)
   // Right pane: graph canvas takes the remaining width.
   ImGui::SameLine();
   ImGui::BeginChild("##matGraphCanvas", ImVec2(0, 0), ImGuiChildFlags_None);
+  ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
   ImVec2 canvasSize = ImGui::GetContentRegionAvail();
   graph.graph.setSize(canvasSize);
   // Standard graph hotkeys (frame, delete, duplicate, copy/cut/paste,
@@ -310,6 +312,12 @@ bool Editor::MaterialEditor::draw(ImGuiID defDockId)
       graph, canvasSize, &Editor::NodeClipboard::materialGraph());
   }
   graph.graph.update();
+
+  // Bottom-right minimap.
+  Editor::GraphMinimap::draw<Project::MaterialGraph::Graph,
+                             Project::MaterialGraph::Node::Base>(
+    graph, canvasMin, canvasSize, minimap);
+
   ImGui::EndChild();
 
   ImGui::EndChild(); // ##matOuterLeft

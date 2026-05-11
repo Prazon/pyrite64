@@ -19,6 +19,7 @@
 
 #include "../../../../project/materialGraph/graph.h"
 #include "matPreviewViewport.h"
+#include "../../../graphMinimap.h"
 
 namespace Editor
 {
@@ -58,6 +59,9 @@ namespace Editor
 
       // Latched mouse-grid position when Tab opens the Add-Node palette.
       ImVec2 paletteSpawnPos{0,0};
+
+      // Minimap drag state.
+      Editor::GraphMinimap::State minimap{};
 
     public:
       explicit MaterialEditor(uint64_t materialAssetUUID);

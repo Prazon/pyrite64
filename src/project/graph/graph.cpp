@@ -27,6 +27,7 @@
 #include "nodes/nodePrefabEvent.h"
 #include "nodes/nodePrefabFunc.h"
 #include "nodes/nodePrefabVarGet.h"
+#include "nodes/nodeReroute.h"
 
 namespace Project::Graph::Node
 {
@@ -115,6 +116,7 @@ namespace Project::Graph
     TABLE_ENTRY(PrefabEvent),     // 13
     TABLE_ENTRY(PrefabFunc),      // 14 — TYPE_PREFAB_FUNC
     TABLE_ENTRY(PrefabVarGet),    // 15 — TYPE_PREFAB_VAR_GET
+    TABLE_ENTRY(Reroute),         // 16 — routing knot
   });
 
   const std::vector<std::string> & Graph::getNodeNames()
@@ -159,6 +161,7 @@ namespace Project::Graph
       { 13, Node::PrefabEvent::NAME,   "Events",       0,            EXEC          },
       { 14, Node::PrefabFunc::NAME,    "Functions",    EXEC,         EXEC          },
       { 15, Node::PrefabVarGet::NAME,  "Variables",    0,            FLOAT         },
+      { 16, Node::Reroute::NAME,       "Flow Control", EXEC,         EXEC          },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Palette entries out of sync with NODE_TABLE");

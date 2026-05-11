@@ -292,6 +292,10 @@ add_executable(pyrite64 src/main.cpp
         src/editor/graphHotkeys.h
         src/editor/commentFrames.h
         src/editor/commentFrames.cpp
+        src/editor/nodeFinder.h
+        src/editor/graphMinimap.h
+        src/editor/rerouteHandler.h
+        src/editor/rerouteHandler.cpp
         src/project/compile/compileErrors.h
         src/project/compile/compileErrors.cpp
         src/build/nodeGraphBuilder.cpp
