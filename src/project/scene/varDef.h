@@ -26,6 +26,10 @@ namespace Project
     OBJECT_REF = 5, // any P64::Object*, stored as uint64_t object uuid
     PREFAB_REF = 6, // typed Object*, typeArg = prefab uuid
     ASSET_REF  = 7, // asset uuid reference (typeArg reserved for asset-type tag)
+    ARRAY     = 8,  // std::vector<E> where E's VarKind is encoded in typeArg.
+                    // Element kind is restricted to scalar kinds in v1
+                    // (INT / FLOAT / BOOL); nested arrays / structs are
+                    // out of scope until later.
   };
 
   // Stable definition of a single variable/field. The uuid is the persistent

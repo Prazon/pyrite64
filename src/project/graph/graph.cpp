@@ -62,6 +62,17 @@
 #include "nodes/nodeStringLength.h"
 #include "nodes/nodeSubstring.h"
 #include "nodes/nodeStringFormat.h"
+#include "nodes/nodeArrayMake.h"
+#include "nodes/nodeArrayLength.h"
+#include "nodes/nodeArrayGet.h"
+#include "nodes/nodeArraySet.h"
+#include "nodes/nodeArrayPush.h"
+#include "nodes/nodeArrayPop.h"
+#include "nodes/nodeArrayInsert.h"
+#include "nodes/nodeArrayRemoveAt.h"
+#include "nodes/nodeArrayClear.h"
+#include "nodes/nodeArrayFind.h"
+#include "nodes/nodeArrayContains.h"
 
 namespace Project::Graph::Node
 {
@@ -185,6 +196,17 @@ namespace Project::Graph
     TABLE_ENTRY(StringLength),    // 48
     TABLE_ENTRY(Substring),       // 49
     TABLE_ENTRY(StringFormat),    // 50
+    TABLE_ENTRY(ArrayMake),       // 51
+    TABLE_ENTRY(ArrayLength),     // 52
+    TABLE_ENTRY(ArrayGet),        // 53
+    TABLE_ENTRY(ArraySet),        // 54
+    TABLE_ENTRY(ArrayPush),       // 55
+    TABLE_ENTRY(ArrayPop),        // 56
+    TABLE_ENTRY(ArrayInsert),     // 57
+    TABLE_ENTRY(ArrayRemoveAt),   // 58
+    TABLE_ENTRY(ArrayClear),      // 59
+    TABLE_ENTRY(ArrayFind),       // 60
+    TABLE_ENTRY(ArrayContains),   // 61
   });
 
   const std::vector<std::string> & Graph::getNodeNames()
@@ -267,6 +289,17 @@ namespace Project::Graph
       { 48, Node::StringLength::NAME,  "String",       EXEC | STR,   EXEC | INT    },
       { 49, Node::Substring::NAME,     "String",       EXEC | STR | INT, EXEC | STR },
       { 50, Node::StringFormat::NAME,  "String",       EXEC | STR,   EXEC | STR    },
+      { 51, Node::ArrayMake::NAME,     "Array",        EXEC | FLOAT, EXEC          },
+      { 52, Node::ArrayLength::NAME,   "Array",        EXEC,         EXEC | INT    },
+      { 53, Node::ArrayGet::NAME,      "Array",        EXEC | INT,   EXEC | FLOAT  },
+      { 54, Node::ArraySet::NAME,      "Array",        EXEC | INT | FLOAT, EXEC    },
+      { 55, Node::ArrayPush::NAME,     "Array",        EXEC | FLOAT, EXEC          },
+      { 56, Node::ArrayPop::NAME,      "Array",        EXEC,         EXEC | FLOAT  },
+      { 57, Node::ArrayInsert::NAME,   "Array",        EXEC | INT | FLOAT, EXEC    },
+      { 58, Node::ArrayRemoveAt::NAME, "Array",        EXEC | INT,   EXEC          },
+      { 59, Node::ArrayClear::NAME,    "Array",        EXEC,         EXEC          },
+      { 60, Node::ArrayFind::NAME,     "Array",        EXEC | FLOAT, EXEC | INT    },
+      { 61, Node::ArrayContains::NAME, "Array",        EXEC | FLOAT, EXEC | BOOL   },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Palette entries out of sync with NODE_TABLE");

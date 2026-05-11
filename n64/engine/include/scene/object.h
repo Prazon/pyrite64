@@ -125,13 +125,36 @@ namespace P64
        * cast to T, or a default-constructed T if the variable is missing or
        * the object has no variable block. Caller is responsible for matching
        * T to the variable's declared kind in the editor.
+       *
+       * Trivially-copyable T uses memcpy (the original POD path). Non-
+       * trivial T (e.g. ARRAY vars stored as std::vector<E>) cannot
+       * be memcpy-read; callers should use getPrefabVarRef instead.
+       * The static_assert keeps callers honest at the type-system
+       * level rather than silently corrupting memory at runtime.
        */
       template<typename T>
       [[nodiscard]] T getPrefabVar(uint64_t uuid) const {
+        static_assert(__is_trivially_copyable(T),
+          "getPrefabVar<T> requires a trivially-copyable T; use "
+          "getPrefabVarRef<T> for non-trivial types like std::vector.");
         T out{};
         auto *bytes = getPrefabVarBytes(uuid);
         if(bytes) __builtin_memcpy(&out, bytes, sizeof(T));
         return out;
+      }
+
+      /**
+       * Reference accessor for non-trivial prefab variables (ARRAY kind
+       * stored as std::vector<E>, future struct types, etc.). Returns a
+       * pointer to the in-place T inside the prefab var blob, or nullptr
+       * if the variable is missing. The blob's storage was placement-
+       * constructed at instance load (sceneLoader::loadObject) so the
+       * lifetime is the object's lifetime.
+       */
+      template<typename T>
+      [[nodiscard]] T* getPrefabVarRef(uint64_t uuid) const {
+        auto *bytes = getPrefabVarBytes(uuid);
+        return bytes ? reinterpret_cast<T*>(bytes) : nullptr;
       }
 
       /**
