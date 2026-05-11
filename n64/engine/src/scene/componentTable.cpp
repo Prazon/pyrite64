@@ -33,6 +33,9 @@
 #include "scene/components/rect2D.h"
 #include "scene/components/line2D.h"
 #include "scene/components/particles2D.h"
+#include "scene/components/grid2D.h"
+#include "scene/components/tween2D.h"
+#include "scene/components/shake2D.h"
 
 // some template magic to auto-detect if a function exists in a component
 #define HAS_FUNC_TPL(NAME_HAS, NAME_GET, FUNC) \
@@ -97,5 +100,8 @@ namespace P64
     SET_COMP(Rect2D),
     SET_COMP(Line2D),
     SET_COMP(Particles2D),
+    SET_COMP(Grid2D),
+    SET_COMP(Tween2D),
+    SET_COMP(Shake2D),
   };
 }

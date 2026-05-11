@@ -199,6 +199,9 @@ namespace Project::Component
   MAKE_COMP(Rect2D)
   MAKE_COMP(Line2D)
   MAKE_COMP(Particles2D)
+  MAKE_COMP(Grid2D)
+  MAKE_COMP(Tween2D)
+  MAKE_COMP(Shake2D)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -545,6 +548,45 @@ namespace Project::Component
       .funcGetAABB = nullptr,
       .funcDraw2D = Particles2D::draw2D,
       .funcWidgetSize = Particles2D::widgetSize,
+    },
+    CompInfo{
+      .id = 27,
+      .icon = ICON_MDI_GRID " ",
+      .name = "Grid (2D)",
+      .funcInit = Grid2D::init,
+      .funcDraw = Grid2D::draw,
+      .funcSerialize = Grid2D::serialize,
+      .funcDeserialize = Grid2D::deserialize,
+      .funcBuild = Grid2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Grid2D::draw2D,
+      .funcWidgetSize = Grid2D::widgetSize,
+    },
+    CompInfo{
+      .id = 28,
+      .icon = ICON_MDI_MOTION_SENSOR " ",
+      .name = "Tween (2D)",
+      .funcInit = Tween2D::init,
+      .funcDraw = Tween2D::draw,
+      .funcSerialize = Tween2D::serialize,
+      .funcDeserialize = Tween2D::deserialize,
+      .funcBuild = Tween2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Tween2D::draw2D,
+      .funcWidgetSize = Tween2D::widgetSize,
+    },
+    CompInfo{
+      .id = 29,
+      .icon = ICON_MDI_VIBRATE " ",
+      .name = "Shake (2D)",
+      .funcInit = Shake2D::init,
+      .funcDraw = Shake2D::draw,
+      .funcSerialize = Shake2D::serialize,
+      .funcDeserialize = Shake2D::deserialize,
+      .funcBuild = Shake2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Shake2D::draw2D,
+      .funcWidgetSize = Shake2D::widgetSize,
     },
   };
 

@@ -317,6 +317,9 @@ add_executable(pyrite64 src/main.cpp
         src/project/component/types/compRect2D.cpp
         src/project/component/types/compLine2D.cpp
         src/project/component/types/compParticles2D.cpp
+        src/project/component/types/compGrid2D.cpp
+        src/project/component/types/compTween2D.cpp
+        src/project/component/types/compShake2D.cpp
         src/project/component/widgetSize.cpp
         src/editor/pages/parts/assets/widgetBlueprintEditor.cpp
         src/project/component/types/compPrimitive.cpp
