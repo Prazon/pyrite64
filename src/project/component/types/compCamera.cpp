@@ -3,6 +3,7 @@
 * @license MIT
 */
 #include "../components.h"
+#include <algorithm>
 #include "../../../context.h"
 #include "../../../editor/imgui/helper.h"
 #include "../../../utils/json.h"
@@ -13,7 +14,10 @@
 #include "../../assetManager.h"
 #include "../../../editor/pages/parts/viewport3D.h"
 #include "../../../renderer/scene.h"
+#include "../../../renderer/uniforms.h"
 #include "../../../utils/meshGen.h"
+#include "glm/ext/matrix_clip_space.hpp"
+#include "glm/ext/matrix_transform.hpp"
 
 namespace
 {
@@ -39,7 +43,9 @@ namespace Project::Component::Camera
 
     if(ctx.project) {
       auto scene = ctx.project->getScenes().getLoadedScene();
-      data->vpSize.value = glm::ivec2(scene->conf.fbWidth, scene->conf.fbHeight);
+      if (scene) {
+        data->vpSize.value = glm::ivec2(scene->conf.fbWidth, scene->conf.fbHeight);
+      }
     }
     data->mode.value = 1;
 
@@ -198,7 +204,7 @@ namespace Project::Component::Camera
     Utils::Mesh::addSprite(*vp.getSprites(), pos, obj.uuid, 3, spriteCol);
   }
 
-  // SPBF64 fork: pull projection params out of a Camera component so the
+  // pull projection params out of a Camera component so the
   // editor's PiP preview can render the scene through it.
   Spec extractSpec(Object &obj, Entry &entry)
   {
@@ -212,5 +218,40 @@ namespace Project::Component::Camera
     s.aspect = data.aspect.resolve(obj);
     s.vpSize = data.vpSize.resolve(obj);
     return s;
+  }
+
+  float getAspectRatio(Object& obj, Entry &entry, float fallbackAspect)
+  {
+    Data &data = *static_cast<Data*>(entry.data.get());
+    float aspect = data.aspect.resolve(obj);
+    if (aspect > 0.0f) return aspect;
+
+    auto vpSize = data.vpSize.resolve(obj);
+    if (vpSize.y > 0) return (float)vpSize.x / (float)vpSize.y;
+
+    return fallbackAspect > 0.0f ? fallbackAspect : 1.0f;
+  }
+
+  void applyToGlobalUniforms(Object& obj, Entry &entry, Renderer::UniformGlobal &uniGlobal, float screenWidth, float screenHeight)
+  {
+    Data &data = *static_cast<Data*>(entry.data.get());
+
+    float safeWidth = std::max(screenWidth, 1.0f);
+    float safeHeight = std::max(screenHeight, 1.0f);
+    float aspect = getAspectRatio(obj, entry, safeWidth / safeHeight);
+
+    uniGlobal.screenSize = {safeWidth, safeHeight};
+    uniGlobal.projMat = glm::perspective(
+      glm::radians(data.fov.resolve(obj)),
+      aspect,
+      data.near.resolve(obj),
+      data.far.resolve(obj)
+    );
+
+    const glm::vec3 pos = obj.pos.resolve(obj.propOverrides);
+    const glm::quat rot = glm::normalize(obj.rot.resolve(obj.propOverrides));
+    const glm::vec3 forward = glm::normalize(rot * glm::vec3{0,0,-1});
+    const glm::vec3 upDir   = glm::normalize(rot * glm::vec3{0,1,0});
+    uniGlobal.cameraMat = glm::lookAt(pos, pos + forward, upDir);
   }
 }

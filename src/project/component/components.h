@@ -31,6 +31,7 @@ struct SDL_GPUGraphicsPipeline;
 struct SDL_GPURenderPass;
 
 namespace Project { class Object; }
+namespace Renderer { struct UniformGlobal; }
 
 namespace Project::Component
 {
@@ -155,7 +156,7 @@ namespace Project::Component
   MAKE_COMP(Light)
   MAKE_COMP(Camera)
 
-  // SPBF64 fork: Picture-in-Picture preview reads runtime projection params
+  // Picture-in-Picture preview reads runtime projection params
   // out of a selected Camera component to render the scene through it.
   namespace Camera
   {
@@ -170,6 +171,9 @@ namespace Project::Component
       glm::ivec2 vpSize{320, 240};
     };
     Spec extractSpec(Object &obj, Entry &entry);
+
+    void applyToGlobalUniforms(Object& obj, Entry &entry, Renderer::UniformGlobal &uniGlobal, float screenWidth, float screenHeight);
+    float getAspectRatio(Object& obj, Entry &entry, float fallbackAspect);
   }
 
   MAKE_COMP(CollMesh)

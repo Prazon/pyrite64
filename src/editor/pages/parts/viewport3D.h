@@ -45,23 +45,15 @@ namespace Editor
       Renderer::Camera camera{};
       uint32_t passId{};
 
-      // SPBF64 fork: Picture-in-Picture preview of the selected Comp::Camera.
-      // Runs a second render pass against `fbPreview` driven by `previewSpec`
-      // and is composited into the main viewport as a corner thumbnail.
+      // Picture-in-Picture preview of a selected Comp::Camera. Runs a second
+      // render pass into `fbPreview` and is composited into the main viewport
+      // as a bottom-right thumbnail.
       Renderer::Framebuffer fbPreview{};
-      Renderer::UniformGlobal uniGlobalPreview{};
-      struct PreviewCamSpec {
-        bool active{false};
-        glm::vec3 pos{};
-        glm::quat rot{0,0,0,1};
-        float fov{65.0f};       // degrees
-        float nearD{100.0f};
-        float farD{4000.0f};
-        float aspect{0.0f};     // 0 means "derive from vpSize"
-        glm::ivec2 vpSize{320, 240};
-        std::string name{};
-      };
-      PreviewCamSpec previewSpec{};
+      Renderer::UniformGlobal previewUniGlobal{};
+      bool showCameraPreview{false};
+      uint32_t previewCameraUUID{0};   // selected scene object whose transform drives the preview
+      uint32_t previewSrcUUID{0};      // object whose components own the Camera entry (== previewCameraUUID for non-prefab)
+      glm::vec2 previewScreenSize{};
 
       bool isMouseHover{false};
       bool isMouseDown{false};
@@ -147,6 +139,23 @@ namespace Editor
       void onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::Scene& renderScene);
       void onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPass *copyPass);
       void onPostRender(Renderer::Scene& renderScene);
+
+      // Renders the scene into `targetFb` using `targetUni` as the global
+      // uniform. When drawEditorHelpers is true, gizmos / lines / sprites /
+      // collision helpers / object-id sprites are drawn; when false, only
+      // gameplay-visible content is rendered (used by the camera preview).
+      void renderScenePass(SDL_GPUCommandBuffer* cmdBuff, Renderer::Scene& renderScene,
+                           Renderer::Framebuffer &targetFb, Renderer::UniformGlobal &targetUni,
+                           bool drawEditorHelpers);
+
+      // Walks the current selection looking for the first object with a
+      // Camera component and prepares preview state (UUIDs + framebuffer).
+      // No-op if nothing in the selection has a Camera.
+      void updateCameraPreviewState(const ImVec2 &currSize, Project::Scene *scene);
+
+      // Draws the PiP overlay (frame + camera image + label) at the bottom
+      // right of the viewport. No-op when showCameraPreview is false.
+      void drawCameraPreviewOverlay(const ImVec2 &currPos, const ImVec2 &currSize);
 
     public:
       Viewport3D();
