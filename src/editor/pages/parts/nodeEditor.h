@@ -27,6 +27,9 @@ namespace Editor
       bool     forceFocusNextFrame{false};
       bool     firstDockFrame{true};
 
+      // Latched mouse-grid position when the Tab Add-Node palette opens.
+      ImVec2   paletteSpawnPos{0,0};
+
     public:
       NodeEditor(uint64_t assetUUID);
       ~NodeEditor();

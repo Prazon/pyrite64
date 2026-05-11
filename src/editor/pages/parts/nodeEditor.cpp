@@ -19,6 +19,7 @@
 #include "../../../project/graph/nodeStyles.h"
 #include "../../../project/compile/compileErrors.h"
 #include "../../../utils/fs.h"
+#include "../../nodePalette.h"
 
 namespace
 {
@@ -39,33 +40,46 @@ Editor::NodeEditor::NodeEditor(uint64_t assetUUID)
   //name = "Node-Editor - ";
   name = currentAsset ? currentAsset->name : "*New Graph*";
 
-  auto createPopup = [](Project::Graph::Graph &graph, ImFlow::Pin* pin)
+  // Spawn `typeIdx` at `gridPos` and, if `pin` is non-null, wire it to
+  // the first compatible slot on the new node. Output-pin drags get
+  // wired to the new node's matching IN; input-pin drags get wired to
+  // the new node's matching OUT. Replaces the old "always ins[0]"
+  // behaviour that silently dropped value-pin drops.
+  auto spawnAndWire = [](Project::Graph::Graph &g, uint32_t typeIdx,
+                         const ImVec2 &gridPos, ImFlow::Pin* pin)
   {
-    ImGui::Text("Create New");
-    ImGui::Separator();
-    auto &names = Project::Graph::Graph::getNodeNames();
-    for(size_t i = 0; i < names.size(); ++i) {
-      if(ImGui::Selectable(names[i].c_str())) {
-
-        auto newPos = pin ? pin->getParent()->getPos() : ImVec2{0,0};
-        newPos.x += 150;
-        auto node = graph.addNode(static_cast<uint32_t>(i), newPos);
-
-        auto &ins = node->getIns();
-        if(pin && !ins.empty())ins[0]->createLink(pin);
-
-        node->setPos(newPos);
-        ImGui::CloseCurrentPopup();
+    auto node = g.addNode(typeIdx, gridPos);
+    if (!node) return;
+    node->setPos(gridPos);
+    if (!pin) return;
+    auto srcStyle = pin->getStyle().get();
+    if (pin->getType() == ImFlow::PinType_Output) {
+      if (auto *target = ::Editor::NodePalette::firstMatchingInputPin(node.get(), pin)) {
+        target->createLink(pin);
+      }
+    } else {
+      for (auto &p : node->getOuts()) {
+        if (p && p->getStyle().get() == srcStyle) {
+          pin->createLink(p.get());
+          break;
+        }
       }
     }
   };
 
-  graph.graph.droppedLinkPopUpContent([&](ImFlow::Pin* pin)
+  graph.graph.droppedLinkPopUpContent([&, spawnAndWire](ImFlow::Pin* pin)
   {
-    createPopup(graph, pin);
+    uint32_t typeIdx = 0;
+    if (::Editor::NodePalette::draw(
+          Project::Graph::Graph::getPaletteEntries(), pin, &typeIdx)) {
+      auto pos = pin ? pin->getParent()->getPos() : ImVec2{0,0};
+      pos.x += 180.0f;
+      spawnAndWire(graph, typeIdx, pos, pin);
+      ImGui::CloseCurrentPopup();
+    }
   });
 
-  graph.graph.rightClickPopUpContent([&](ImFlow::BaseNode* node)
+  graph.graph.rightClickPopUpContent([&, spawnAndWire](ImFlow::BaseNode* node)
   {
     if(node) {
       if(ImGui::Selectable(ICON_MDI_CONTENT_COPY " Duplicate")) {
@@ -85,7 +99,14 @@ Editor::NodeEditor::NodeEditor(uint64_t assetUUID)
         ImGui::CloseCurrentPopup();
       }
     } else {
-      createPopup(graph, nullptr);
+      uint32_t typeIdx = 0;
+      if (::Editor::NodePalette::draw(
+            Project::Graph::Graph::getPaletteEntries(), nullptr, &typeIdx)) {
+        ImVec2 mp = ImGui::GetMousePos();
+        ImVec2 gridPos = graph.graph.screen2grid(mp);
+        spawnAndWire(graph, typeIdx, gridPos, nullptr);
+        ImGui::CloseCurrentPopup();
+      }
     }
   });
 
@@ -175,10 +196,29 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
     ImGui::Separator();
   }
 
-  // Ctrl+S → save while focused on this graph window.
+  // Ctrl+S → save while focused on this graph window. Tab opens the
+  // Add-Node palette at the current mouse position (UE-Blueprint
+  // muscle memory). The mouse position is latched at open so the user
+  // can move the cursor toward the palette while typing without the
+  // spawn point sliding away.
   if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
     ImGuiIO &io = ImGui::GetIO();
     if(io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save();
+    if(!ImGui::IsAnyItemActive()
+       && ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+      paletteSpawnPos = graph.graph.screen2grid(ImGui::GetMousePos());
+      ImGui::OpenPopup("##nodePaletteTab");
+    }
+  }
+  if(ImGui::BeginPopup("##nodePaletteTab")) {
+    uint32_t typeIdx = 0;
+    if(::Editor::NodePalette::draw(
+         Project::Graph::Graph::getPaletteEntries(), nullptr, &typeIdx)) {
+      auto node = graph.addNode(typeIdx, paletteSpawnPos);
+      if(node) node->setPos(paletteSpawnPos);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
   }
 
   ImVec2 canvasMin  = ImGui::GetCursorScreenPos();

@@ -15,6 +15,7 @@
 #pragma once
 
 #include <string>
+#include <span>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcomment"
@@ -23,6 +24,7 @@
 
 #include "../assets/material.h"
 #include "nodes/baseNode.h"
+#include "../../editor/nodePalette.h"
 
 namespace Project::MaterialGraph
 {
@@ -32,6 +34,8 @@ namespace Project::MaterialGraph
       ImFlow::ImNodeFlow graph{};
 
       static const std::vector<std::string>& getNodeNames();
+      // Categorised entries for the Add-Node palette.
+      static std::span<const ::Editor::NodePalette::Entry> getPaletteEntries();
       std::shared_ptr<Node::Base> addNode(uint32_t type, const ImVec2& pos);
 
       bool deserialize(const std::string &jsonData);

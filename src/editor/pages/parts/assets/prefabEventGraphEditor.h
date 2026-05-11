@@ -42,6 +42,9 @@ namespace Editor
       uint64_t highlightNodeUUID{0};
       float    highlightSecondsLeft{0.0f};
 
+      // Latched mouse-grid position when Tab opens the Add-Node palette.
+      ImVec2   paletteSpawnPos{0,0};
+
     public:
       explicit PrefabEventGraphEditor(uint64_t prefabAssetUUID);
 

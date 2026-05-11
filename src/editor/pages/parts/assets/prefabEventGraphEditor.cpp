@@ -15,6 +15,7 @@
 #include "../../../../project/compile/compileErrors.h"
 #include "../../../../project/graph/nodes/baseNode.h"
 #include "../../../../project/graph/nodeStyles.h"
+#include "../../../nodePalette.h"
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
 #include "../../../../project/graph/nodes/nodePrefabFunc.h"
 #include "../../../../project/graph/nodes/nodePrefabVarGet.h"
@@ -24,23 +25,27 @@ namespace
 {
   constexpr ImVec2 DEF_WIN_SIZE{960, 600};
 
-  // Right-click / dropped-link palette: lets the user create any registered
-  // graph node type. Future work will filter this to prefab-relevant nodes
-  // (events, function calls, variable get/set) once those types exist.
-  void drawCreatePopup(Project::Graph::Graph &graph, ImFlow::Pin* pin)
+  // Spawn a node and wire it to the dragged pin (if any) on the first
+  // style-compatible slot. Centralised so the drop popup, the right-
+  // click popup, and the Tab hotkey share one path.
+  void spawnAndWire(Project::Graph::Graph &g, uint32_t typeIdx,
+                    const ImVec2 &gridPos, ImFlow::Pin* pin)
   {
-    ImGui::Text("Create New");
-    ImGui::Separator();
-    auto &names = Project::Graph::Graph::getNodeNames();
-    for (size_t i = 0; i < names.size(); ++i) {
-      if (ImGui::Selectable(names[i].c_str())) {
-        auto newPos = pin ? pin->getParent()->getPos() : ImVec2{0, 0};
-        newPos.x += 150;
-        auto node = graph.addNode(static_cast<uint32_t>(i), newPos);
-        auto &ins = node->getIns();
-        if (pin && !ins.empty()) ins[0]->createLink(pin);
-        node->setPos(newPos);
-        ImGui::CloseCurrentPopup();
+    auto node = g.addNode(typeIdx, gridPos);
+    if (!node) return;
+    node->setPos(gridPos);
+    if (!pin) return;
+    auto srcStyle = pin->getStyle().get();
+    if (pin->getType() == ImFlow::PinType_Output) {
+      if (auto *target = ::Editor::NodePalette::firstMatchingInputPin(node.get(), pin)) {
+        target->createLink(pin);
+      }
+    } else {
+      for (auto &p : node->getOuts()) {
+        if (p && p->getStyle().get() == srcStyle) {
+          pin->createLink(p.get());
+          break;
+        }
       }
     }
   }
@@ -102,7 +107,14 @@ Editor::PrefabEventGraphEditor::PrefabEventGraphEditor(uint64_t prefabAssetUUID)
   }
 
   graph.graph.droppedLinkPopUpContent([this](ImFlow::Pin* pin) {
-    drawCreatePopup(graph, pin);
+    uint32_t typeIdx = 0;
+    if (::Editor::NodePalette::draw(
+          Project::Graph::Graph::getPaletteEntries(), pin, &typeIdx)) {
+      auto pos = pin ? pin->getParent()->getPos() : ImVec2{0, 0};
+      pos.x += 180.0f;
+      spawnAndWire(graph, typeIdx, pos, pin);
+      ImGui::CloseCurrentPopup();
+    }
   });
   graph.graph.rightClickPopUpContent([this](ImFlow::BaseNode* node) {
     if (node) {
@@ -123,7 +135,13 @@ Editor::PrefabEventGraphEditor::PrefabEventGraphEditor(uint64_t prefabAssetUUID)
         ImGui::CloseCurrentPopup();
       }
     } else {
-      drawCreatePopup(graph, nullptr);
+      uint32_t typeIdx = 0;
+      if (::Editor::NodePalette::draw(
+            Project::Graph::Graph::getPaletteEntries(), nullptr, &typeIdx)) {
+        ImVec2 gridPos = graph.graph.screen2grid(ImGui::GetMousePos());
+        spawnAndWire(graph, typeIdx, gridPos, nullptr);
+        ImGui::CloseCurrentPopup();
+      }
     }
   });
 }
@@ -224,10 +242,27 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
   ImGui::SameLine();
   ImGui::TextDisabled("(stored in %s)", asset->path.c_str());
 
-  // Ctrl+S → save while focused on this graph window.
+  // Ctrl+S → save. Tab → open Add-Node palette at the mouse-grid
+  // position. The position is latched at open so cursor drift while
+  // typing the search query doesn't move the spawn point.
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
     ImGuiIO &io = ImGui::GetIO();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save();
+    if (!ImGui::IsAnyItemActive()
+        && ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+      paletteSpawnPos = graph.graph.screen2grid(ImGui::GetMousePos());
+      ImGui::OpenPopup("##nodePaletteTab");
+    }
+  }
+  if (ImGui::BeginPopup("##nodePaletteTab")) {
+    uint32_t typeIdx = 0;
+    if (::Editor::NodePalette::draw(
+          Project::Graph::Graph::getPaletteEntries(), nullptr, &typeIdx)) {
+      auto node = graph.addNode(typeIdx, paletteSpawnPos);
+      if (node) node->setPos(paletteSpawnPos);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
   }
 
   // Push prefab context so prefab-aware nodes (PrefabEvent / PrefabFunc /

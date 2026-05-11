@@ -128,6 +128,43 @@ namespace Project::Graph
     return names;
   }
 
+  // Palette metadata. Indices MUST stay in lockstep with NODE_TABLE
+  // above. The category column drives the grouped view in the Add-Node
+  // popup; the type masks drive context-aware filtering when the popup
+  // is opened from a dropped link. Pin types here mirror what each
+  // node's ctor calls addIN/addOUT with (mostly Exec for control flow,
+  // Float as the legacy "value" stand-in until typed value pins land).
+  std::span<const ::Editor::NodePalette::Entry> Graph::getPaletteEntries()
+  {
+    using namespace ::Editor::NodePalette;
+    using ::Project::Graph::PinDataType;
+    constexpr TypeMask EXEC  = TypeMask{1u} << static_cast<uint32_t>(PinDataType::Exec);
+    constexpr TypeMask FLOAT = TypeMask{1u} << static_cast<uint32_t>(PinDataType::Float);
+
+    static const Entry table[] = {
+      // typeIndex, name,                                                 category,         inTypes,       outTypes
+      {  0, Node::Start::NAME,         "Events",       0,            EXEC          },
+      {  1, Node::Wait::NAME,          "Flow Control", EXEC,         EXEC          },
+      {  2, Node::ObjDel::NAME,        "Functions",    EXEC,         EXEC          },
+      {  3, Node::ObjEvent::NAME,      "Functions",    EXEC,         EXEC          },
+      {  4, Node::Compare::NAME,       "Flow Control", EXEC | FLOAT, EXEC          },
+      {  5, Node::Value::NAME,         "Variables",    0,            FLOAT         },
+      {  6, Node::Repeat::NAME,        "Flow Control", EXEC,         EXEC          },
+      {  7, Node::Func::NAME,          "Functions",    EXEC,         EXEC | FLOAT  },
+      {  8, Node::CompBool::NAME,      "Flow Control", EXEC | FLOAT, EXEC          },
+      {  9, Node::SceneLoad::NAME,     "Functions",    EXEC | FLOAT, EXEC          },
+      { 10, Node::Arg::NAME,           "Variables",    0,            FLOAT         },
+      { 11, Node::SwitchCase::NAME,    "Flow Control", EXEC | FLOAT, EXEC          },
+      { 12, Node::Note::NAME,          "Comments",     0,            0             },
+      { 13, Node::PrefabEvent::NAME,   "Events",       0,            EXEC          },
+      { 14, Node::PrefabFunc::NAME,    "Functions",    EXEC,         EXEC          },
+      { 15, Node::PrefabVarGet::NAME,  "Variables",    0,            FLOAT         },
+    };
+    static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
+      "Palette entries out of sync with NODE_TABLE");
+    return table;
+  }
+
   std::shared_ptr<Node::Base> Graph::addNode(uint32_t type, const ImVec2 &pos)
   {
     assert(type < NODE_TABLE.size() && "Unknown node type in graph addNode");

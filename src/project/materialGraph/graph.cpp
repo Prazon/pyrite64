@@ -93,6 +93,26 @@ namespace Project::MaterialGraph
     return names;
   }
 
+  std::span<const ::Editor::NodePalette::Entry> Graph::getPaletteEntries()
+  {
+    using namespace ::Editor::NodePalette;
+    using ::Project::Graph::PinDataType;
+    constexpr TypeMask MAT = TypeMask{1u} << static_cast<uint32_t>(PinDataType::MatProp);
+
+    static const Entry table[] = {
+      // typeIndex,        name,                                    category,    inTypes, outTypes
+      { TYPE_OUTPUT,         Node::Output::NAME,         "Output",    MAT, 0   },
+      { TYPE_COLOR_COMBINER, Node::ColorCombiner::NAME,  "Constants", 0,   MAT },
+      { TYPE_COLORS,         Node::Colors::NAME,         "Constants", 0,   MAT },
+      { TYPE_RENDER_MODE,    Node::RenderMode::NAME,     "Constants", 0,   MAT },
+      { TYPE_TEXTURE,        Node::Texture::NAME,        "Constants", 0,   MAT },
+      { TYPE_GEOMETRY,       Node::Geometry::NAME,       "Constants", 0,   MAT },
+    };
+    static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
+      "Material palette entries out of sync with NODE_TABLE");
+    return table;
+  }
+
   std::shared_ptr<Node::Base> Graph::addNode(uint32_t type, const ImVec2 &pos)
   {
     if (type >= NODE_TABLE.size()) return nullptr;

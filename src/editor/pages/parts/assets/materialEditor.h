@@ -56,6 +56,9 @@ namespace Editor
       Project::Assets::Material compiledCache{};
       void recompileCache();
 
+      // Latched mouse-grid position when Tab opens the Add-Node palette.
+      ImVec2 paletteSpawnPos{0,0};
+
     public:
       explicit MaterialEditor(uint64_t materialAssetUUID);
 

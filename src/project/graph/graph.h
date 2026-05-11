@@ -4,6 +4,7 @@
 */
 #pragma once
 #include <string>
+#include <span>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcomment"
@@ -12,6 +13,7 @@
 
 #include "../../utils/binaryFile.h"
 #include "nodes/baseNode.h"
+#include "../../editor/nodePalette.h"
 
 namespace Project::Compile { class ErrorList; }
 
@@ -30,6 +32,10 @@ namespace Project::Graph
       ImFlow::ImNodeFlow graph{};
 
       static const std::vector<std::string>& getNodeNames();
+      // Categorised entries for the Add-Node palette. Indices line up
+      // with NODE_TABLE; the metadata (category + pin type masks) is
+      // hand-curated in graph.cpp alongside the table itself.
+      static std::span<const ::Editor::NodePalette::Entry> getPaletteEntries();
       std::shared_ptr<Node::Base> addNode(uint32_t type, const ImVec2& pos);
 
       bool deserialize(const std::string &jsonData);
