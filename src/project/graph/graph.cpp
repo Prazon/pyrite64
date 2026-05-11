@@ -759,10 +759,26 @@ namespace Project::Graph
         if (rightNode) hasIncomingExec.insert(rightNode->uuid);
       }
 
+      // inProgress tracks the current recursion stack so a cycle in
+      // the value-dependency graph is caught instead of overflowing
+      // the host stack. On detection we emit a static_assert into
+      // the generated source that names the offending node, so the
+      // host compiler fails loudly during build and the user can
+      // locate the cycle by uuid.
+      std::unordered_set<uint64_t> inProgress;
       std::function<void(Node::Base*)> emitPure;
       emitPure = [&](Node::Base *n) {
         if (emittedPure.count(n->uuid)) return;
-        emittedPure.insert(n->uuid);
+        if (inProgress.count(n->uuid)) {
+          nodeCtx.vars.push_back({"[[maybe_unused]] static constexpr bool",
+            "p64_cyclic_pure_" + Utils::toHex64(n->uuid),
+            "([] { static_assert(false, \"Cyclic pure-value dependency at node "
+              + n->getName() + " (" + Utils::toHex64(n->uuid)
+              + ")\"); return false; }())"});
+          emittedPure.insert(n->uuid);
+          return;
+        }
+        inProgress.insert(n->uuid);
         // Recurse into pure-eligible value-input deps first so this
         // node's initializer references already-declared globalVars.
         auto inIt = nodeIngoingValMap.find(n->uuid);
@@ -784,6 +800,8 @@ namespace Project::Graph
         n->buildAsPure(nodeCtx);
         nodeCtx.outUUIDs   = savedOut;
         nodeCtx.inValUUIDs = savedIn;
+        inProgress.erase(n->uuid);
+        emittedPure.insert(n->uuid);
       };
 
       for (auto* n : nodeVec) {

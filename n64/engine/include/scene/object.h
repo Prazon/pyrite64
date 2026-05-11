@@ -158,6 +158,49 @@ namespace P64
       }
 
       /**
+       * Kind-checked variant of getPrefabVarRef. Asserts that the var
+       * record at `uuid` matches the expected kind/elemKind before
+       * reinterpreting the bytes, so a graph that emits the wrong
+       * std::vector<E> against an actual storage slot crashes loudly
+       * at first read instead of silently corrupting memory. The
+       * generated code passes constants matching the PrefabVarDef in
+       * effect at build time; if the on-disk record drifts (e.g. the
+       * user edited the prefab between scene-build and runtime via
+       * an external tool) the assertion fires the moment any node
+       * accesses the var. In release builds with assertions stripped
+       * this still works correctly when the record matches; it just
+       * loses the loud diagnostic on mismatch.
+       */
+      template<typename T>
+      [[nodiscard]] T* getPrefabVarRefChecked(uint64_t uuid,
+                                              uint8_t expectedKind,
+                                              uint8_t expectedElemKind) const {
+        if(varCount == 0 || varDataOffset == 0) return nullptr;
+        constexpr uint32_t VAR_RECORD_BYTES = 32;
+        constexpr uint32_t VALUE_OFFSET = 12;
+        auto *base = (uint8_t*)this + varDataOffset;
+        for(uint32_t i = 0; i < varCount; ++i) {
+          auto *rec = base + i * VAR_RECORD_BYTES;
+          uint64_t recUUID;
+          __builtin_memcpy(&recUUID, rec, sizeof(recUUID));
+          if(recUUID == uuid) {
+            uint8_t kind = rec[8];
+            uint8_t elemKind = rec[9];
+            assertf(kind == expectedKind,
+              "PrefabVarRef kind mismatch on var %08X%08X: got %d, expected %d",
+              (unsigned)(uuid >> 32), (unsigned)(uuid & 0xFFFFFFFFu),
+              (int)kind, (int)expectedKind);
+            assertf(elemKind == expectedElemKind,
+              "PrefabVarRef elemKind mismatch on var %08X%08X: got %d, expected %d",
+              (unsigned)(uuid >> 32), (unsigned)(uuid & 0xFFFFFFFFu),
+              (int)elemKind, (int)expectedElemKind);
+            return reinterpret_cast<T*>(rec + VALUE_OFFSET);
+          }
+        }
+        return nullptr;
+      }
+
+      /**
        * Returns the first component that matches the given type.
        * The type given must be component in the 'P64::Comp' namespace.
        * If no component of the given type is found, nullptr is returned.

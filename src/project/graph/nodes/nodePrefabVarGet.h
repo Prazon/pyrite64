@@ -224,14 +224,17 @@ namespace Project::Graph::Node
         }
         std::string resVar = "res_" + Utils::toHex64(uuid);
         if (varKind == 8) {
-          // ARRAY: getPrefabVarRef returns a pointer into the placement-
-          // new'd std::vector<E> in the object's var blob. Emit a
-          // reference (auto&) so downstream array nodes mutate the
-          // actual storage rather than a copy. Persists across OnTick
-          // dispatches because the storage lives on the Object.
+          // ARRAY: getPrefabVarRefChecked asserts kind/elemKind match
+          // before reinterpreting the bytes, so a stale graph against
+          // a renamed-out-from-under-it prefab var fires loudly at
+          // first read instead of corrupting the vector silently.
+          // Emit a reference (auto&) so downstream array nodes mutate
+          // the actual storage rather than a copy. Persists across
+          // OnTick dispatches because the storage lives on the Object.
           std::string vecType = std::string{"std::vector<"} + arrayElemCType(elemKind) + ">";
-          ctx.line("auto& " + resVar + " = *self->getPrefabVarRef<" + vecType + ">("
-                   + std::to_string(varUUID) + "ull);");
+          ctx.line("auto& " + resVar + " = *self->getPrefabVarRefChecked<" + vecType + ">("
+                   + std::to_string(varUUID) + "ull, 8, "
+                   + std::to_string((int)elemKind) + ");");
         } else {
           std::string cType = kindToCType(varKind);
           ctx.line(std::string{cType} + " " + resVar

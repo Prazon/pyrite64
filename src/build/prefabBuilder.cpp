@@ -401,10 +401,24 @@ namespace
         if (rightNode) hasIncomingExec.insert(rightNode->uuid);
       }
 
+      // inProgress catches cyclic value-dependency chains. On
+      // detection, push a static_assert-bearing globalVar that
+      // names the cycle's node so the host compiler nukes the
+      // dispatch function with a clear diagnostic.
+      std::unordered_set<uint64_t> inProgress;
       std::function<void(Project::Graph::Node::Base*)> emitPure;
       emitPure = [&](Project::Graph::Node::Base *n) {
         if (emittedPure.count(n->uuid)) return;
-        emittedPure.insert(n->uuid);
+        if (inProgress.count(n->uuid)) {
+          nctx.vars.push_back({"[[maybe_unused]] static constexpr bool",
+            "p64_cyclic_pure_" + Utils::toHex64(n->uuid),
+            "([] { static_assert(false, \"Cyclic pure-value dependency at node "
+              + n->getName() + " (" + Utils::toHex64(n->uuid)
+              + ")\"); return false; }())"});
+          emittedPure.insert(n->uuid);
+          return;
+        }
+        inProgress.insert(n->uuid);
         auto inIt = ingoingVals.find(n->uuid);
         if (inIt != ingoingVals.end()) {
           for (uint64_t inUUID : inIt->second) {
@@ -426,6 +440,8 @@ namespace
         n->buildAsPure(nctx);
         nctx.outUUIDs   = savedOut;
         nctx.inValUUIDs = savedIn;
+        inProgress.erase(n->uuid);
+        emittedPure.insert(n->uuid);
       };
 
       for (auto* n : allNodes) {
