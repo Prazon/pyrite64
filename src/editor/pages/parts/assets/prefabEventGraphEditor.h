@@ -5,6 +5,7 @@
 #include "imgui.h"
 
 #include "../../../../project/graph/graph.h"
+#include "../../../commentFrames.h"
 
 namespace Editor
 {
@@ -44,6 +45,9 @@ namespace Editor
 
       // Latched mouse-grid position when Tab opens the Add-Node palette.
       ImVec2   paletteSpawnPos{0,0};
+
+      // Comment-frame paint + drag-containment state.
+      Editor::CommentFrames::State commentFrames{};
 
     public:
       explicit PrefabEventGraphEditor(uint64_t prefabAssetUUID);

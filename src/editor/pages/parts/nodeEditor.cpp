@@ -22,6 +22,7 @@
 #include "../../nodePalette.h"
 #include "../../nodeClipboard.h"
 #include "../../graphHotkeys.h"
+#include "../../commentFrames.h"
 
 namespace
 {
@@ -265,7 +266,15 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
     pendingFocusNodeUUID = 0;
   }
 
+  // Comment frames: paint coloured rects on the parent window draw
+  // list before update() so they sit behind the node bodies. The
+  // post-update step below propagates any frame drag to non-selected
+  // contained nodes.
+  commentFrames.preUpdate(graph, canvasMin);
+
   graph.graph.update();
+
+  commentFrames.postUpdate(graph);
 
   // Bad-node outline: persistent red rect on every node referenced by an
   // ERROR for this asset. Cleared implicitly when the user hits Compile

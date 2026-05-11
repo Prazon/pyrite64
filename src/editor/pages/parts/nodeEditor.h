@@ -5,6 +5,7 @@
 #pragma once
 #include "../../../project/project.h"
 #include "../../../project/graph/graph.h"
+#include "../../commentFrames.h"
 
 namespace Editor
 {
@@ -29,6 +30,9 @@ namespace Editor
 
       // Latched mouse-grid position when the Tab Add-Node palette opens.
       ImVec2   paletteSpawnPos{0,0};
+
+      // Comment-frame paint + drag-containment state.
+      Editor::CommentFrames::State commentFrames{};
 
     public:
       NodeEditor(uint64_t assetUUID);

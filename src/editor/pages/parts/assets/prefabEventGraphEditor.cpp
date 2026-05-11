@@ -18,6 +18,7 @@
 #include "../../../nodePalette.h"
 #include "../../../nodeClipboard.h"
 #include "../../../graphHotkeys.h"
+#include "../../../commentFrames.h"
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
 #include "../../../../project/graph/nodes/nodePrefabFunc.h"
 #include "../../../../project/graph/nodes/nodePrefabVarGet.h"
@@ -321,7 +322,13 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
     pendingFocusNodeUUID = 0;
   }
 
+  // Comment frames: paint behind nodes; propagate frame-drag to
+  // contained children after update().
+  commentFrames.preUpdate(graph, canvasMin);
+
   graph.graph.update();
+
+  commentFrames.postUpdate(graph);
 
   // Bad-node outline: persistent red rect on every node referenced by an
   // ERROR for this asset. See nodeEditor.cpp for the parallel block —
