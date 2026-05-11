@@ -361,9 +361,15 @@ TESTS: List[Test] = [
     Test("graph-set-node-prop-reject", "graph-set-node-prop", ["--asset", "TGraph", "--parent", "{GRAPH_WAIT_UUID}", "--field", "uuid", "--value", "0"], expect_fail=True),
     Test("graph-set-node-pos",         "graph-set-node-pos",  ["--asset", "TGraph", "--parent", "{GRAPH_WAIT_UUID}", "--value", "[300,100]"]),
     Test("graph-duplicate-node",       "graph-duplicate-node",["--asset", "TGraph", "--parent", "{GRAPH_WAIT_UUID}"]),
-    # graph-compile against the now-rich TGraph (it already has a Start
-    # from the earlier add-node-start test) returns ok=true.
-    Test("graph-compile",              "graph-compile",       ["--asset", "TGraph"]),
+    # graph-compile on the now-rich TGraph catches the unwired Wait/Value
+    # nodes via real pin-style reachability (proves the caveat-1 fix —
+    # validate() runs against a deserialized ImNodeFlow graph, not just
+    # the JSON walker).
+    Test("graph-compile-unreachable",  "graph-compile",       ["--asset", "TGraph"], expect_fail=True),
+    # Clean-room positive: a fresh graph with just a Start node compiles green.
+    Test("graph-compile-clean-make",   "graph-create",        ["--name", "TGraphClean"]),
+    Test("graph-compile-clean-start",  "graph-add-node",      ["--asset", "TGraphClean", "--type", "Start"]),
+    Test("graph-compile-clean-ok",     "graph-compile",       ["--asset", "TGraphClean"]),
 
     # === event-graph node-level ops (deferred follow-up landed) =======
     Test("event-graph-list-empty",     "event-graph-list-nodes", ["--asset", "TPrefab1"]),
@@ -379,7 +385,16 @@ TESTS: List[Test] = [
     Test("eg-set-node-pos",            "event-graph-set-node-pos", ["--asset", "TPrefab1", "--parent", "{EG_EVENT_UUID}", "--value", "[40,40]"]),
     Test("eg-set-node-prop",           "event-graph-set-node-prop",["--asset", "TPrefab1", "--parent", "{EG_EVENT_UUID}", "--field", "eventKind", "--value", "0"]),
     Test("eg-duplicate-node",          "event-graph-duplicate-node",["--asset", "TPrefab1", "--parent", "{EG_EVENT_UUID}"]),
-    Test("eg-compile",                 "event-graph-compile", ["--asset", "TPrefab1"]),  # PrefabEvent counts as entry
+    # eg-compile expects failure because the earlier "event-graph-add-func"
+    # test added a Function node without wiring it to any entry node —
+    # real validate() catches that as unreachable (proving pin-style
+    # reachability works headlessly now, post-caveat-1 fix).
+    Test("eg-compile-unreachable",     "event-graph-compile", ["--asset", "TPrefab1"], expect_fail=True),
+    # Clean-room positive: a fresh prefab with one PrefabEvent node compiles green.
+    Test("eg-compile-clean-make",      "prefab-create",       ["--name", "TPrefabClean"]),
+    Test("eg-compile-clean-event",     "event-graph-add-node",["--asset", "TPrefabClean", "--type", "Event"]),
+    Test("eg-compile-clean-ok",        "event-graph-compile", ["--asset", "TPrefabClean"]),
+
     Test("eg-prefab-var-stub",         "prefab-add-variable", ["--asset", "TPrefab1", "--name", "egTestVar", "--type", "int", "--value", "0"]),
     Test("eg-add-var-get",             "event-graph-add-var-get", ["--asset", "TPrefab1", "--name", "egTestVar", "--value", "[200,0]"]),
     Test("eg-add-var-get-missing",     "event-graph-add-var-get", ["--asset", "TPrefab1", "--name", "doesNotExist"], expect_fail=True),

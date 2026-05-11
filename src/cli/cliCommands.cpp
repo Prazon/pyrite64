@@ -29,6 +29,7 @@
 #include "../project/graph/graph.h"
 #include "../project/materialGraph/graph.h"
 #include "../project/assets/materialAsset.h"
+#include "../project/compile/compileErrors.h"
 #include "../utils/fs.h"
 #include "../utils/hash.h"
 #include "../utils/json.h"
@@ -3948,6 +3949,14 @@ namespace
   void saveMaterialGraphInto(Project::AssetManagerEntry &e, const nlohmann::json &doc)
   {
     e.materialAsset->graphJSON = doc.dump();
+    // Refresh the compiled cache so downstream consumers (model reload,
+    // --cmd build, asset previews) see the same compiled material the
+    // GUI Compile button would produce. ImNodeFlow is data-only here —
+    // no ImGui context required (same pattern as nodeGraphBuilder.cpp).
+    Project::MaterialGraph::Graph live{};
+    if (live.deserialize(e.materialAsset->graphJSON)) {
+      live.compile(e.materialAsset->compiled);
+    }
     Utils::FS::saveTextFile(e.path, e.materialAsset->serialize());
   }
 
@@ -4128,19 +4137,47 @@ namespace
     return 0;
   }
 
+  // Serialises a Compile::ErrorList into the same {diagnostics,ok,...}
+  // shape gjValidate emits, so the response schema stays stable.
+  nlohmann::json compileErrorsToJSON(const Project::Compile::ErrorList &errs)
+  {
+    nlohmann::json diags = nlohmann::json::array();
+    for (const auto &e : errs.all()) {
+      nlohmann::json d;
+      d["severity"] = (e.severity == Project::Compile::Severity::ERROR) ? "error" : "warning";
+      d["message"] = e.message;
+      if (e.nodeUUID) d["nodeUUID"] = e.nodeUUID;
+      if (e.assetUUID) d["assetUUID"] = e.assetUUID;
+      diags.push_back(d);
+    }
+    nlohmann::json out;
+    out["diagnostics"] = diags;
+    out["ok"] = errs.errorCount() == 0;
+    out["errorCount"] = (uint64_t)errs.errorCount();
+    out["warningCount"] = (uint64_t)errs.warningCount();
+    return out;
+  }
+
+  // Runs the editor's full Graph::validate on a CLI-loaded graph. This
+  // exercises pin-style reachability (unreachable-node detection), which
+  // a JSON-only walker can't see. ImNodeFlow is constructible without an
+  // ImGui frame — the build pipeline (nodeGraphBuilder.cpp) does the same
+  // thing during --cmd build.
   int cmdGraphCompile(const CLI::Commands::Args &a, Project::Project &project)
   {
     if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
     auto *e = resolveGraphAsset(project, a.asset);
     if (!e) { emitErr("graph not found: " + a.asset); return 1; }
-    nlohmann::json doc; std::string err;
-    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
-    // Project::Graph entry types: 0 = Start, 13 = PrefabEvent.
-    auto result = gjValidate(doc, Project::Graph::Graph::getNodeNames(),
-                             /*entryTypes=*/{0, 13}, /*startType=*/0);
-    result["asset"] = e->name;
-    emitJSON(result);
-    return result.value("ok", true) ? 0 : 1;
+    auto json = Utils::FS::loadTextFile(e->path);
+    if (json.empty()) { emitErr("empty graph file: " + e->path); return 1; }
+    Project::Graph::Graph graph{};
+    if (!graph.deserialize(json)) { emitErr("graph deserialize failed"); return 1; }
+    Project::Compile::ErrorList errs{};
+    graph.validate(&errs, e->getUUID());
+    auto out = compileErrorsToJSON(errs);
+    out["asset"] = e->name;
+    emitJSON(out);
+    return out.value("ok", true) ? 0 : 1;
   }
 
   // Event-graph variants — same shape, different loader/saver.
@@ -4215,14 +4252,29 @@ namespace
     if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
     auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
-    nlohmann::json doc; std::string err;
-    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
-    // PrefabEvent (type 13) is the canonical entry for prefab event-graphs.
-    auto result = gjValidate(doc, Project::Graph::Graph::getNodeNames(),
-                             /*entryTypes=*/{0, 13}, /*startType=*/0);
-    result["asset"] = e->name;
-    emitJSON(result);
-    return result.value("ok", true) ? 0 : 1;
+    // Empty event-graph: nothing to validate, but report ok so callers can
+    // chain compile without first having to check for graph existence.
+    if (e->prefab->eventGraphJSON.empty()) {
+      nlohmann::json out;
+      out["diagnostics"] = nlohmann::json::array();
+      out["ok"] = true;
+      out["errorCount"] = 0;
+      out["warningCount"] = 0;
+      out["asset"] = e->name;
+      out["note"] = "empty event graph";
+      emitJSON(out);
+      return 0;
+    }
+    Project::Graph::Graph graph{};
+    if (!graph.deserialize(e->prefab->eventGraphJSON)) {
+      emitErr("event graph deserialize failed"); return 1;
+    }
+    Project::Compile::ErrorList errs{};
+    graph.validate(&errs, e->getUUID());
+    auto out = compileErrorsToJSON(errs);
+    out["asset"] = e->name;
+    emitJSON(out);
+    return out.value("ok", true) ? 0 : 1;
   }
 
   // Material-graph variants — same shape, MaterialGraph::Graph node table.
