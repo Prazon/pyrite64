@@ -28,6 +28,32 @@
 #include "nodes/nodePrefabFunc.h"
 #include "nodes/nodePrefabVarGet.h"
 #include "nodes/nodeReroute.h"
+#include "nodes/nodeDeltaTime.h"
+#include "nodes/nodeMathAdd.h"
+#include "nodes/nodeMathSub.h"
+#include "nodes/nodeMathMul.h"
+#include "nodes/nodeMathDiv.h"
+#include "nodes/nodeMathMod.h"
+#include "nodes/nodeMathMin.h"
+#include "nodes/nodeMathMax.h"
+#include "nodes/nodeMathClamp.h"
+#include "nodes/nodeMathAbs.h"
+#include "nodes/nodeMathFloor.h"
+#include "nodes/nodeMathCeil.h"
+#include "nodes/nodeMathRound.h"
+#include "nodes/nodeMathSign.h"
+#include "nodes/nodeMathSqrt.h"
+#include "nodes/nodeMathPow.h"
+#include "nodes/nodeBoolAnd.h"
+#include "nodes/nodeBoolOr.h"
+#include "nodes/nodeBoolNot.h"
+#include "nodes/nodeBoolXor.h"
+#include "nodes/nodeCmpEq.h"
+#include "nodes/nodeCmpNe.h"
+#include "nodes/nodeCmpLt.h"
+#include "nodes/nodeCmpLe.h"
+#include "nodes/nodeCmpGt.h"
+#include "nodes/nodeCmpGe.h"
 
 namespace Project::Graph::Node
 {
@@ -117,6 +143,32 @@ namespace Project::Graph
     TABLE_ENTRY(PrefabFunc),      // 14 — TYPE_PREFAB_FUNC
     TABLE_ENTRY(PrefabVarGet),    // 15 — TYPE_PREFAB_VAR_GET
     TABLE_ENTRY(Reroute),         // 16 — routing knot
+    TABLE_ENTRY(DeltaTime),       // 17 — Float pin: current frame deltaTime
+    TABLE_ENTRY(MathAdd),         // 18
+    TABLE_ENTRY(MathSub),         // 19
+    TABLE_ENTRY(MathMul),         // 20
+    TABLE_ENTRY(MathDiv),         // 21
+    TABLE_ENTRY(MathMod),         // 22
+    TABLE_ENTRY(MathMin),         // 23
+    TABLE_ENTRY(MathMax),         // 24
+    TABLE_ENTRY(MathClamp),       // 25
+    TABLE_ENTRY(MathAbs),         // 26
+    TABLE_ENTRY(MathFloor),       // 27
+    TABLE_ENTRY(MathCeil),        // 28
+    TABLE_ENTRY(MathRound),       // 29
+    TABLE_ENTRY(MathSign),        // 30
+    TABLE_ENTRY(MathSqrt),        // 31
+    TABLE_ENTRY(MathPow),         // 32
+    TABLE_ENTRY(BoolAnd),         // 33
+    TABLE_ENTRY(BoolOr),          // 34
+    TABLE_ENTRY(BoolNot),         // 35
+    TABLE_ENTRY(BoolXor),         // 36
+    TABLE_ENTRY(CmpEq),           // 37
+    TABLE_ENTRY(CmpNe),           // 38
+    TABLE_ENTRY(CmpLt),           // 39
+    TABLE_ENTRY(CmpLe),           // 40
+    TABLE_ENTRY(CmpGt),           // 41
+    TABLE_ENTRY(CmpGe),           // 42
   });
 
   const std::vector<std::string> & Graph::getNodeNames()
@@ -162,6 +214,32 @@ namespace Project::Graph
       { 14, Node::PrefabFunc::NAME,    "Functions",    EXEC,         EXEC          },
       { 15, Node::PrefabVarGet::NAME,  "Variables",    0,            FLOAT         },
       { 16, Node::Reroute::NAME,       "Flow Control", EXEC,         EXEC          },
+      { 17, Node::DeltaTime::NAME,     "Variables",    0,            FLOAT         },
+      { 18, Node::MathAdd::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 19, Node::MathSub::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 20, Node::MathMul::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 21, Node::MathDiv::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 22, Node::MathMod::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 23, Node::MathMin::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 24, Node::MathMax::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 25, Node::MathClamp::NAME,     "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 26, Node::MathAbs::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 27, Node::MathFloor::NAME,     "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 28, Node::MathCeil::NAME,      "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 29, Node::MathRound::NAME,     "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 30, Node::MathSign::NAME,      "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 31, Node::MathSqrt::NAME,      "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 32, Node::MathPow::NAME,       "Math",         EXEC | FLOAT, EXEC | FLOAT  },
+      { 33, Node::BoolAnd::NAME,       "Logic",        EXEC,         EXEC          },
+      { 34, Node::BoolOr::NAME,        "Logic",        EXEC,         EXEC          },
+      { 35, Node::BoolNot::NAME,       "Logic",        EXEC,         EXEC          },
+      { 36, Node::BoolXor::NAME,       "Logic",        EXEC,         EXEC          },
+      { 37, Node::CmpEq::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
+      { 38, Node::CmpNe::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
+      { 39, Node::CmpLt::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
+      { 40, Node::CmpLe::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
+      { 41, Node::CmpGt::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
+      { 42, Node::CmpGe::NAME,         "Logic",        EXEC | FLOAT, EXEC          },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Palette entries out of sync with NODE_TABLE");
@@ -458,6 +536,7 @@ namespace Project::Graph
     source += R"(#include <script/nodeGraph.h>)" "\n";
     source += R"(#include <scene/object.h>)" "\n";
     source += R"(#include <scene/scene.h>)" "\n";
+    source += R"(#include <math.h>)" "\n";   // Group A math nodes use fmodf/sqrtf/fabsf/etc.
     source += "\n";
 
     source += "namespace P64::NodeGraph::G" + Utils::toHex64(uuid) + " {\n";

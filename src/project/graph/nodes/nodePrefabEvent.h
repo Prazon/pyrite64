@@ -25,6 +25,7 @@ namespace Project::Graph::Node
         Custom1  = 4,
         Custom2  = 5,
         Custom3  = 6,
+        Tick     = 7,  // fires every frame; codegen exposes deltaTime
       };
 
       Kind kind{Kind::Ready};
@@ -41,6 +42,7 @@ namespace Project::Graph::Node
           case Kind::Custom1: return "OnCustom1";
           case Kind::Custom2: return "OnCustom2";
           case Kind::Custom3: return "OnCustom3";
+          case Kind::Tick:    return "OnTick";
         }
         return "OnReady";
       }
@@ -58,6 +60,7 @@ namespace Project::Graph::Node
           case Kind::Custom1: return 0x0001;
           case Kind::Custom2: return 0x0002;
           case Kind::Custom3: return 0x0003;
+          case Kind::Tick:    return 0xFFFF - 3; // EVENT_TYPE_TICK
         }
         return 0xFFFF - 2;
       }
@@ -79,6 +82,7 @@ namespace Project::Graph::Node
         static const char* labels[] = {
           "OnReady", "OnEnable", "OnDisable",
           "OnCustom0", "OnCustom1", "OnCustom2", "OnCustom3",
+          "OnTick",
         };
         int idx = static_cast<int>(kind);
         ImGui::SetNextItemWidth(110.0f);

@@ -265,6 +265,16 @@ void P64::Scene::update(float deltaTime)
 
   ticksActorUpdate = get_ticks() - ticksActorUpdate;
 
+  // Per-frame OnTick dispatch for every enabled prefab object. Fires after
+  // component updates so a graph reading transform / physics state sees
+  // this frame's values. Disabled objects are skipped to mirror the
+  // component-update gate above.
+  for(auto obj : objects) {
+    if(!obj->isEnabled()) continue;
+    if(obj->prefabUUID == 0) continue;
+    P64::PrefabEvents::dispatch(obj, obj->prefabUUID, EVENT_TYPE_TICK, deltaTime);
+  }
+
   for(auto &obj : pendingObjDelete)
   {
     if(obj->id < idLookup.size()) {
@@ -400,11 +410,16 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
 // build). The project's prefabEvents.cpp defines the strong symbol; the
 // weak default below is what n64/tests and n64/examples (which build the
 // engine standalone) link against so they don't fail to link.
+//
+// deltaTime is meaningful only for EVENT_TYPE_TICK dispatches; every other
+// event passes 0.0f. The Tick dispatch happens once per frame from
+// Scene::update; lifecycle events (Ready/Enable/Disable/Custom) flow
+// through runPendingEvents which has no deltaTime in scope.
 namespace P64::PrefabEvents {
-  void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType);
+  void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType, float deltaTime);
 }
 __attribute__((weak))
-void P64::PrefabEvents::dispatch(P64::Object*, uint32_t, uint16_t) {}
+void P64::PrefabEvents::dispatch(P64::Object*, uint32_t, uint16_t, float) {}
 
 void P64::Scene::runPendingEvents()
 {
@@ -432,7 +447,7 @@ void P64::Scene::runPendingEvents()
       // isn't a prefab instance root or the build didn't generate dispatch
       // for this prefab).
       if(obj->prefabUUID != 0) {
-        P64::PrefabEvents::dispatch(obj, obj->prefabUUID, entry.event.type);
+        P64::PrefabEvents::dispatch(obj, obj->prefabUUID, entry.event.type, 0.0f);
       }
     }
   }

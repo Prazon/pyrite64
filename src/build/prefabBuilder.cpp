@@ -246,7 +246,8 @@ namespace
     cpp += "#include \"prefabEvents.h\"\n";
     cpp += "#include \"prefabVars.h\"\n";
     cpp += "#include <scene/object.h>\n";
-    cpp += "#include <cstdint>\n\n";
+    cpp += "#include <cstdint>\n";
+    cpp += "#include <math.h>\n\n";
 
     // Surface the user-namespace headers for every prefab that has a user
     // .h on disk — needed so PrefabFunc-emitted calls into User::<X>::*
@@ -284,18 +285,19 @@ namespace
       const std::string fnName = "dispatch_" + ident;
       registry.push_back({prefabUUID, fnName});
 
-      cpp += "void " + fnName + "(P64::Object* self, uint16_t eventType)\n{\n";
+      cpp += "void " + fnName + "(P64::Object* self, uint16_t eventType, float deltaTime)\n{\n";
+      cpp += "  (void)deltaTime; // referenced by OnTick paths only\n";
       cpp += buildPrefabDispatchBody(live, ident);
       cpp += "}\n\n";
     }
 
     cpp += "} // anon\n\n";
-    cpp += "void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType)\n{\n";
+    cpp += "void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType, float deltaTime)\n{\n";
     cpp += "  if (!self) return;\n";
     cpp += "  switch(prefabUUID) {\n";
     for (const auto &[uuid, fn] : registry) {
-      char buf[96];
-      std::snprintf(buf, sizeof(buf), "    case 0x%08Xu: %s(self, eventType); return;\n",
+      char buf[112];
+      std::snprintf(buf, sizeof(buf), "    case 0x%08Xu: %s(self, eventType, deltaTime); return;\n",
         (unsigned)uuid, fn.c_str());
       cpp += buf;
     }
@@ -312,7 +314,7 @@ namespace
     h += "#include <cstdint>\n\n";
     h += "namespace P64 { class Object; }\n\n";
     h += "namespace P64::PrefabEvents {\n";
-    h += "  void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType);\n";
+    h += "  void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType, float deltaTime);\n";
     h += "}\n";
     Utils::FS::saveTextFile(p64Dir / "prefabEvents.h", h);
   }
