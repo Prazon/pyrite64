@@ -196,6 +196,9 @@ namespace Project::Component
   MAKE_COMP(HBoxLayout)
   MAKE_COMP(VBoxLayout)
   MAKE_COMP(Button2D)
+  MAKE_COMP(Rect2D)
+  MAKE_COMP(Line2D)
+  MAKE_COMP(Particles2D)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -503,6 +506,45 @@ namespace Project::Component
       .funcGetAABB = nullptr,
       .funcDraw2D = Button2D::draw2D,
       .funcWidgetSize = Button2D::widgetSize,
+    },
+    CompInfo{
+      .id = 24,
+      .icon = ICON_MDI_RECTANGLE " ",
+      .name = "Rect (2D)",
+      .funcInit = Rect2D::init,
+      .funcDraw = Rect2D::draw,
+      .funcSerialize = Rect2D::serialize,
+      .funcDeserialize = Rect2D::deserialize,
+      .funcBuild = Rect2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Rect2D::draw2D,
+      .funcWidgetSize = Rect2D::widgetSize,
+    },
+    CompInfo{
+      .id = 25,
+      .icon = ICON_MDI_VECTOR_LINE " ",
+      .name = "Line (2D)",
+      .funcInit = Line2D::init,
+      .funcDraw = Line2D::draw,
+      .funcSerialize = Line2D::serialize,
+      .funcDeserialize = Line2D::deserialize,
+      .funcBuild = Line2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Line2D::draw2D,
+      .funcWidgetSize = Line2D::widgetSize,
+    },
+    CompInfo{
+      .id = 26,
+      .icon = ICON_MDI_SHIMMER " ",
+      .name = "Particles (2D)",
+      .funcInit = Particles2D::init,
+      .funcDraw = Particles2D::draw,
+      .funcSerialize = Particles2D::serialize,
+      .funcDeserialize = Particles2D::deserialize,
+      .funcBuild = Particles2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Particles2D::draw2D,
+      .funcWidgetSize = Particles2D::widgetSize,
     },
   };
 

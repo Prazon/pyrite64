@@ -30,6 +30,9 @@
 #include "scene/components/hboxLayout.h"
 #include "scene/components/vboxLayout.h"
 #include "scene/components/button2D.h"
+#include "scene/components/rect2D.h"
+#include "scene/components/line2D.h"
+#include "scene/components/particles2D.h"
 
 // some template magic to auto-detect if a function exists in a component
 #define HAS_FUNC_TPL(NAME_HAS, NAME_GET, FUNC) \
@@ -91,5 +94,8 @@ namespace P64
     SET_COMP(HBoxLayout),
     SET_COMP(VBoxLayout),
     SET_COMP(Button2D),
+    SET_COMP(Rect2D),
+    SET_COMP(Line2D),
+    SET_COMP(Particles2D),
   };
 }
