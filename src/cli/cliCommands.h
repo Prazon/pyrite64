@@ -41,6 +41,10 @@ namespace CLI::Commands
   // (each command knows whether it needs to write).
   int dispatch(const Args &args, Project::Project &project);
 
+  // Commands that run before any Project exists (currently just
+  // `project-create`). Returns 0 on success / non-zero on error.
+  int dispatchBootstrap(const Args &args);
+
   // Emits the trailing help block printed alongside argparse's own --help.
   void printExtendedHelp();
 }

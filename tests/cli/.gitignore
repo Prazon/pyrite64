@@ -1,0 +1,2 @@
+# Per-run temp workdirs (parented under repo build/ so the Windows binary
+# can open them; see run.py's TEMP_PARENT comment).

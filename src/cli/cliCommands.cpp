@@ -26,6 +26,9 @@
 #include "../project/assets/resourceInstance.h"
 #include "../project/assets/resourceType.h"
 #include "../project/prefabFunctions.h"
+#include "../project/graph/graph.h"
+#include "../project/materialGraph/graph.h"
+#include "../project/assets/materialAsset.h"
 #include "../utils/fs.h"
 #include "../utils/hash.h"
 #include "../utils/json.h"
@@ -1208,11 +1211,17 @@ namespace
     if (!parent) { emitErr("parent path not found: " + a.parent); return 1; }
     auto obj = scene->addObject(*parent);
     obj->name = a.name;
+    // --type canvas: shorthand for the Scene Graph "Add Canvas (2D)" menu —
+    // marks the new object as a 2D canvas root so the 2D pipeline picks it up.
+    if (a.type == "canvas" || a.type == "canvas2d") {
+      obj->isCanvas2D = true;
+    }
     saveScene(project, *scene);
     nlohmann::json out;
     out["addedObject"] = a.name;
     out["uuid"] = obj->uuid;
     out["sceneId"] = id;
+    if (obj->isCanvas2D) out["isCanvas2D"] = true;
     emitJSON(out);
     return 0;
   }
@@ -2951,7 +2960,10 @@ namespace
   // Mirrors PROJECT_CREATE in editor/globalActions.cpp, but standalone so
   // it does not require ctx.project state. Resolves the empty-template path
   // relative to the editor binary's working directory.
-  int cmdProjectCreate(const CLI::Commands::Args &a, Project::Project &/*project*/)
+  // Project-less variant (the dispatch's bootstrap path uses this; the
+  // registered wrapper just forwards). Keeps the rest of the registry
+  // uniform while letting cli.cpp invoke it before any Project ctor.
+  int doProjectCreate(const CLI::Commands::Args &a)
   {
     if (a.path.empty() || a.name.empty()) {
       emitErr("--path (target dir) and --name are required"); return 1;
@@ -2988,6 +3000,14 @@ namespace
     out["name"] = a.name;
     emitJSON(out);
     return 0;
+  }
+
+  // Registry wrapper — forwards to doProjectCreate so the standard
+  // (Args, Project&) signature works for `dispatch()` lookups. The
+  // Project& is unused (a fresh project has nothing to read from).
+  int cmdProjectCreate(const CLI::Commands::Args &a, Project::Project &/*project*/)
+  {
+    return doProjectCreate(a);
   }
 
   // ── Variant patch ops ──────────────────────────────────────────────
@@ -3056,6 +3076,698 @@ namespace
     nlohmann::json out;
     out["removed"] = idx;
     out["patch"] = e->prefab->patchOps;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Scene component duplicate (mirrors Object Inspector "Duplicate") ──
+
+  int cmdSceneDuplicateComponent(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.comp.empty()) {
+      emitErr("--asset, --comp are required"); return 1;
+    }
+    int sceneId = resolveSceneId(project, a.asset);
+    if (sceneId < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, sceneId);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    auto *src = findComponent(*target, a.comp);
+    if (!src) { emitErr("component not present: " + a.comp); return 1; }
+    const auto &info = Project::Component::TABLE[src->id];
+    auto data = info.funcSerialize(*src);
+    size_t before = target->components.size();
+    target->addComponent(src->id);
+    if (target->components.size() == before) {
+      emitErr("addComponent refused (singleton type already present)"); return 1;
+    }
+    auto &fresh = target->components.back();
+    fresh.data = info.funcDeserialize(data);
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["duplicated"] = info.name;
+    out["sourceUUID"] = src->uuid;
+    out["newUUID"] = fresh.uuid;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Scene extract-to-prefab (mirrors Scene Graph "To Prefab") ──────
+
+  int cmdSceneExtractPrefab(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.path.empty()) {
+      emitErr("--asset (scene) and --path (object path) are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    auto *target = findObjectByPath(&scene->getRootObject(), a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    if (target->isPrefabInstance()) {
+      emitErr("object is already a prefab instance"); return 1;
+    }
+    if (!target->parent) {
+      emitErr("cannot extract scene root; pick a child path"); return 1;
+    }
+    uint32_t targetUUID = target->uuid;
+    std::string srcName = target->name;
+    scene->createPrefabFromObject(targetUUID);
+    saveScene(project, *scene);
+    // Look up the just-created prefab by the sanitised filename
+    // (mirrors Scene::createPrefabFromObject's sanitiser).
+    std::string sanitized = srcName;
+    sanitized.erase(std::remove_if(sanitized.begin(), sanitized.end(),
+      [](char c){ return !std::isalnum((unsigned char)c) && c != '_'; }),
+      sanitized.end());
+    nlohmann::json out;
+    out["extracted"] = sanitized.empty() ? srcName : sanitized;
+    out["fromPath"] = a.path;
+    out["sceneId"] = id;
+    auto *fresh = project.getAssets().getByName(sanitized + ".prefab");
+    if (fresh) out["asset"] = serializeAssetEntry(*fresh, false);
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Standalone NodeGraph (.p64graph) node-level ops ────────────────
+  //
+  // .p64graph is a flat JSON file: {"nodes":[{uuid,type,pos,...}], "links":[{src,srcPort,dst,dstPort}]}.
+  // We patch it directly; Project::Graph::Graph::getNodeNames() supplies
+  // the type-name <-> index mapping but we never instantiate ImFlow here
+  // (no GPU / ImGui context). Newly-added nodes carry only base fields;
+  // type-specific defaults are filled in by each node's deserialize() the
+  // next time the editor opens the graph (the standard `j.value(key, dflt)`
+  // pattern means missing keys round-trip to the C++ default).
+
+  Project::AssetManagerEntry* resolveGraphAsset(Project::Project &project, const std::string &key)
+  {
+    return resolveAsset(project, key, Project::FileType::NODE_GRAPH);
+  }
+
+  bool loadGraphJSON(const std::string &path, nlohmann::json &doc, std::string &err)
+  {
+    auto raw = Utils::FS::loadTextFile(path);
+    if (raw.empty()) { err = "empty graph file: " + path; return false; }
+    try { doc = nlohmann::json::parse(raw); }
+    catch (const std::exception &e) { err = std::string("parse failed: ") + e.what(); return false; }
+    if (!doc.is_object()) { err = "graph root must be an object"; return false; }
+    if (!doc.contains("nodes") || !doc["nodes"].is_array()) doc["nodes"] = nlohmann::json::array();
+    if (!doc.contains("links") || !doc["links"].is_array()) doc["links"] = nlohmann::json::array();
+    return true;
+  }
+
+  bool saveGraphJSON(const std::string &path, const nlohmann::json &doc)
+  {
+    return Utils::FS::saveTextFile(path, doc.dump(2));
+  }
+
+  int graphTypeFromArg(const std::string &arg)
+  {
+    if (arg.empty()) return -1;
+    if (auto u = tryParseUUID(arg)) return (int)*u;
+    const auto &names = Project::Graph::Graph::getNodeNames();
+    // Persisted names carry an MDI icon glyph + space + human label
+    // (e.g. " Start"). Match the trailing label so CLI callers don't
+    // have to embed the UTF-8 icon. Falls back to exact match first.
+    auto stripIcon = [](const std::string &s) -> std::string {
+      auto sp = s.find(' ');
+      return (sp == std::string::npos) ? s : s.substr(sp + 1);
+    };
+    for (size_t i = 0; i < names.size(); ++i) {
+      if (names[i] == arg) return (int)i;
+    }
+    for (size_t i = 0; i < names.size(); ++i) {
+      if (stripIcon(names[i]) == arg) return (int)i;
+    }
+    return -1;
+  }
+
+  // --from / --to format: "<nodeUUID>:<pinIdx>".
+  bool parsePinSpec(const std::string &s, uint64_t &nodeUUID, uint32_t &pinIdx, std::string &err)
+  {
+    auto colon = s.find(':');
+    if (colon == std::string::npos) { err = "expected <nodeUUID>:<pinIdx>"; return false; }
+    auto nodePart = s.substr(0, colon);
+    auto pinPart  = s.substr(colon + 1);
+    auto u = tryParseUUID(nodePart);
+    if (!u) { err = "invalid node uuid: " + nodePart; return false; }
+    nodeUUID = *u;
+    try { pinIdx = (uint32_t)std::stoul(pinPart); }
+    catch (...) { err = "invalid pin index: " + pinPart; return false; }
+    return true;
+  }
+
+  int cmdGraphListNodes(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    nlohmann::json doc;
+    std::string err;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    const auto &names = Project::Graph::Graph::getNodeNames();
+    nlohmann::json outNodes = nlohmann::json::array();
+    for (const auto &n : doc["nodes"]) {
+      nlohmann::json row;
+      row["uuid"] = n.value("uuid", 0ull);
+      uint32_t t = n.value("type", 0u);
+      row["type"] = t;
+      row["typeName"] = (t < names.size()) ? names[t] : "<unknown>";
+      if (n.contains("pos")) row["pos"] = n["pos"];
+      outNodes.push_back(row);
+    }
+    nlohmann::json out;
+    out["asset"] = e->name;
+    out["nodes"] = outNodes;
+    out["links"] = doc["links"];
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdGraphAddNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.type.empty()) {
+      emitErr("--asset and --type (node type name or index) are required"); return 1;
+    }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    int typeId = graphTypeFromArg(a.type);
+    const auto &names = Project::Graph::Graph::getNodeNames();
+    if (typeId < 0 || typeId >= (int)names.size()) {
+      emitErr("unknown node type: " + a.type); return 1;
+    }
+    nlohmann::json doc;
+    std::string err;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json node;
+    node["uuid"] = Utils::Hash::randomU64();
+    node["type"] = typeId;
+    // --value (optional) is a JSON array [x,y] for the on-canvas position.
+    if (!a.value.empty()) {
+      auto pos = parseValueJSON(a.value);
+      if (!pos.is_array() || pos.size() != 2) { emitErr("--value must be [x,y]"); return 1; }
+      node["pos"] = pos;
+    } else {
+      node["pos"] = {0.0f, 0.0f};
+    }
+    doc["nodes"].push_back(node);
+    if (!saveGraphJSON(e->path, doc)) { emitErr("save failed"); return 1; }
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["added"] = node["uuid"];
+    out["typeName"] = names[typeId];
+    out["asset"] = e->name;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdGraphRemoveNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.value.empty()) {
+      emitErr("--asset and --value (node uuid) are required"); return 1;
+    }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    auto u = tryParseUUID(a.value);
+    if (!u) { emitErr("--value must be a uuid"); return 1; }
+    uint64_t target = *u;
+    nlohmann::json doc;
+    std::string err;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    auto &nodes = doc["nodes"];
+    size_t before = nodes.size();
+    nodes.erase(std::remove_if(nodes.begin(), nodes.end(),
+      [&](const nlohmann::json &n){ return n.value("uuid", 0ull) == target; }), nodes.end());
+    if (nodes.size() == before) { emitErr("node not found: " + a.value); return 1; }
+    // Cascade-delete any link referencing the removed node.
+    auto &links = doc["links"];
+    size_t linksBefore = links.size();
+    links.erase(std::remove_if(links.begin(), links.end(),
+      [&](const nlohmann::json &l){
+        return l.value("src", 0ull) == target || l.value("dst", 0ull) == target;
+      }), links.end());
+    if (!saveGraphJSON(e->path, doc)) { emitErr("save failed"); return 1; }
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["removed"] = target;
+    out["removedLinks"] = (int)(linksBefore - links.size());
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdGraphConnect(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from <nodeUUID>:<pinIdx>, --to <nodeUUID>:<pinIdx> are required"); return 1;
+    }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    uint64_t srcUUID = 0, dstUUID = 0;
+    uint32_t srcPin = 0, dstPin = 0;
+    std::string err;
+    if (!parsePinSpec(a.from, srcUUID, srcPin, err)) { emitErr("--from: " + err); return 1; }
+    if (!parsePinSpec(a.to,   dstUUID, dstPin, err)) { emitErr("--to: "   + err); return 1; }
+    nlohmann::json doc;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    auto nodeExists = [&](uint64_t uuid){
+      for (const auto &n : doc["nodes"]) if (n.value("uuid", 0ull) == uuid) return true;
+      return false;
+    };
+    if (!nodeExists(srcUUID)) { emitErr("src node not in graph"); return 1; }
+    if (!nodeExists(dstUUID)) { emitErr("dst node not in graph"); return 1; }
+    nlohmann::json link;
+    link["src"] = srcUUID;
+    link["srcPort"] = srcPin;
+    link["dst"] = dstUUID;
+    link["dstPort"] = dstPin;
+    doc["links"].push_back(link);
+    if (!saveGraphJSON(e->path, doc)) { emitErr("save failed"); return 1; }
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["connected"] = link;
+    out["index"] = (int)doc["links"].size() - 1;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdGraphDisconnect(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from <nodeUUID>:<pinIdx>, --to <nodeUUID>:<pinIdx> are required"); return 1;
+    }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    uint64_t srcUUID = 0, dstUUID = 0;
+    uint32_t srcPin = 0, dstPin = 0;
+    std::string err;
+    if (!parsePinSpec(a.from, srcUUID, srcPin, err)) { emitErr("--from: " + err); return 1; }
+    if (!parsePinSpec(a.to,   dstUUID, dstPin, err)) { emitErr("--to: "   + err); return 1; }
+    nlohmann::json doc;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    auto &links = doc["links"];
+    size_t before = links.size();
+    links.erase(std::remove_if(links.begin(), links.end(),
+      [&](const nlohmann::json &l){
+        return l.value("src", 0ull) == srcUUID && l.value("dst", 0ull) == dstUUID
+            && l.value("srcPort", 0u) == srcPin && l.value("dstPort", 0u) == dstPin;
+      }), links.end());
+    if (links.size() == before) { emitErr("matching link not found"); return 1; }
+    if (!saveGraphJSON(e->path, doc)) { emitErr("save failed"); return 1; }
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["disconnected"] = (int)(before - links.size());
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Generic graph-JSON mutators ────────────────────────────────────
+  //
+  // Same on-disk shape ({nodes,links}) drives the standalone .p64graph
+  // asset, the prefab event-graph (lives inside .prefab as eventGraph),
+  // and the material-graph (lives inside .p64mat as graph). These
+  // helpers operate on a parsed JSON document so the per-asset wrappers
+  // only have to do load/save + reload.
+
+  bool gjEnsureShape(nlohmann::json &doc)
+  {
+    if (!doc.is_object()) return false;
+    if (!doc.contains("nodes") || !doc["nodes"].is_array()) doc["nodes"] = nlohmann::json::array();
+    if (!doc.contains("links") || !doc["links"].is_array()) doc["links"] = nlohmann::json::array();
+    return true;
+  }
+
+  nlohmann::json gjListNodes(const nlohmann::json &doc, const std::vector<std::string> &names)
+  {
+    nlohmann::json outNodes = nlohmann::json::array();
+    if (!doc.contains("nodes") || !doc["nodes"].is_array()) return outNodes;
+    for (const auto &n : doc["nodes"]) {
+      nlohmann::json row;
+      row["uuid"] = n.value("uuid", 0ull);
+      uint32_t t = n.value("type", 0u);
+      row["type"] = t;
+      row["typeName"] = (t < names.size()) ? names[t] : "<unknown>";
+      if (n.contains("pos")) row["pos"] = n["pos"];
+      outNodes.push_back(row);
+    }
+    return outNodes;
+  }
+
+  bool gjAddNode(nlohmann::json &doc, int typeId, const std::string &posJson, uint64_t &outUUID, std::string &err)
+  {
+    if (!gjEnsureShape(doc)) { err = "graph JSON shape invalid"; return false; }
+    nlohmann::json node;
+    node["uuid"] = Utils::Hash::randomU64();
+    node["type"] = typeId;
+    if (!posJson.empty()) {
+      auto pos = parseValueJSON(posJson);
+      if (!pos.is_array() || pos.size() != 2) { err = "--value must be [x,y]"; return false; }
+      node["pos"] = pos;
+    } else {
+      node["pos"] = {0.0f, 0.0f};
+    }
+    outUUID = node["uuid"];
+    doc["nodes"].push_back(node);
+    return true;
+  }
+
+  bool gjRemoveNode(nlohmann::json &doc, uint64_t target, int &removedLinks, std::string &err)
+  {
+    if (!gjEnsureShape(doc)) { err = "graph JSON shape invalid"; return false; }
+    auto &nodes = doc["nodes"];
+    size_t before = nodes.size();
+    nodes.erase(std::remove_if(nodes.begin(), nodes.end(),
+      [&](const nlohmann::json &n){ return n.value("uuid", 0ull) == target; }), nodes.end());
+    if (nodes.size() == before) { err = "node not found"; return false; }
+    auto &links = doc["links"];
+    size_t lbefore = links.size();
+    links.erase(std::remove_if(links.begin(), links.end(),
+      [&](const nlohmann::json &l){
+        return l.value("src", 0ull) == target || l.value("dst", 0ull) == target;
+      }), links.end());
+    removedLinks = (int)(lbefore - links.size());
+    return true;
+  }
+
+  bool gjConnect(nlohmann::json &doc, uint64_t srcUUID, uint32_t srcPin,
+                 uint64_t dstUUID, uint32_t dstPin, std::string &err)
+  {
+    if (!gjEnsureShape(doc)) { err = "graph JSON shape invalid"; return false; }
+    auto nodeExists = [&](uint64_t uuid){
+      for (const auto &n : doc["nodes"]) if (n.value("uuid", 0ull) == uuid) return true;
+      return false;
+    };
+    if (!nodeExists(srcUUID)) { err = "src node not in graph"; return false; }
+    if (!nodeExists(dstUUID)) { err = "dst node not in graph"; return false; }
+    nlohmann::json link;
+    link["src"] = srcUUID;
+    link["srcPort"] = srcPin;
+    link["dst"] = dstUUID;
+    link["dstPort"] = dstPin;
+    doc["links"].push_back(link);
+    return true;
+  }
+
+  int gjDisconnect(nlohmann::json &doc, uint64_t srcUUID, uint32_t srcPin,
+                   uint64_t dstUUID, uint32_t dstPin)
+  {
+    if (!gjEnsureShape(doc)) return 0;
+    auto &links = doc["links"];
+    size_t before = links.size();
+    links.erase(std::remove_if(links.begin(), links.end(),
+      [&](const nlohmann::json &l){
+        return l.value("src", 0ull) == srcUUID && l.value("dst", 0ull) == dstUUID
+            && l.value("srcPort", 0u) == srcPin && l.value("dstPort", 0u) == dstPin;
+      }), links.end());
+    return (int)(before - links.size());
+  }
+
+  // Same suffix-matching as graphTypeFromArg but parameterised on the
+  // name table — material-graph and event-graph reuse this with their
+  // respective NODE_TABLEs.
+  int graphTypeFromArgGeneric(const std::string &arg, const std::vector<std::string> &names)
+  {
+    if (arg.empty()) return -1;
+    if (auto u = tryParseUUID(arg)) return (int)*u;
+    auto stripIcon = [](const std::string &s) -> std::string {
+      auto sp = s.find(' ');
+      return (sp == std::string::npos) ? s : s.substr(sp + 1);
+    };
+    for (size_t i = 0; i < names.size(); ++i) if (names[i] == arg) return (int)i;
+    for (size_t i = 0; i < names.size(); ++i) if (stripIcon(names[i]) == arg) return (int)i;
+    return -1;
+  }
+
+  // ── Prefab event-graph node-level ops ──────────────────────────────
+  //
+  // The event graph is stored as a JSON string on the Prefab object
+  // (eventGraphJSON) and round-trips through Prefab::serialize. Same
+  // node-table as the standalone NodeGraph, since the editor instantiates
+  // a Project::Graph::Graph for both.
+
+  bool loadPrefabEventGraph(Project::AssetManagerEntry &e, nlohmann::json &doc, std::string &err)
+  {
+    if (!e.prefab) { err = "prefab missing"; return false; }
+    if (e.prefab->eventGraphJSON.empty()) {
+      doc = nlohmann::json::object({{"nodes", nlohmann::json::array()},
+                                    {"links", nlohmann::json::array()}});
+      return true;
+    }
+    doc = nlohmann::json::parse(e.prefab->eventGraphJSON, nullptr, false);
+    if (!doc.is_object()) { err = "eventGraphJSON not an object"; return false; }
+    return true;
+  }
+
+  void saveEventGraphInto(Project::AssetManagerEntry &e, const nlohmann::json &doc)
+  {
+    e.prefab->eventGraphJSON = doc.dump();
+    savePrefabAt(e.path, *e.prefab);
+  }
+
+  int cmdEventGraphListNodes(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json out;
+    out["asset"] = e->name;
+    out["nodes"] = gjListNodes(doc, Project::Graph::Graph::getNodeNames());
+    out["links"] = doc.value("links", nlohmann::json::array());
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdEventGraphAddNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.type.empty()) {
+      emitErr("--asset and --type (node name or index) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    const auto &names = Project::Graph::Graph::getNodeNames();
+    int typeId = graphTypeFromArgGeneric(a.type, names);
+    if (typeId < 0 || typeId >= (int)names.size()) { emitErr("unknown node type: " + a.type); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    uint64_t newUUID = 0;
+    if (!gjAddNode(doc, typeId, a.value, newUUID, err)) { emitErr(err); return 1; }
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["added"] = newUUID;
+    out["typeName"] = names[typeId];
+    out["asset"] = e->name;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdEventGraphRemoveNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.value.empty()) {
+      emitErr("--asset and --value (node uuid) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    auto u = tryParseUUID(a.value);
+    if (!u) { emitErr("--value must be a uuid"); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    int removedLinks = 0;
+    if (!gjRemoveNode(doc, *u, removedLinks, err)) { emitErr(err); return 1; }
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["removed"] = *u;
+    out["removedLinks"] = removedLinks;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdEventGraphConnect(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from <nodeUUID>:<pinIdx>, --to <nodeUUID>:<pinIdx> are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    uint64_t srcUUID = 0, dstUUID = 0; uint32_t srcPin = 0, dstPin = 0;
+    std::string err;
+    if (!parsePinSpec(a.from, srcUUID, srcPin, err)) { emitErr("--from: " + err); return 1; }
+    if (!parsePinSpec(a.to,   dstUUID, dstPin, err)) { emitErr("--to: "   + err); return 1; }
+    nlohmann::json doc;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    if (!gjConnect(doc, srcUUID, srcPin, dstUUID, dstPin, err)) { emitErr(err); return 1; }
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["connected"] = {{"src", srcUUID}, {"srcPort", srcPin}, {"dst", dstUUID}, {"dstPort", dstPin}};
+    out["index"] = (int)doc["links"].size() - 1;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdEventGraphDisconnect(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from <nodeUUID>:<pinIdx>, --to <nodeUUID>:<pinIdx> are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    uint64_t srcUUID = 0, dstUUID = 0; uint32_t srcPin = 0, dstPin = 0;
+    std::string err;
+    if (!parsePinSpec(a.from, srcUUID, srcPin, err)) { emitErr("--from: " + err); return 1; }
+    if (!parsePinSpec(a.to,   dstUUID, dstPin, err)) { emitErr("--to: "   + err); return 1; }
+    nlohmann::json doc;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    int removed = gjDisconnect(doc, srcUUID, srcPin, dstUUID, dstPin);
+    if (removed == 0) { emitErr("matching link not found"); return 1; }
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["disconnected"] = removed;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Material-graph node-level ops ──────────────────────────────────
+  //
+  // Graph JSON lives at MaterialAsset::graphJSON (wrapped under "graph"
+  // in the saved .p64mat). Distinct NODE_TABLE from the standalone
+  // NodeGraph — MaterialGraph::Graph::getNodeNames() supplies it.
+  //
+  // Note: edits here do NOT trigger a recompile of MaterialAsset::compiled.
+  // The editor recompiles on save; runtime/compiled material is only
+  // refreshed once the graph is re-opened and Compile is pressed.
+
+  Project::AssetManagerEntry* resolveMaterialAsset(Project::Project &project, const std::string &key)
+  {
+    return resolveAsset(project, key, Project::FileType::MATERIAL);
+  }
+
+  bool loadMaterialGraph(Project::AssetManagerEntry &e, nlohmann::json &doc, std::string &err)
+  {
+    if (!e.materialAsset) { err = "material asset missing"; return false; }
+    if (e.materialAsset->graphJSON.empty()) {
+      doc = nlohmann::json::object({{"nodes", nlohmann::json::array()},
+                                    {"links", nlohmann::json::array()}});
+      return true;
+    }
+    doc = nlohmann::json::parse(e.materialAsset->graphJSON, nullptr, false);
+    if (!doc.is_object()) { err = "material graphJSON not an object"; return false; }
+    return true;
+  }
+
+  void saveMaterialGraphInto(Project::AssetManagerEntry &e, const nlohmann::json &doc)
+  {
+    e.materialAsset->graphJSON = doc.dump();
+    Utils::FS::saveTextFile(e.path, e.materialAsset->serialize());
+  }
+
+  int cmdMaterialGraphListNodes(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolveMaterialAsset(project, a.asset);
+    if (!e) { emitErr("material not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadMaterialGraph(*e, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json out;
+    out["asset"] = e->name;
+    out["nodes"] = gjListNodes(doc, Project::MaterialGraph::Graph::getNodeNames());
+    out["links"] = doc.value("links", nlohmann::json::array());
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdMaterialGraphAddNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.type.empty()) {
+      emitErr("--asset and --type are required"); return 1;
+    }
+    auto *e = resolveMaterialAsset(project, a.asset);
+    if (!e) { emitErr("material not found: " + a.asset); return 1; }
+    const auto &names = Project::MaterialGraph::Graph::getNodeNames();
+    int typeId = graphTypeFromArgGeneric(a.type, names);
+    if (typeId < 0 || typeId >= (int)names.size()) { emitErr("unknown node type: " + a.type); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadMaterialGraph(*e, doc, err)) { emitErr(err); return 1; }
+    uint64_t newUUID = 0;
+    if (!gjAddNode(doc, typeId, a.value, newUUID, err)) { emitErr(err); return 1; }
+    saveMaterialGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["added"] = newUUID;
+    out["typeName"] = names[typeId];
+    out["asset"] = e->name;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdMaterialGraphRemoveNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.value.empty()) {
+      emitErr("--asset and --value (node uuid) are required"); return 1;
+    }
+    auto *e = resolveMaterialAsset(project, a.asset);
+    if (!e) { emitErr("material not found: " + a.asset); return 1; }
+    auto u = tryParseUUID(a.value);
+    if (!u) { emitErr("--value must be a uuid"); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadMaterialGraph(*e, doc, err)) { emitErr(err); return 1; }
+    int removedLinks = 0;
+    if (!gjRemoveNode(doc, *u, removedLinks, err)) { emitErr(err); return 1; }
+    saveMaterialGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["removed"] = *u;
+    out["removedLinks"] = removedLinks;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdMaterialGraphConnect(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from <nodeUUID>:<pinIdx>, --to <nodeUUID>:<pinIdx> are required"); return 1;
+    }
+    auto *e = resolveMaterialAsset(project, a.asset);
+    if (!e) { emitErr("material not found: " + a.asset); return 1; }
+    uint64_t srcUUID = 0, dstUUID = 0; uint32_t srcPin = 0, dstPin = 0;
+    std::string err;
+    if (!parsePinSpec(a.from, srcUUID, srcPin, err)) { emitErr("--from: " + err); return 1; }
+    if (!parsePinSpec(a.to,   dstUUID, dstPin, err)) { emitErr("--to: "   + err); return 1; }
+    nlohmann::json doc;
+    if (!loadMaterialGraph(*e, doc, err)) { emitErr(err); return 1; }
+    if (!gjConnect(doc, srcUUID, srcPin, dstUUID, dstPin, err)) { emitErr(err); return 1; }
+    saveMaterialGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["connected"] = {{"src", srcUUID}, {"srcPort", srcPin}, {"dst", dstUUID}, {"dstPort", dstPin}};
+    out["index"] = (int)doc["links"].size() - 1;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdMaterialGraphDisconnect(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from <nodeUUID>:<pinIdx>, --to <nodeUUID>:<pinIdx> are required"); return 1;
+    }
+    auto *e = resolveMaterialAsset(project, a.asset);
+    if (!e) { emitErr("material not found: " + a.asset); return 1; }
+    uint64_t srcUUID = 0, dstUUID = 0; uint32_t srcPin = 0, dstPin = 0;
+    std::string err;
+    if (!parsePinSpec(a.from, srcUUID, srcPin, err)) { emitErr("--from: " + err); return 1; }
+    if (!parsePinSpec(a.to,   dstUUID, dstPin, err)) { emitErr("--to: "   + err); return 1; }
+    nlohmann::json doc;
+    if (!loadMaterialGraph(*e, doc, err)) { emitErr(err); return 1; }
+    int removed = gjDisconnect(doc, srcUUID, srcPin, dstUUID, dstPin);
+    if (removed == 0) { emitErr("matching link not found"); return 1; }
+    saveMaterialGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["disconnected"] = removed;
     emitJSON(out);
     return 0;
   }
@@ -3191,6 +3903,28 @@ namespace CLI::Commands
     {"prefab-list-patches",     cmdPrefabListPatches},
     {"prefab-add-patch",        cmdPrefabAddPatch},
     {"prefab-remove-patch",     cmdPrefabRemovePatch},
+    // Scene "To Prefab" — extract a subtree into a new .prefab asset.
+    {"scene-extract-prefab",    cmdSceneExtractPrefab},
+    // Object Inspector "Duplicate Component" — clones a component + its data.
+    {"scene-duplicate-component", cmdSceneDuplicateComponent},
+    // Standalone NodeGraph (.p64graph) node-level ops.
+    {"graph-list-nodes",        cmdGraphListNodes},
+    {"graph-add-node",          cmdGraphAddNode},
+    {"graph-remove-node",       cmdGraphRemoveNode},
+    {"graph-connect",           cmdGraphConnect},
+    {"graph-disconnect",        cmdGraphDisconnect},
+    // Prefab event-graph node-level ops (graph inside the .prefab file).
+    {"event-graph-list-nodes",  cmdEventGraphListNodes},
+    {"event-graph-add-node",    cmdEventGraphAddNode},
+    {"event-graph-remove-node", cmdEventGraphRemoveNode},
+    {"event-graph-connect",     cmdEventGraphConnect},
+    {"event-graph-disconnect",  cmdEventGraphDisconnect},
+    // Material-graph node-level ops (graph inside the .p64mat file).
+    {"material-graph-list-nodes",  cmdMaterialGraphListNodes},
+    {"material-graph-add-node",    cmdMaterialGraphAddNode},
+    {"material-graph-remove-node", cmdMaterialGraphRemoveNode},
+    {"material-graph-connect",     cmdMaterialGraphConnect},
+    {"material-graph-disconnect",  cmdMaterialGraphDisconnect},
   };
 
   bool isExtendedCmd(const std::string &cmd)
@@ -3245,6 +3979,13 @@ namespace CLI::Commands
   {
     for (const auto &[n, fn] : kCmds) if (n == args.cmd) return fn(args, project);
     emitErr("unknown command: " + args.cmd);
+    return 1;
+  }
+
+  int dispatchBootstrap(const Args &args)
+  {
+    if (args.cmd == "project-create") return doProjectCreate(args);
+    emitErr("not a bootstrap command: " + args.cmd);
     return 1;
   }
 

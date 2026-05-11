@@ -121,14 +121,24 @@ CLI::Result CLI::run(int argc, char** argv)
   }
   else if (CLI::Commands::isExtendedCmd(cmd))
   {
+    CLI::Commands::Args cliArgs{};
+    cliArgs.cmd = cmd;
+    CLI::Commands::readArgs(prog, cliArgs);
+
+    // project-create bootstraps a project from the empty template. It must
+    // run before any Project::Project ctor, otherwise opening a not-yet-
+    // existent .p64proj throws. The handler does not need a Project ref.
+    if (cmd == "project-create") {
+      int rc = CLI::Commands::dispatchBootstrap(cliArgs);
+      res = (rc == 0);
+      return res ? Result::SUCCESS : Result::ERROR;
+    }
+
     if (argProgPath.empty()) { fputs("error: project path required\n", stderr); return Result::ERROR; }
     Project::Project project{argProgPath};
     // Components and Prefab::save() reach into ctx.project. The build/clean
     // paths happen to not need it, but the asset-tooling commands often do.
     ctx.project = &project;
-    CLI::Commands::Args cliArgs{};
-    cliArgs.cmd = cmd;
-    CLI::Commands::readArgs(prog, cliArgs);
     int rc = CLI::Commands::dispatch(cliArgs, project);
     ctx.project = nullptr;
     res = (rc == 0);
