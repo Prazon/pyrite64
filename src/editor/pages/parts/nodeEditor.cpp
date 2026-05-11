@@ -20,6 +20,8 @@
 #include "../../../project/compile/compileErrors.h"
 #include "../../../utils/fs.h"
 #include "../../nodePalette.h"
+#include "../../nodeClipboard.h"
+#include "../../graphHotkeys.h"
 
 namespace
 {
@@ -224,6 +226,16 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
   ImVec2 canvasSize = ImGui::GetContentRegionAvail();
   graph.graph.setSize(canvasSize);
+
+  // Standard graph hotkeys (frame, delete, duplicate, copy/cut/paste,
+  // arrow nudge, alt-click pin). The clipboard is the shared
+  // script-graph store so cut here can be pasted in the prefab event
+  // graph editor and vice-versa.
+  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+    Editor::GraphHotkeys::apply<Project::Graph::Graph,
+                                Project::Graph::Node::Base>(
+      graph, canvasSize, &Editor::NodeClipboard::scriptGraph());
+  }
 
   // Reveal-from-Compile-Errors: pan canvas to center the requested node and
   // arm a brief highlight overlay. See the parallel block in

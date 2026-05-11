@@ -17,6 +17,8 @@
 #include "../../../../project/materialGraph/nodes/baseNode.h"
 #include "../../../../project/graph/nodeStyles.h"
 #include "../../../nodePalette.h"
+#include "../../../nodeClipboard.h"
+#include "../../../graphHotkeys.h"
 #include "../../../imgui/helper.h"
 #include "../assetInspector.h"
 #include "../../editorScene.h"
@@ -298,6 +300,15 @@ bool Editor::MaterialEditor::draw(ImGuiID defDockId)
   ImGui::BeginChild("##matGraphCanvas", ImVec2(0, 0), ImGuiChildFlags_None);
   ImVec2 canvasSize = ImGui::GetContentRegionAvail();
   graph.graph.setSize(canvasSize);
+  // Standard graph hotkeys (frame, delete, duplicate, copy/cut/paste,
+  // arrow nudge, alt-click pin). Material clipboard is separate from
+  // the script-graph one; pasting a script-graph blob here would hit
+  // an out-of-range type index.
+  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+    Editor::GraphHotkeys::apply<Project::MaterialGraph::Graph,
+                                Project::MaterialGraph::Node::Base>(
+      graph, canvasSize, &Editor::NodeClipboard::materialGraph());
+  }
   graph.graph.update();
   ImGui::EndChild();
 

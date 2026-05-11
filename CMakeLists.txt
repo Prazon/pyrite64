@@ -287,6 +287,9 @@ add_executable(pyrite64 src/main.cpp
         src/project/graph/nodeStyles.cpp
         src/editor/nodePalette.h
         src/editor/nodePalette.cpp
+        src/editor/nodeClipboard.h
+        src/editor/nodeClipboard.cpp
+        src/editor/graphHotkeys.h
         src/project/compile/compileErrors.h
         src/project/compile/compileErrors.cpp
         src/build/nodeGraphBuilder.cpp

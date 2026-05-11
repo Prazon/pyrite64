@@ -16,6 +16,8 @@
 #include "../../../../project/graph/nodes/baseNode.h"
 #include "../../../../project/graph/nodeStyles.h"
 #include "../../../nodePalette.h"
+#include "../../../nodeClipboard.h"
+#include "../../../graphHotkeys.h"
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
 #include "../../../../project/graph/nodes/nodePrefabFunc.h"
 #include "../../../../project/graph/nodes/nodePrefabVarGet.h"
@@ -278,6 +280,14 @@ bool Editor::PrefabEventGraphEditor::draw(ImGuiID defDockId)
   ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
   ImVec2 canvasSize = ImGui::GetContentRegionAvail();
   graph.graph.setSize(canvasSize);
+
+  // Standard graph hotkeys, sharing the script-graph clipboard with the
+  // standalone NodeEditor.
+  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+    Editor::GraphHotkeys::apply<Project::Graph::Graph,
+                                Project::Graph::Node::Base>(
+      graph, canvasSize, &Editor::NodeClipboard::scriptGraph());
+  }
 
   // Reveal-from-Compile-Errors: if a node UUID is pending, pan the canvas so
   // its center matches the canvas center, and arm the highlight overlay. We
