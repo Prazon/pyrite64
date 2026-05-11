@@ -2141,6 +2141,32 @@ namespace
     return 0;
   }
 
+  int cmdRestypeDuplicateProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from (source field), --to (new field) are required"); return 1;
+    }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::RESOURCE_TYPE);
+    if (!e) { emitErr("resource type not found: " + a.asset); return 1; }
+    auto t = loadRestype(e);
+    const Project::VarDef *src = nullptr;
+    for (const auto &f : t.fields) {
+      if (f.name == a.from) { src = &f; }
+      if (f.name == a.to)   { emitErr("field already exists: " + a.to); return 1; }
+    }
+    if (!src) { emitErr("field not found: " + a.from); return 1; }
+    Project::VarDef copy = *src;
+    copy.uuid = Utils::Hash::randomU64();
+    copy.name = a.to;
+    t.fields.push_back(copy);
+    saveRestype(project, e, t);
+    nlohmann::json out;
+    out["duplicated"] = {{"from", a.from}, {"to", a.to}};
+    out["newUUID"] = copy.uuid;
+    emitJSON(out);
+    return 0;
+  }
+
   int cmdRestypeRenameProp(const CLI::Commands::Args &a, Project::Project &project)
   {
     if (a.asset.empty() || a.from.empty() || a.to.empty()) {
@@ -2349,6 +2375,34 @@ namespace
     project.getAssets().reload();
     nlohmann::json out;
     out["renamed"] = {{"from", a.from}, {"to", a.to}};
+    emitJSON(out);
+    return 0;
+  }
+
+  // Clone an existing prefab variable into a new entry with a fresh uuid.
+  // The clone copies kind, typeArg, and default value verbatim.
+  int cmdPrefabDuplicateVariable(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.from.empty() || a.to.empty()) {
+      emitErr("--asset, --from (source name), --to (new name) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    const Project::PrefabVarDef *src = nullptr;
+    for (const auto &v : e->prefab->variables) {
+      if (v.name == a.from) { src = &v; break; }
+      if (v.name == a.to)   { emitErr("variable already exists: " + a.to); return 1; }
+    }
+    if (!src) { emitErr("variable not found: " + a.from); return 1; }
+    Project::PrefabVarDef copy = *src;
+    copy.uuid = Utils::Hash::randomU64();
+    copy.name = a.to;
+    e->prefab->variables.push_back(copy);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["duplicated"] = {{"from", a.from}, {"to", a.to}};
+    out["newUUID"] = copy.uuid;
     emitJSON(out);
     return 0;
   }
@@ -2568,6 +2622,68 @@ namespace
     return 0;
   }
 
+  // Clone an existing layer entry. --field (source index) is required;
+  // --name (new layer name) optional — if absent the clone reuses the
+  // source's name with " (copy)" appended.
+  int cmdSceneDuplicateLayer(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.type.empty() || a.field.empty()) {
+      emitErr("--asset, --type (3d|2d|ptx), --field (source index) are required"); return 1;
+    }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    std::string bucket;
+    if (!resolveLayerBucket(a.type, bucket)) {
+      emitErr("--type must be 3d|2d|ptx"); return 1;
+    }
+    int idx = 0;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index"); return 1;
+    }
+    auto scene = openScene(project, id);
+    auto sceneJson = nlohmann::json::parse(scene->serialize(), nullptr, false);
+    auto &arr = sceneJson["conf"][bucket];
+    if (!arr.is_array() || idx < 0 || idx >= (int)arr.size()) {
+      emitErr("layer index out of range"); return 1;
+    }
+    nlohmann::json copy = arr[idx];
+    if (!a.name.empty()) {
+      copy["name"] = a.name;
+    } else if (copy.contains("name") && copy["name"].is_string()) {
+      copy["name"] = copy["name"].get<std::string>() + " (copy)";
+    }
+    arr.push_back(copy);
+    scene->deserialize(sceneJson.dump());
+    saveScene(project, *scene);
+    nlohmann::json out;
+    out["duplicated"] = idx;
+    out["addedIndex"] = (int)arr.size() - 1;
+    out["bucket"] = bucket;
+    emitJSON(out);
+    return 0;
+  }
+
+  // Replicate the layer panel's "Reset all layers": shrink each layer
+  // table to engine defaults and let Scene::resetLayers() handle the
+  // ref-remapping semantics (component layerIdx fields stay in range).
+  int cmdSceneResetLayers(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    int id = resolveSceneId(project, a.asset);
+    if (id < 0) { emitErr("scene not found: " + a.asset); return 1; }
+    auto scene = openScene(project, id);
+    scene->resetLayers();
+    saveScene(project, *scene);
+    auto sceneJson = nlohmann::json::parse(scene->serialize(), nullptr, false);
+    nlohmann::json out;
+    out["sceneId"] = id;
+    out["layers3D"] = sceneJson["conf"].value("layers3D", nlohmann::json::array());
+    out["layers2D"] = sceneJson["conf"].value("layers2D", nlohmann::json::array());
+    out["layersPtx"] = sceneJson["conf"].value("layersPtx", nlohmann::json::array());
+    emitJSON(out);
+    return 0;
+  }
+
   // ── Project conf ───────────────────────────────────────────────────
 
   int cmdProjectDescribe(const CLI::Commands::Args &/*a*/, Project::Project &project)
@@ -2597,6 +2713,32 @@ namespace
     nlohmann::json out;
     out["updated"] = a.field;
     out["conf"] = j;
+    emitJSON(out);
+    return 0;
+  }
+
+  // Per-index helper for the 8 collLayerN entries on the project conf.
+  // The generic project-set-conf would also work (key = collLayer0..7),
+  // but this command validates the index and gives a cleaner echo.
+  int cmdProjectSetCollisionLayer(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.field.empty() || a.name.empty()) {
+      emitErr("--field (index 0-7), --name (layer name) are required"); return 1;
+    }
+    int idx = -1;
+    try { idx = std::stoi(a.field); } catch (...) {
+      emitErr("--field must be a numeric index 0-7"); return 1;
+    }
+    if (idx < 0 || idx > 7) { emitErr("collision layer index out of range (0-7)"); return 1; }
+    auto cfgPath = fs::path(project.getPath()) / "project.p64proj";
+    auto j = Utils::JSON::loadFile(cfgPath);
+    if (!j.is_object()) { emitErr("project conf is not an object"); return 1; }
+    std::string key = "collLayer" + std::to_string(idx);
+    j[key] = a.name;
+    Utils::FS::saveTextFile(cfgPath.string(), j.dump(2));
+    nlohmann::json out;
+    out["updated"] = key;
+    out["value"] = a.name;
     emitJSON(out);
     return 0;
   }
@@ -3482,6 +3624,150 @@ namespace
     return (int)(before - links.size());
   }
 
+  // Find a node by uuid. Returns nullptr if absent.
+  nlohmann::json* gjFindNode(nlohmann::json &doc, uint64_t target)
+  {
+    if (!doc.contains("nodes") || !doc["nodes"].is_array()) return nullptr;
+    for (auto &n : doc["nodes"]) {
+      if (n.value("uuid", 0ull) == target) return &n;
+    }
+    return nullptr;
+  }
+
+  bool gjSetNodeProp(nlohmann::json &doc, uint64_t target, const std::string &field,
+                     const nlohmann::json &value, nlohmann::json &outNode, std::string &err)
+  {
+    if (!gjEnsureShape(doc)) { err = "graph JSON shape invalid"; return false; }
+    if (field == "uuid" || field == "type" || field == "pos") {
+      err = "refusing to set structural field '" + field + "' via set-node-prop; use the dedicated command";
+      return false;
+    }
+    auto *node = gjFindNode(doc, target);
+    if (!node) { err = "node not found"; return false; }
+    (*node)[field] = value;
+    outNode = *node;
+    return true;
+  }
+
+  bool gjDuplicateNode(nlohmann::json &doc, uint64_t target, const std::string &posJson,
+                       uint64_t &newUUID, std::string &err)
+  {
+    if (!gjEnsureShape(doc)) { err = "graph JSON shape invalid"; return false; }
+    auto *src = gjFindNode(doc, target);
+    if (!src) { err = "node not found"; return false; }
+    nlohmann::json copy = *src;
+    newUUID = Utils::Hash::randomU64();
+    copy["uuid"] = newUUID;
+    if (!posJson.empty()) {
+      auto pos = parseValueJSON(posJson);
+      if (!pos.is_array() || pos.size() != 2) { err = "--value must be [x,y]"; return false; }
+      copy["pos"] = pos;
+    } else if (copy.contains("pos") && copy["pos"].is_array() && copy["pos"].size() == 2) {
+      // Nudge so the clone is visible next to the source instead of on top.
+      copy["pos"][0] = copy["pos"][0].get<float>() + 24.0f;
+      copy["pos"][1] = copy["pos"][1].get<float>() + 24.0f;
+    } else {
+      copy["pos"] = {24.0f, 24.0f};
+    }
+    doc["nodes"].push_back(copy);
+    return true;
+  }
+
+  bool gjSetNodePos(nlohmann::json &doc, uint64_t target, const std::string &posJson,
+                    nlohmann::json &outNode, std::string &err)
+  {
+    if (!gjEnsureShape(doc)) { err = "graph JSON shape invalid"; return false; }
+    if (posJson.empty()) { err = "--value (pos as [x,y]) is required"; return false; }
+    auto pos = parseValueJSON(posJson);
+    if (!pos.is_array() || pos.size() != 2) { err = "--value must be [x,y]"; return false; }
+    auto *node = gjFindNode(doc, target);
+    if (!node) { err = "node not found"; return false; }
+    (*node)["pos"] = pos;
+    outNode = *node;
+    return true;
+  }
+
+  // Structural validation of a saved graph (mirrors the JSON-walkable
+  // subset of Project::Graph::Graph::validate; pin-style reachability
+  // would need ImFlow, so we report only what the JSON can prove).
+  // entryTypes = the type IDs counted as a valid entry node (e.g. Start
+  // for the standalone graph; Start + PrefabEvent for prefab event graph).
+  nlohmann::json gjValidate(const nlohmann::json &doc,
+                            const std::vector<std::string> &names,
+                            const std::vector<uint32_t> &entryTypes,
+                            uint32_t startType)
+  {
+    nlohmann::json out;
+    nlohmann::json diags = nlohmann::json::array();
+    auto pushDiag = [&](const std::string &sev, const std::string &msg, uint64_t nodeUUID = 0){
+      nlohmann::json d;
+      d["severity"] = sev;
+      d["message"] = msg;
+      if (nodeUUID) d["nodeUUID"] = nodeUUID;
+      diags.push_back(d);
+    };
+
+    int nodeCount = (int)(doc.contains("nodes") && doc["nodes"].is_array() ? doc["nodes"].size() : 0);
+    int linkCount = (int)(doc.contains("links") && doc["links"].is_array() ? doc["links"].size() : 0);
+    out["nodes"] = nodeCount;
+    out["links"] = linkCount;
+
+    if (nodeCount == 0) {
+      pushDiag("info", "Graph is empty.");
+      out["diagnostics"] = diags;
+      out["ok"] = true;
+      return out;
+    }
+
+    bool hasEntry = false;
+    int startCount = 0;
+    uint64_t firstExtraStart = 0;
+    std::unordered_set<uint64_t> nodeUUIDs;
+    for (const auto &n : doc["nodes"]) {
+      uint64_t uu = n.value("uuid", 0ull);
+      nodeUUIDs.insert(uu);
+      uint32_t t = n.value("type", UINT32_MAX);
+      if (t >= names.size()) {
+        pushDiag("error", "Unknown node type " + std::to_string(t), uu);
+        continue;
+      }
+      for (uint32_t et : entryTypes) {
+        if (t == et) { hasEntry = true; break; }
+      }
+      if (t == startType) {
+        ++startCount;
+        if (startCount == 2) firstExtraStart = uu;
+      }
+    }
+    if (!hasEntry) pushDiag("error", "Graph has no entry node.");
+    if (startCount > 1) {
+      pushDiag("warning",
+        "Graph has " + std::to_string(startCount) + " Start nodes; only the first is reachable.",
+        firstExtraStart);
+    }
+    // Link sanity: every src/dst should reference an existing node.
+    if (doc.contains("links") && doc["links"].is_array()) {
+      int idx = 0;
+      for (const auto &l : doc["links"]) {
+        uint64_t s = l.value("src", 0ull);
+        uint64_t d = l.value("dst", 0ull);
+        if (!nodeUUIDs.count(s)) pushDiag("error", "Link " + std::to_string(idx) + ": src node missing");
+        if (!nodeUUIDs.count(d)) pushDiag("error", "Link " + std::to_string(idx) + ": dst node missing");
+        ++idx;
+      }
+    }
+
+    out["diagnostics"] = diags;
+    // ok flag is true only when there are zero "error" diagnostics; warnings
+    // / info do not flip it.
+    bool ok = true;
+    for (const auto &d : diags) {
+      if (d.value("severity", "") == "error") { ok = false; break; }
+    }
+    out["ok"] = ok;
+    return out;
+  }
+
   // Same suffix-matching as graphTypeFromArg but parameterised on the
   // name table — material-graph and event-graph reuse this with their
   // respective NODE_TABLEs.
@@ -3771,6 +4057,318 @@ namespace
     emitJSON(out);
     return 0;
   }
+
+  // ── Per-graph: set-node-prop / duplicate-node / set-node-pos / compile ──
+
+  // Args common to all three: --asset, --node (uuid), and either --field+--value,
+  // or --value (pos array), or --value (new-pos for duplicate, optional).
+
+  int cmdGraphSetNodeProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --field, --value are required (use --parent for node uuid)"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json outNode;
+    if (!gjSetNodeProp(doc, *u, a.field, parseValueJSON(a.value), outNode, err)) { emitErr(err); return 1; }
+    if (!saveGraphJSON(e->path, doc)) { emitErr("save failed"); return 1; }
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["node"] = outNode;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdGraphDuplicateNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.parent.empty()) {
+      emitErr("--asset and --parent (source node uuid) are required"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    uint64_t newUUID = 0;
+    if (!gjDuplicateNode(doc, *u, a.value, newUUID, err)) { emitErr(err); return 1; }
+    if (!saveGraphJSON(e->path, doc)) { emitErr("save failed"); return 1; }
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["duplicated"] = *u;
+    out["newUUID"] = newUUID;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdGraphSetNodePos(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.parent.empty() || a.value.empty()) {
+      emitErr("--asset, --parent (node uuid), --value [x,y] are required"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json outNode;
+    if (!gjSetNodePos(doc, *u, a.value, outNode, err)) { emitErr(err); return 1; }
+    if (!saveGraphJSON(e->path, doc)) { emitErr("save failed"); return 1; }
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["node"] = outNode;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdGraphCompile(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolveGraphAsset(project, a.asset);
+    if (!e) { emitErr("graph not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
+    // Project::Graph entry types: 0 = Start, 13 = PrefabEvent.
+    auto result = gjValidate(doc, Project::Graph::Graph::getNodeNames(),
+                             /*entryTypes=*/{0, 13}, /*startType=*/0);
+    result["asset"] = e->name;
+    emitJSON(result);
+    return result.value("ok", true) ? 0 : 1;
+  }
+
+  // Event-graph variants — same shape, different loader/saver.
+
+  int cmdEventGraphSetNodeProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty() || a.parent.empty()) {
+      emitErr("--asset, --parent (node uuid), --field, --value are required"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json outNode;
+    if (!gjSetNodeProp(doc, *u, a.field, parseValueJSON(a.value), outNode, err)) { emitErr(err); return 1; }
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["node"] = outNode;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdEventGraphDuplicateNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.parent.empty()) {
+      emitErr("--asset and --parent (source node uuid) are required"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    uint64_t newUUID = 0;
+    if (!gjDuplicateNode(doc, *u, a.value, newUUID, err)) { emitErr(err); return 1; }
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["duplicated"] = *u;
+    out["newUUID"] = newUUID;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdEventGraphSetNodePos(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.parent.empty() || a.value.empty()) {
+      emitErr("--asset, --parent (node uuid), --value [x,y] are required"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json outNode;
+    if (!gjSetNodePos(doc, *u, a.value, outNode, err)) { emitErr(err); return 1; }
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["node"] = outNode;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdEventGraphCompile(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    // PrefabEvent (type 13) is the canonical entry for prefab event-graphs.
+    auto result = gjValidate(doc, Project::Graph::Graph::getNodeNames(),
+                             /*entryTypes=*/{0, 13}, /*startType=*/0);
+    result["asset"] = e->name;
+    emitJSON(result);
+    return result.value("ok", true) ? 0 : 1;
+  }
+
+  // Material-graph variants — same shape, MaterialGraph::Graph node table.
+
+  int cmdMaterialGraphSetNodeProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty() || a.parent.empty()) {
+      emitErr("--asset, --parent (node uuid), --field, --value are required"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolveMaterialAsset(project, a.asset);
+    if (!e) { emitErr("material not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadMaterialGraph(*e, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json outNode;
+    if (!gjSetNodeProp(doc, *u, a.field, parseValueJSON(a.value), outNode, err)) { emitErr(err); return 1; }
+    saveMaterialGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["node"] = outNode;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdMaterialGraphDuplicateNode(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.parent.empty()) {
+      emitErr("--asset and --parent (source node uuid) are required"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolveMaterialAsset(project, a.asset);
+    if (!e) { emitErr("material not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadMaterialGraph(*e, doc, err)) { emitErr(err); return 1; }
+    uint64_t newUUID = 0;
+    if (!gjDuplicateNode(doc, *u, a.value, newUUID, err)) { emitErr(err); return 1; }
+    saveMaterialGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["duplicated"] = *u;
+    out["newUUID"] = newUUID;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdMaterialGraphSetNodePos(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.parent.empty() || a.value.empty()) {
+      emitErr("--asset, --parent (node uuid), --value [x,y] are required"); return 1;
+    }
+    auto u = tryParseUUID(a.parent);
+    if (!u) { emitErr("--parent must be a node uuid"); return 1; }
+    auto *e = resolveMaterialAsset(project, a.asset);
+    if (!e) { emitErr("material not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadMaterialGraph(*e, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json outNode;
+    if (!gjSetNodePos(doc, *u, a.value, outNode, err)) { emitErr(err); return 1; }
+    saveMaterialGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["node"] = outNode;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Event-graph drag-drop convenience wrappers ─────────────────────
+  //
+  // The GUI lets you drag a prefab variable / function onto the event-
+  // graph canvas to spawn a pre-bound PrefabVarGet / PrefabFunc node.
+  // These two commands mirror that UX so headless callers don't have to
+  // know which type index encodes "Get Variable" or "Prefab Function"
+  // nor which JSON field carries the binding.
+
+  int cmdEventGraphAddVarGet(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty()) {
+      emitErr("--asset (prefab/widget), --name (variable name) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    const Project::PrefabVarDef *varDef = nullptr;
+    for (const auto &v : e->prefab->variables) {
+      if (v.name == a.name) { varDef = &v; break; }
+    }
+    if (!varDef) { emitErr("prefab has no variable: " + a.name); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json node;
+    node["uuid"] = Utils::Hash::randomU64();
+    node["type"] = Project::Graph::TYPE_PREFAB_VAR_GET;
+    if (!a.value.empty()) {
+      auto pos = parseValueJSON(a.value);
+      if (!pos.is_array() || pos.size() != 2) { emitErr("--value must be [x,y]"); return 1; }
+      node["pos"] = pos;
+    } else {
+      node["pos"] = {0.0f, 0.0f};
+    }
+    // PrefabVarGet's deserialize reads "varUUID". Bind it to the resolved var.
+    node["varUUID"] = varDef->uuid;
+    doc["nodes"].push_back(node);
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["added"] = node["uuid"];
+    out["typeName"] = "PrefabVarGet";
+    out["var"] = a.name;
+    out["varUUID"] = varDef->uuid;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdEventGraphAddFuncCall(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.func.empty()) {
+      emitErr("--asset (prefab/widget), --func (P64_NODE function name) are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab/widget not found: " + a.asset); return 1; }
+    nlohmann::json doc; std::string err;
+    if (!loadPrefabEventGraph(*e, doc, err)) { emitErr(err); return 1; }
+    nlohmann::json node;
+    node["uuid"] = Utils::Hash::randomU64();
+    node["type"] = Project::Graph::TYPE_PREFAB_FUNC;
+    if (!a.value.empty()) {
+      auto pos = parseValueJSON(a.value);
+      if (!pos.is_array() || pos.size() != 2) { emitErr("--value must be [x,y]"); return 1; }
+      node["pos"] = pos;
+    } else {
+      node["pos"] = {0.0f, 0.0f};
+    }
+    // PrefabFunc's deserialize reads "funcName".
+    node["funcName"] = a.func;
+    doc["nodes"].push_back(node);
+    saveEventGraphInto(*e, doc);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["added"] = node["uuid"];
+    out["typeName"] = "PrefabFunc";
+    out["func"] = a.func;
+    emitJSON(out);
+    return 0;
+  }
 }
 
 namespace CLI::Commands
@@ -3925,6 +4523,29 @@ namespace CLI::Commands
     {"material-graph-remove-node", cmdMaterialGraphRemoveNode},
     {"material-graph-connect",     cmdMaterialGraphConnect},
     {"material-graph-disconnect",  cmdMaterialGraphDisconnect},
+    // Per-graph: set-node-prop / duplicate-node / set-node-pos / compile.
+    // --parent carries the source-node uuid for these commands (the existing
+    // --asset slot is already used for the containing graph asset).
+    {"graph-set-node-prop",        cmdGraphSetNodeProp},
+    {"graph-duplicate-node",       cmdGraphDuplicateNode},
+    {"graph-set-node-pos",         cmdGraphSetNodePos},
+    {"graph-compile",              cmdGraphCompile},
+    {"event-graph-set-node-prop",  cmdEventGraphSetNodeProp},
+    {"event-graph-duplicate-node", cmdEventGraphDuplicateNode},
+    {"event-graph-set-node-pos",   cmdEventGraphSetNodePos},
+    {"event-graph-compile",        cmdEventGraphCompile},
+    {"event-graph-add-var-get",    cmdEventGraphAddVarGet},
+    {"event-graph-add-func-call",  cmdEventGraphAddFuncCall},
+    {"material-graph-set-node-prop",  cmdMaterialGraphSetNodeProp},
+    {"material-graph-duplicate-node", cmdMaterialGraphDuplicateNode},
+    {"material-graph-set-node-pos",   cmdMaterialGraphSetNodePos},
+    // Duplicate / reset helpers (P2 ergonomics).
+    {"scene-duplicate-layer",      cmdSceneDuplicateLayer},
+    {"scene-reset-layers",         cmdSceneResetLayers},
+    {"restype-duplicate-prop",     cmdRestypeDuplicateProp},
+    {"prefab-duplicate-variable",  cmdPrefabDuplicateVariable},
+    {"widget-duplicate-variable",  cmdPrefabDuplicateVariable},
+    {"project-set-collision-layer", cmdProjectSetCollisionLayer},
   };
 
   bool isExtendedCmd(const std::string &cmd)

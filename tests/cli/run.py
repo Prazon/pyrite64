@@ -64,6 +64,11 @@ class Test:
     reset: bool = False
     # Override the project path positional (default: current temp copy).
     project: Optional[str] = None
+    # After a passing run, parse the JSON output and store named values
+    # for subsequent {VARNAME} substitutions in later test args.
+    # Each entry maps an exported variable name to a dotted path within
+    # the response JSON (e.g. "added" or "obj.uuid").
+    captures: dict = field(default_factory=dict)
 
 
 _LOG_BRACKETS = ("[INF]", "[WRN]", "[ERR]", "[DBG]")
@@ -110,10 +115,13 @@ def to_repo_rel(p: Path | str) -> str:
         return str(pp)
 
 
-def run_test(test: Test, workdir: Path) -> tuple[bool, str]:
+def run_test(test: Test, workdir: Path, captures_env: dict) -> tuple[bool, str]:
     workdir_rel = to_repo_rel(workdir)
     def expand(s: str) -> str:
-        return s.replace("{WORKDIR}", workdir_rel)
+        s = s.replace("{WORKDIR}", workdir_rel)
+        for k, v in captures_env.items():
+            s = s.replace("{" + k + "}", str(v))
+        return s
     proj = expand(test.project) if test.project else to_repo_rel(workdir / PROJ_REL)
     exe_rel = to_repo_rel(EXE)
     cmd = ["./" + exe_rel, "--cli", "--cmd", test.cmd] + [expand(x) for x in test.args] + [proj]
@@ -141,14 +149,34 @@ def run_test(test: Test, workdir: Path) -> tuple[bool, str]:
     if test.expect_fail:
         return True, "expected failure"
 
+    parsed = None
     if test.expect_json:
         body = strip_prelude(res.stdout)
         if not body.strip():
             return False, "no JSON body in stdout"
         try:
-            json.loads(body)
+            parsed = json.loads(body)
         except json.JSONDecodeError as e:
             return False, f"invalid JSON: {e} | body[:200]={body[:200]!r}"
+
+    if test.captures:
+        if parsed is None and test.expect_json:
+            return False, "captures requested but no JSON body"
+        for var, path in test.captures.items():
+            cur = parsed
+            for part in path.split("."):
+                if cur is None:
+                    return False, f"capture {var}: path {path!r} missed at {part!r}"
+                if isinstance(cur, list):
+                    try:
+                        cur = cur[int(part)]
+                    except (ValueError, IndexError):
+                        return False, f"capture {var}: bad list index {part!r}"
+                else:
+                    cur = cur.get(part) if isinstance(cur, dict) else None
+            if cur is None:
+                return False, f"capture {var}: path {path!r} resolved to None"
+            captures_env[var] = cur
 
     return True, "ok"
 
@@ -195,6 +223,7 @@ TESTS: List[Test] = [
     Test("prefab-add-variable",        "prefab-add-variable", ["--asset", "TPrefab1", "--name", "speed", "--type", "float", "--value", "3.5"]),
     Test("prefab-set-variable-default","prefab-set-variable-default",["--asset", "TPrefab1", "--name", "speed", "--value", "7.0"]),
     Test("prefab-rename-variable",     "prefab-rename-variable",["--asset", "TPrefab1", "--from", "speed", "--to", "velocity"]),
+    Test("prefab-duplicate-variable",  "prefab-duplicate-variable", ["--asset", "TPrefab1", "--from", "velocity", "--to", "velocityCopy"]),
     Test("prefab-remove-variable",     "prefab-remove-variable",["--asset", "TPrefab1", "--name", "velocity"]),
 
     # === prefab variant + patch ========================================
@@ -251,6 +280,9 @@ TESTS: List[Test] = [
     # === scene layers / vars ==========================================
     Test("scene-add-layer-3d",         "scene-add-layer",     ["--asset", "TScene1", "--type", "3d", "--name", "MainLayer"]),
     Test("scene-set-layer-3d",         "scene-set-layer",     ["--asset", "TScene1", "--type", "3d", "--field", "0", "--value", '{"enabled":true}']),
+    Test("scene-add-layer-dup-src",    "scene-add-layer",     ["--asset", "TScene1", "--type", "3d", "--name", "ToDup"]),
+    Test("scene-duplicate-layer",      "scene-duplicate-layer",["--asset", "TScene1", "--type", "3d", "--field", "1", "--name", "DupLayer"]),
+    Test("scene-reset-layers",         "scene-reset-layers",  ["--asset", "TScene1"]),
     Test("scene-remove-layer-3d",      "scene-remove-layer",  ["--asset", "TScene1", "--type", "3d", "--field", "0"]),
 
     # === scene cleanup =================================================
@@ -301,6 +333,7 @@ TESTS: List[Test] = [
     # === restype / resource ============================================
     Test("restype-create",             "restype-create",      ["--name", "TResType"]),
     Test("restype-add-prop",           "restype-add-prop",    ["--asset", "TResType", "--name", "hp", "--type", "int", "--value", "100"]),
+    Test("restype-duplicate-prop",     "restype-duplicate-prop", ["--asset", "TResType", "--from", "hp", "--to", "armor"]),
     Test("restype-rename-prop",        "restype-rename-prop", ["--asset", "TResType", "--from", "hp", "--to", "hitpoints"]),
     Test("resource-create",            "resource-create",     ["--restype", "TResType", "--name", "TResInst"]),
     Test("resource-set-prop",          "resource-set-prop",   ["--asset", "TResInst", "--field", "hitpoints", "--value", "75"]),
@@ -321,6 +354,17 @@ TESTS: List[Test] = [
     Test("graph-connect-missing-node", "graph-connect",       ["--asset", "TGraph", "--from", "999:0", "--to", "888:0"], expect_fail=True),
     Test("graph-disconnect-noop",      "graph-disconnect",    ["--asset", "TGraph", "--from", "1:0", "--to", "2:0"], expect_fail=True),
 
+    # === graph: set-node-prop / duplicate-node / set-node-pos / compile ==
+    Test("graph-anchor-wait-node",     "graph-add-node",      ["--asset", "TGraph", "--type", "Wait", "--value", "[40,40]"],
+         captures={"GRAPH_WAIT_UUID": "added"}),
+    Test("graph-set-node-prop-time",   "graph-set-node-prop", ["--asset", "TGraph", "--parent", "{GRAPH_WAIT_UUID}", "--field", "time", "--value", "2.5"]),
+    Test("graph-set-node-prop-reject", "graph-set-node-prop", ["--asset", "TGraph", "--parent", "{GRAPH_WAIT_UUID}", "--field", "uuid", "--value", "0"], expect_fail=True),
+    Test("graph-set-node-pos",         "graph-set-node-pos",  ["--asset", "TGraph", "--parent", "{GRAPH_WAIT_UUID}", "--value", "[300,100]"]),
+    Test("graph-duplicate-node",       "graph-duplicate-node",["--asset", "TGraph", "--parent", "{GRAPH_WAIT_UUID}"]),
+    # graph-compile against the now-rich TGraph (it already has a Start
+    # from the earlier add-node-start test) returns ok=true.
+    Test("graph-compile",              "graph-compile",       ["--asset", "TGraph"]),
+
     # === event-graph node-level ops (deferred follow-up landed) =======
     Test("event-graph-list-empty",     "event-graph-list-nodes", ["--asset", "TPrefab1"]),
     Test("event-graph-add-event",      "event-graph-add-node", ["--asset", "TPrefab1", "--type", "Event"]),
@@ -328,6 +372,18 @@ TESTS: List[Test] = [
     Test("event-graph-add-bad",        "event-graph-add-node", ["--asset", "TPrefab1", "--type", "NotANode"], expect_fail=True),
     Test("event-graph-list",           "event-graph-list-nodes", ["--asset", "TPrefab1"]),
     Test("event-graph-disconnect-noop","event-graph-disconnect", ["--asset", "TPrefab1", "--from", "1:0", "--to", "2:0"], expect_fail=True),
+
+    # === event-graph: set-node-prop / duplicate-node / set-node-pos / compile / convenience ===
+    Test("eg-add-event-anchor",        "event-graph-add-node",["--asset", "TPrefab1", "--type", "Event"],
+         captures={"EG_EVENT_UUID": "added"}),
+    Test("eg-set-node-pos",            "event-graph-set-node-pos", ["--asset", "TPrefab1", "--parent", "{EG_EVENT_UUID}", "--value", "[40,40]"]),
+    Test("eg-set-node-prop",           "event-graph-set-node-prop",["--asset", "TPrefab1", "--parent", "{EG_EVENT_UUID}", "--field", "eventKind", "--value", "0"]),
+    Test("eg-duplicate-node",          "event-graph-duplicate-node",["--asset", "TPrefab1", "--parent", "{EG_EVENT_UUID}"]),
+    Test("eg-compile",                 "event-graph-compile", ["--asset", "TPrefab1"]),  # PrefabEvent counts as entry
+    Test("eg-prefab-var-stub",         "prefab-add-variable", ["--asset", "TPrefab1", "--name", "egTestVar", "--type", "int", "--value", "0"]),
+    Test("eg-add-var-get",             "event-graph-add-var-get", ["--asset", "TPrefab1", "--name", "egTestVar", "--value", "[200,0]"]),
+    Test("eg-add-var-get-missing",     "event-graph-add-var-get", ["--asset", "TPrefab1", "--name", "doesNotExist"], expect_fail=True),
+    Test("eg-add-func-call",           "event-graph-add-func-call",["--asset", "TPrefab1", "--func", "onTick"]),
 
     # === material-graph node-level ops (deferred follow-up landed) ====
     Test("material-graph-list-empty",  "material-graph-list-nodes", ["--asset", "TMat"]),
@@ -337,6 +393,13 @@ TESTS: List[Test] = [
     Test("material-graph-list",        "material-graph-list-nodes", ["--asset", "TMat"]),
     Test("material-graph-add-bad",     "material-graph-add-node", ["--asset", "TMat", "--type", "NotANode"], expect_fail=True),
     Test("material-graph-disc-noop",   "material-graph-disconnect", ["--asset", "TMat", "--from", "1:0", "--to", "2:0"], expect_fail=True),
+
+    # === material-graph: set-node-prop / duplicate-node / set-node-pos ===
+    Test("mg-anchor-colors-node",      "material-graph-add-node", ["--asset", "TMat", "--type", "Colors"],
+         captures={"MG_COLORS_UUID": "added"}),
+    Test("mg-set-node-pos",            "material-graph-set-node-pos", ["--asset", "TMat", "--parent", "{MG_COLORS_UUID}", "--value", "[120,200]"]),
+    Test("mg-set-node-prop",           "material-graph-set-node-prop",["--asset", "TMat", "--parent", "{MG_COLORS_UUID}", "--field", "setPrim", "--value", "true"]),
+    Test("mg-duplicate-node",          "material-graph-duplicate-node",["--asset", "TMat", "--parent", "{MG_COLORS_UUID}"]),
 
     # === folders ======================================================
     Test("folder-create",              "folder-create",       ["--path", "myfolder"]),
@@ -354,6 +417,8 @@ TESTS: List[Test] = [
 
     # === project ======================================================
     Test("project-set-conf",           "project-set-conf",    ["--field", "name", "--value", '"SmokeProj"']),
+    Test("project-set-coll-layer",     "project-set-collision-layer", ["--field", "3", "--name", "Hazard"]),
+    Test("project-set-coll-bad-idx",   "project-set-collision-layer", ["--field", "9", "--name", "Out"], expect_fail=True),
 
     # project-create bootstraps a fresh project from the empty template.
     # Runs via the dispatchBootstrap path so it doesn't need a pre-existing
@@ -391,15 +456,13 @@ def main() -> int:
     failures: List[tuple[str, str]] = []
 
     t0 = time.time()
+    captures_env: dict = {}
     for t in selected:
         if t.reset:
             shutil.rmtree(fixture, ignore_errors=True)
             shutil.copytree(BASELINE, fixture)
-        ok, detail = run_test(
-            Test(name=t.name, cmd=t.cmd, args=t.args, expect_json=t.expect_json,
-                 expect_fail=t.expect_fail, reset=t.reset, project=t.project),
-            fixture
-        )
+            captures_env.clear()
+        ok, detail = run_test(t, fixture, captures_env)
         status = "PASS" if ok else "FAIL"
         print(f"  {status:4}  {t.name:36}  {detail}")
         if ok:

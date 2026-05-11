@@ -292,19 +292,28 @@ Delivered as CLI commands (all smoketested in `tests/cli/run.py`):
 - `event-graph-{list-nodes,add-node,remove-node,connect,disconnect}` — prefab event-graph (graph inside `eventGraphJSON`)
 - `material-graph-{list-nodes,add-node,remove-node,connect,disconnect}` — material-graph (graph inside `.p64mat`'s `graphJSON`). Note: edits do NOT trigger a recompile of `MaterialAsset::compiled`; that still runs on save inside the editor.
 
-**P1 — partially closed:**
+**P1 — all closed:**
 
-- `scene-duplicate-component` — Object Inspector "Duplicate Component"; clones component + funcSerialize/funcDeserialize-round-tripped data.
+- `scene-duplicate-component` — Object Inspector "Duplicate Component"
+- `{graph,event-graph,material-graph}-set-node-prop` — per-node inline property editing
+- `{graph,event-graph,material-graph}-duplicate-node` — clone with fresh uuid, optional pos
+- `{graph,event-graph}-compile` — structural validation (entry-node present, no duplicate Start, no dangling link refs). Pin-style reachability stays GUI-only since it needs ImFlow. Material auto-compiles on save, so no material-graph-compile.
+- `event-graph-add-var-get` / `event-graph-add-func-call` — drag-drop UX wrappers
 
-**P1 — still open** (same JSON-patch pattern as the graph families above):
+**P2 — all closed:**
 
-- `*-duplicate-node` across all three graph types
-- `*-set-node-prop` — per-node inline property editing
-- `*-compile` — explicit compile/validate for node-graph and event-graph (material auto-compiles on save)
-- `event-graph-add-var-get` / `event-graph-add-func-call` — convenience wrappers matching the drag-drop UX
-- Explicit `isCanvas2D` / `anchor2D` / `layerIndex2D` metadata in `component-describe` (today they only work because set-prop is generic)
+- `{graph,event-graph,material-graph}-set-node-pos` — canvas placement
+- `scene-duplicate-layer` — clone an existing layer entry
+- `scene-reset-layers` — `Scene::resetLayers()` exposure with ref-remap semantics
+- `restype-duplicate-prop` — clone a resource-type field
+- `prefab-duplicate-variable` / `widget-duplicate-variable` — clone a prefab class variable
+- `project-set-collision-layer --field N --name "..."` — per-index helper for the 8 collLayerN slots
 
-**P2 — still open:** `*-set-node-pos`, `scene-reset-layers`, `scene-duplicate-layer`, `restype-duplicate-prop`, `prefab-duplicate-variable`, `project-set-collision-layer` (per-index helper), `--cmd run` (skip build), Show-in-Explorer style file-system helpers.
+**Still open (deliberate skips):**
+
+- Explicit `isCanvas2D` / `anchor2D` / `layerIndex2D` metadata in `component-describe`. The generic `scene-set-prop` already handles these, just without schema introspection.
+- `--cmd run` (launch the last-built ROM without rebuilding). Ergonomic shell call, not really a CLI gap; the .z64 path is already known.
+- Show-in-Explorer / Copy-Path / Open-with-OS shell sugar. `asset-describe` returns the on-disk path; the rest is a host-shell concern.
 
 ## CLI bugs fixed by this work
 
