@@ -10,14 +10,16 @@
 namespace Project::Graph::Node
 {
   /**
-   * Pure-function value node that exposes the current frame's deltaTime
-   * as a Float pin. Only meaningful inside a prefab event graph reached
-   * via the OnTick dispatch path; the per-frame Scene::update loop
-   * forwards deltaTime through the generated dispatch function so the
-   * identifier is in scope. Standalone NodeGraph script assets do not
-   * yet thread deltaTime to their generated run() function; using this
-   * node there will produce an undeclared-identifier compile error
-   * which is the intentional v1 fail mode.
+   * Value node that exposes the current frame's deltaTime as a Float
+   * pin. Resolves in two contexts:
+   *   - Prefab event graphs: dispatch_X(self, eventType, deltaTime) is
+   *     called with the per-frame delta from Scene::update.
+   *   - Standalone NodeGraph script assets: run() binds
+   *     `float& deltaTime = inst->lastDeltaTime;` at function entry,
+   *     and the host refreshes lastDeltaTime before each coro_resume.
+   * v1 codegen evaluates value pins once at function entry, so the
+   * snapshot taken into res_<uuid> is the delta from the first
+   * resume. Pure-eval (graph-gaps.md) lifts that limit.
    */
   class DeltaTime : public Base
   {

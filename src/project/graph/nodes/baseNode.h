@@ -29,6 +29,12 @@ namespace Project::Graph
     std::vector<uint64_t> *outUUIDs{nullptr};
     std::vector<uint64_t> *inValUUIDs{nullptr};
 
+    // True when emitting a body node inside a structured loop's
+    // for/while block. Flips return-on-fall-off into continue so a
+    // body chain that terminates naturally just iterates instead of
+    // exiting the whole function. See graph.cpp's loop-inlining pass.
+    bool insideLoopBody{false};
+
     inline std::string toStr(auto value)
     {
       std::string valStr;
@@ -79,7 +85,9 @@ namespace Project::Graph
         if(uuidOut) {
           source += "    goto NODE_" + Utils::toHex64(uuidOut) + ";\n";
         } else {
-          source += "    return;\n";
+          // Falling off a wired-but-unconnected exec out: inside a
+          // loop body this iterates the loop instead of returning.
+          source += insideLoopBody ? "    continue;\n" : "    return;\n";
         }
       } else {
         source += "    static_assert(false, \"Missing output UUID for jump\");\n";
@@ -128,5 +136,13 @@ namespace Project::Graph::Node
       virtual void serialize(nlohmann::json &j) = 0;
       virtual void deserialize(nlohmann::json &j) = 0;
       virtual void build(BuildCtx &ctx) = 0;
+
+      // Loop-shaped nodes (ForRange / While / ForEach) override these
+      // so the build pass can emit a real C++ for / while wrapping
+      // their body subgraph inline. Default returns false; build()
+      // is the only emit hook for non-loop nodes.
+      virtual bool isLoop() const { return false; }
+      virtual void buildLoopHeader(BuildCtx &) {}
+      virtual void buildLoopFooter(BuildCtx &ctx) { ctx.line("}"); }
   };
 }

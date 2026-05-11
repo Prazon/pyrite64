@@ -13,8 +13,11 @@
 #include <filesystem>
 
 #include "../project/graph/graph.h"
+#include "../project/graph/nodeStyles.h"
 #include "../project/graph/nodes/baseNode.h"
 #include "../project/graph/nodes/nodePrefabEvent.h"
+#include <functional>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -157,14 +160,22 @@ namespace
     return out;
   }
 
-  // Compute outgoing-link maps for a graph, mirroring the topology pass
-  // Graph::build() does. Returned map: node-uuid → vector of next-node-uuids
-  // indexed by output-pin position. Index 0 is the primary "exec" out for
-  // logic-flow nodes.
-  std::unordered_map<uint64_t, std::vector<uint64_t>> collectOutgoing(
-    Project::Graph::Graph &graph)
-  {
+  // Compute outgoing and ingoing-value link maps for a graph, mirroring
+  // the topology pass Graph::build() does. Outgoing: node-uuid → vector
+  // of next-node-uuids indexed by output-pin position; index 0 is the
+  // primary exec out. Ingoing-vals: node-uuid → vector of source-node-
+  // uuids indexed by input-pin position, then filtered through
+  // valInputTypes so consumer nodes see one entry per declared value
+  // input (matching graph.cpp's resolution rules for res_<uuid> lookups).
+  struct LinkMaps {
     std::unordered_map<uint64_t, std::vector<uint64_t>> outgoing;
+    std::unordered_map<uint64_t, std::vector<uint64_t>> ingoingVals;
+  };
+
+  LinkMaps collectLinks(Project::Graph::Graph &graph,
+                        const std::unordered_map<uint64_t, Project::Graph::Node::Base*> &nodeMap)
+  {
+    LinkMaps maps;
     for (const auto &weak : graph.graph.getLinks()) {
       auto link = weak.lock();
       if (!link) continue;
@@ -176,78 +187,219 @@ namespace
       auto rightNode = dynamic_cast<Project::Graph::Node::Base*>(rightPin->getParent());
       if (!leftNode || !rightNode) continue;
 
-      // Find pin index by scanning the parent's outs.
       uint32_t leftIdx = 0;
       auto &outs = leftNode->getOuts();
       for (size_t i = 0; i < outs.size(); ++i) {
         if (outs[i].get() == leftPin) { leftIdx = static_cast<uint32_t>(i); break; }
       }
-      auto &slots = outgoing[leftNode->uuid];
+      auto &slots = maps.outgoing[leftNode->uuid];
       if (leftIdx >= slots.size()) slots.resize(leftIdx + 1, 0);
       slots[leftIdx] = rightNode->uuid;
+
+      uint32_t rightIdx = 0;
+      auto &ins = rightNode->getIns();
+      for (size_t i = 0; i < ins.size(); ++i) {
+        if (ins[i].get() == rightPin) { rightIdx = static_cast<uint32_t>(i); break; }
+      }
+      auto &inSlots = maps.ingoingVals[rightNode->uuid];
+      if (rightIdx >= inSlots.size()) inSlots.resize(rightIdx + 1, 0);
+      inSlots[rightIdx] = leftNode->uuid;
     }
-    return outgoing;
+
+    // Filter ingoingVals through each consumer's valInputTypes so the
+    // resulting vector indexes by *value-input slot*, not by raw pin
+    // position. This mirrors graph.cpp:595-609.
+    for (auto &[nodeUUID, ingoing] : maps.ingoingVals) {
+      if (ingoing.empty()) continue;
+      auto it = nodeMap.find(nodeUUID);
+      if (it == nodeMap.end()) continue;
+      auto* p64 = it->second;
+      if (p64->valInputTypes.empty()) continue;
+      std::vector<uint64_t> filtered;
+      for (size_t i = 0; i < p64->valInputTypes.size(); ++i) {
+        if (p64->valInputTypes[i] == 1 && i < ingoing.size()) {
+          filtered.push_back(ingoing[i]);
+        }
+      }
+      ingoing = filtered;
+    }
+    return maps;
   }
 
   // Per-prefab dispatch generator. Walks the graph, emits a labeled block
   // per non-event node, plus a switch at the function head that gotos the
   // matching event entry. PrefabFunc nodes' {{PFX}} placeholder is
   // replaced with the prefab's sanitized identifier so calls land in
-  // namespace User::<Ident>::*.
+  // namespace User::<Ident>::*. Loop-shaped nodes (ForRange/While/ForEach)
+  // are inlined: their body subgraph emits inside a real C++ for/while
+  // block via buildLoopHeader/buildLoopFooter, and Break/Continue map
+  // directly onto the C++ keywords. See graph.cpp's parallel pass.
   std::string buildPrefabDispatchBody(
     Project::Graph::Graph &graph, const std::string &ident)
   {
-    auto outgoing = collectOutgoing(graph);
-
-    // Collect entry nodes (PrefabEvent) and other nodes.
-    std::vector<std::pair<uint16_t, uint64_t>> entries; // (eventId, nodeUUID)
+    // Collect nodes + entries, build nodeMap for link filtering.
+    std::vector<std::pair<uint16_t, uint64_t>> entries;
     std::vector<Project::Graph::Node::Base*> allNodes;
+    std::unordered_map<uint64_t, Project::Graph::Node::Base*> nodeMap;
     allNodes.reserve(graph.graph.getNodes().size());
     for (auto &kv : graph.graph.getNodes()) {
       auto p64 = dynamic_cast<Project::Graph::Node::Base*>(kv.second.get());
       if (!p64) continue;
       allNodes.push_back(p64);
+      nodeMap[p64->uuid] = p64;
       if (auto evt = dynamic_cast<Project::Graph::Node::PrefabEvent*>(p64)) {
         entries.push_back({Project::Graph::Node::PrefabEvent::kindEventId(evt->kind), evt->uuid});
       }
     }
 
-    std::string body;
-    body += "  switch(eventType) {\n";
+    auto links = collectLinks(graph, nodeMap);
+    auto &outgoing = links.outgoing;
+    auto &ingoingVals = links.ingoingVals;
+
+    // The dispatch switch goes after the global var declarations
+    // because the case-arm gotos jump into NODE_<uuid> labels and
+    // C++ forbids transferring control past a non-trivially-init'd
+    // variable (e.g. std::vector). Build the switch text up front
+    // but splice it in after the global-var preamble.
+    std::string switchText;
+    switchText += "  switch(eventType) {\n";
     for (const auto &[evtId, nodeUUID] : entries) {
       char buf[64];
       std::snprintf(buf, sizeof(buf), "    case 0x%04X: goto NODE_%016llX;\n",
         (unsigned)evtId, (unsigned long long)nodeUUID);
-      body += buf;
+      switchText += buf;
     }
-    body += "    default: return;\n";
-    body += "  }\n";
+    switchText += "    default: return;\n";
+    switchText += "  }\n";
 
-    // Per-node code blocks.
+    // Count exec outputs by leading-style match. Exec pins always come
+    // before value pins in the node ctors, so as soon as a non-exec
+    // output appears the count is final.
+    auto execOutCount = [&](Project::Graph::Node::Base* n) -> uint32_t {
+      auto execStyle = ::Project::Graph::pinStyle(::Project::Graph::PinDataType::Exec).get();
+      auto &outs = n->getOuts();
+      uint32_t cnt = 0;
+      for (auto &p : outs) {
+        if (!p) break;
+        if (p->getStyle().get() != execStyle) break;
+        cnt++;
+      }
+      return cnt;
+    };
+
+    // Pre-walk: identify each loop's body subgraph by exec-BFS from
+    // outUUIDs[0] (Body), stopping at nested loop nodes which keep
+    // their own bodies. First-come-wins so the outermost loop owns
+    // shared nodes.
+    std::unordered_map<uint64_t, uint64_t> loopOwner;
+    {
+      std::function<void(uint64_t, uint64_t, std::unordered_set<uint64_t>&)> markBody;
+      markBody = [&](uint64_t nodeUUID, uint64_t loopUUID,
+                     std::unordered_set<uint64_t> &visited) {
+        if (nodeUUID == 0 || visited.count(nodeUUID)) return;
+        visited.insert(nodeUUID);
+        auto it = nodeMap.find(nodeUUID);
+        if (it == nodeMap.end()) return;
+        auto* n = it->second;
+        if (!loopOwner.count(n->uuid)) loopOwner[n->uuid] = loopUUID;
+        auto outIt = outgoing.find(n->uuid);
+        if (outIt == outgoing.end()) return;
+        if (n->isLoop()) {
+          if (outIt->second.size() > 1) {
+            markBody(outIt->second[1], loopUUID, visited);
+          }
+          return;
+        }
+        uint32_t ec = execOutCount(n);
+        for (uint32_t i = 0; i < ec && i < outIt->second.size(); ++i) {
+          markBody(outIt->second[i], loopUUID, visited);
+        }
+      };
+      for (auto* loop : allNodes) {
+        if (!loop->isLoop()) continue;
+        auto outIt = outgoing.find(loop->uuid);
+        if (outIt == outgoing.end() || outIt->second.empty()) continue;
+        std::unordered_set<uint64_t> visited;
+        visited.insert(loop->uuid);
+        markBody(outIt->second[0], loop->uuid, visited);
+      }
+    }
+
     Project::Graph::BuildCtx nctx;
     nctx.source = "";
-    for (auto *n : allNodes) {
-      auto outIt = outgoing.find(n->uuid);
-      static thread_local std::vector<uint64_t> empty;
-      nctx.outUUIDs = outIt != outgoing.end() ? &outIt->second : &empty;
+    static thread_local std::vector<uint64_t> emptyVec;
+
+    std::function<void(Project::Graph::Node::Base*, bool)> emitNode;
+    emitNode = [&](Project::Graph::Node::Base* node, bool insideLoop) {
+      auto savedOut  = nctx.outUUIDs;
+      auto savedIn   = nctx.inValUUIDs;
+      auto savedFlag = nctx.insideLoopBody;
+      auto outIt = outgoing.find(node->uuid);
+      auto inIt  = ingoingVals.find(node->uuid);
+      nctx.outUUIDs    = outIt != outgoing.end() ? &outIt->second : &emptyVec;
+      nctx.inValUUIDs  = inIt  != ingoingVals.end() ? &inIt->second : &emptyVec;
+      nctx.insideLoopBody = insideLoop;
 
       char lbl[48];
       std::snprintf(lbl, sizeof(lbl), "NODE_%016llX",
-        (unsigned long long)n->uuid);
-      nctx.source += std::string{"  "} + lbl + ": // " + n->getName() + "\n";
+        (unsigned long long)node->uuid);
+      nctx.source += std::string{"  "} + lbl + ": // " + node->getName() + "\n";
       nctx.source += "  {\n";
-      n->build(nctx);
-      if (nctx.outUUIDs->empty()) {
-        nctx.line("return;");
+
+      if (node->isLoop()) {
+        node->build(nctx);
+        node->buildLoopHeader(nctx);
+        for (auto* body : allNodes) {
+          auto it = loopOwner.find(body->uuid);
+          if (it == loopOwner.end() || it->second != node->uuid) continue;
+          emitNode(body, true);
+        }
+        node->buildLoopFooter(nctx);
+        nctx.outUUIDs = outIt != outgoing.end() ? &outIt->second : &emptyVec;
+        if (nctx.outUUIDs->size() > 1 && nctx.outUUIDs->at(1)) {
+          char gbuf[48];
+          std::snprintf(gbuf, sizeof(gbuf), "goto NODE_%016llX;",
+            (unsigned long long)nctx.outUUIDs->at(1));
+          nctx.line(gbuf);
+        } else if (insideLoop) {
+          nctx.line("continue;");
+        } else {
+          nctx.line("return;");
+        }
       } else {
-        nctx.jump(0);
+        node->build(nctx);
+        if (nctx.outUUIDs->empty() || nctx.outUUIDs->at(0) == 0) {
+          nctx.line(insideLoop ? "continue;" : "return;");
+        } else {
+          nctx.jump(0);
+        }
       }
+
       nctx.source += "  }\n";
+      nctx.outUUIDs       = savedOut;
+      nctx.inValUUIDs     = savedIn;
+      nctx.insideLoopBody = savedFlag;
+    };
+
+    // Walk every top-level node (loop bodies are inlined recursively).
+    // Populates nctx.source with NODE_<uuid> blocks and nctx.vars with
+    // every globalVar declared during build().
+    for (auto* n : allNodes) {
+      if (loopOwner.count(n->uuid)) continue;
+      emitNode(n, false);
     }
 
+    // Layout: globalVars → switch → NODE labels. Globalvars must be
+    // declared before the switch so the case-arm gotos do not jump
+    // past their initialisers (illegal for non-trivial inits like
+    // std::vector).
+    std::string body;
+    for (auto &gv : nctx.vars) {
+      body += "  " + gv.type + " " + gv.name + " = " + gv.value + ";\n";
+    }
+    body += switchText;
     body += nctx.source;
 
-    // Replace PrefabFunc's namespace placeholder with the resolved ident.
     body = Utils::replaceAll(body, "{{PFX}}", ident);
     return body;
   }

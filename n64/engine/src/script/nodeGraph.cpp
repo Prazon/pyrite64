@@ -54,6 +54,7 @@ bool P64::NodeGraph::Instance::update(float deltaTime) {
   //debugf("Instance::update: %p\n", corot);
   if(!corot)return false;
 
+  lastDeltaTime = deltaTime;
   //auto t = get_ticks();
   //disable_interrupts();
   coro_resume(corot);

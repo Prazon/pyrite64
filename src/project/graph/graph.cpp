@@ -73,6 +73,11 @@
 #include "nodes/nodeArrayClear.h"
 #include "nodes/nodeArrayFind.h"
 #include "nodes/nodeArrayContains.h"
+#include "nodes/nodeForRange.h"
+#include "nodes/nodeWhile.h"
+#include "nodes/nodeForEach.h"
+#include "nodes/nodeBreak.h"
+#include "nodes/nodeContinue.h"
 
 namespace Project::Graph::Node
 {
@@ -207,6 +212,11 @@ namespace Project::Graph
     TABLE_ENTRY(ArrayClear),      // 59
     TABLE_ENTRY(ArrayFind),       // 60
     TABLE_ENTRY(ArrayContains),   // 61
+    TABLE_ENTRY(ForRange),        // 62
+    TABLE_ENTRY(While),           // 63
+    TABLE_ENTRY(ForEach),         // 64
+    TABLE_ENTRY(Break),           // 65
+    TABLE_ENTRY(Continue),        // 66
   });
 
   const std::vector<std::string> & Graph::getNodeNames()
@@ -300,6 +310,11 @@ namespace Project::Graph
       { 59, Node::ArrayClear::NAME,    "Array",        EXEC,         EXEC          },
       { 60, Node::ArrayFind::NAME,     "Array",        EXEC | FLOAT, EXEC | INT    },
       { 61, Node::ArrayContains::NAME, "Array",        EXEC | FLOAT, EXEC | BOOL   },
+      { 62, Node::ForRange::NAME,      "Flow Control", EXEC | INT,   EXEC | INT    },
+      { 63, Node::While::NAME,         "Flow Control", EXEC | BOOL,  EXEC          },
+      { 64, Node::ForEach::NAME,       "Flow Control", EXEC,         EXEC | FLOAT  },
+      { 65, Node::Break::NAME,         "Flow Control", EXEC,         0             },
+      { 66, Node::Continue::NAME,      "Flow Control", EXEC,         0             },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Palette entries out of sync with NODE_TABLE");
@@ -605,28 +620,128 @@ namespace Project::Graph
     source += R"(void run(void* arg) {)" "\n";
 
     source += R"(  P64::NodeGraph::Instance* inst = (P64::NodeGraph::Instance*)arg; )" "\n";
+    // Bind deltaTime as a reference so the DeltaTime node (and any
+    // other ticked-value users) can resolve the identifier. The host
+    // refreshes Instance::lastDeltaTime before each coro_resume.
+    source += R"(  float& deltaTime = inst->lastDeltaTime; (void)deltaTime;)" "\n";
 
     auto nodeLabel = [&](uint64_t uuid) {
       return "NODE_" + Utils::toHex64(uuid);
     };
 
-    for(const auto &node : nodeVec)
+    // Identify exec output count per node (exec pins come before
+    // value pins by convention in every node ctor today). Used to
+    // limit BFS to exec edges only when computing loop body subgraphs.
+    auto execOutCount = [&](Node::Base* n) -> uint32_t {
+      auto execStyle = ::Project::Graph::pinStyle(::Project::Graph::PinDataType::Exec).get();
+      auto &outs = n->getOuts();
+      uint32_t cnt = 0;
+      for (auto &p : outs) {
+        if (!p) break;
+        if (p->getStyle().get() != execStyle) break;
+        cnt++;
+      }
+      return cnt;
+    };
+
+    // Pre-walk: identify each loop's body subgraph by exec-BFS from
+    // outUUIDs[0] (Body), stopping at nested loop nodes (which keep
+    // their body to themselves). First-come-wins on loopOwner so the
+    // outermost loop encountered owns shared nodes.
+    std::unordered_map<uint64_t, uint64_t> loopOwner;
     {
+      std::function<void(uint64_t, uint64_t, std::unordered_set<uint64_t>&)> markBody;
+      markBody = [&](uint64_t nodeUUID, uint64_t loopUUID,
+                     std::unordered_set<uint64_t> &visited) {
+        if (nodeUUID == 0 || visited.count(nodeUUID)) return;
+        visited.insert(nodeUUID);
+        auto it = nodeMap.find(nodeUUID);
+        if (it == nodeMap.end()) return;
+        auto* n = it->second;
+        if (!loopOwner.count(n->uuid)) loopOwner[n->uuid] = loopUUID;
+        // Inner loop encountered: mark it as body of the outer loop
+        // but don't walk its body (it owns its own). Walk only its
+        // Done branch (post-inner-loop, still in outer body).
+        auto outIt = nodeOutgoingMap.find(n->uuid);
+        if (outIt == nodeOutgoingMap.end()) return;
+        if (n->isLoop()) {
+          if (outIt->second.size() > 1) {
+            markBody(outIt->second[1], loopUUID, visited);
+          }
+          return;
+        }
+        uint32_t ec = execOutCount(n);
+        for (uint32_t i = 0; i < ec && i < outIt->second.size(); ++i) {
+          markBody(outIt->second[i], loopUUID, visited);
+        }
+      };
+      for (auto* loop : nodeVec) {
+        if (!loop->isLoop()) continue;
+        auto outIt = nodeOutgoingMap.find(loop->uuid);
+        if (outIt == nodeOutgoingMap.end() || outIt->second.empty()) continue;
+        std::unordered_set<uint64_t> visited;
+        visited.insert(loop->uuid);
+        markBody(outIt->second[0], loop->uuid, visited);
+      }
+    }
+
+    // Recursive emitter: handles loop nodes by inlining their body
+    // subgraph between buildLoopHeader / buildLoopFooter. Top-level
+    // call passes insideLoop=false; loop body iterations recurse
+    // with insideLoop=true so jump() turns chain falloff into
+    // continue; instead of return;.
+    std::function<void(Node::Base*, bool)> emitNode;
+    emitNode = [&](Node::Base* node, bool insideLoop) {
+      auto savedOut = nodeCtx.outUUIDs;
+      auto savedIn  = nodeCtx.inValUUIDs;
+      auto savedFlag = nodeCtx.insideLoopBody;
       nodeCtx.outUUIDs = &nodeOutgoingMap[node->uuid];
       nodeCtx.inValUUIDs = &nodeIngoingValMap[node->uuid];
+      nodeCtx.insideLoopBody = insideLoop;
 
       nodeCtx.source += "  " + nodeLabel(node->uuid) + ": // " + node->getName() + "\n";
       nodeCtx.source += "  {\n";
 
-      node->build(nodeCtx);
-
-      if(nodeCtx.outUUIDs->empty()) {
-        nodeCtx.line("return;");
+      if (node->isLoop()) {
+        node->build(nodeCtx);
+        node->buildLoopHeader(nodeCtx);
+        for (auto* body : nodeVec) {
+          auto it = loopOwner.find(body->uuid);
+          if (it == loopOwner.end() || it->second != node->uuid) continue;
+          emitNode(body, true);
+        }
+        node->buildLoopFooter(nodeCtx);
+        // After the for/while exits, route to the loop's Done branch
+        // (outUUIDs[1]). Restore the pointer since the recursive
+        // body emissions reset it.
+        nodeCtx.outUUIDs = &nodeOutgoingMap[node->uuid];
+        if (nodeCtx.outUUIDs->size() > 1 && nodeCtx.outUUIDs->at(1)) {
+          nodeCtx.line("goto NODE_" + Utils::toHex64(nodeCtx.outUUIDs->at(1)) + ";");
+        } else if (insideLoop) {
+          nodeCtx.line("continue;");
+        } else {
+          nodeCtx.line("return;");
+        }
       } else {
-        nodeCtx.jump(0);
+        node->build(nodeCtx);
+        if (nodeCtx.outUUIDs->empty() || nodeCtx.outUUIDs->at(0) == 0) {
+          nodeCtx.line(insideLoop ? "continue;" : "return;");
+        } else {
+          nodeCtx.jump(0);
+        }
       }
 
       nodeCtx.source += "  }\n";
+      nodeCtx.outUUIDs = savedOut;
+      nodeCtx.inValUUIDs = savedIn;
+      nodeCtx.insideLoopBody = savedFlag;
+    };
+
+    // Top-level emission: skip nodes owned by a loop (they're
+    // inlined via emitNode's loop recursion).
+    for (const auto &node : nodeVec) {
+      if (loopOwner.count(node->uuid)) continue;
+      emitNode(node, false);
     }
 
     source += "\n// ==== GLOBAL VARS ==== //\n";

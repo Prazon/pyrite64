@@ -30,6 +30,13 @@ namespace P64::NodeGraph
       uint32_t args[2]{};
       uint16_t asset{};
       uint8_t repeatable{};
+      // Per-frame deltaTime, refreshed before each coro_resume so the
+      // generated run() can reference it via the DeltaTime node. Held
+      // by reference inside run(), so it always reflects the latest
+      // tick. v1 codegen still snapshots into a globalVar at function
+      // entry, so values read after a Wait yield are stale until pure-
+      // eval pipes value nodes through (see docs/graph-gaps.md).
+      float lastDeltaTime{};
 
       Instance() = default;
       ~Instance();
