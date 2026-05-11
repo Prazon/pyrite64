@@ -113,6 +113,39 @@ Rendering caveats carried from libdragon work that still apply when authoring en
 - LFS mirroring: this fork's LFS endpoint also hosts the objects upstream still LFS-tracks (TTFs etc.), so a clone of `Prazon/pyrite64` can resolve everything via `git lfs pull` even when working off `upstream/main`. After upstream adds new LFS files, re-sync from a context where SSH auth to GitHub works for git-lfs: `git lfs fetch upstream --all && git lfs push --all origin`.
 - Submodules are pinned in `.gitmodules`; after pulling run `git submodule update --init --recursive`.
 
+## 2D / pixel-art game path
+
+The fork's central goal is first-class **2D** support alongside the upstream 3D pipeline. Authored on the `pyrite-2d` branch (separate worktree at `B:\forks\pyrite64-2d` to keep `main` clean for parallel Claude sessions).
+
+**Scene-level switch.** `Scene::renderMode` (editor `PROP_S32`, engine `uint8_t`) takes `Mode3D=0` (default) or `Mode2D=1`. The byte was previously SceneConf padding so old scenes load as Mode3D unchanged. The editor's central viewport picks 3D-Viewport (Mode3D) vs 2D-Viewport (Mode2D) automatically — no more sibling tab pair.
+
+**2D engine components** (IDs 24–29, all appended to `COMP_TABLE` per the MIPS-toolchain rule):
+
+- `Rect2D` — filled or outlined screen-space rectangle (rdpq_fill_rectangle).
+- `Line2D` — single-color line, axis-aligned (one fill) or diagonal Bresenham (one fill per major-axis step). End point is relative to `obj.pos`.
+- `Particles2D` — pool-style particle system with explicit `spawn(data, x, y, vx, vy, life, sizePx, palIdx)` API. Configured maxParticles + 4-color palette + per-frame gravity.
+- `Grid2D` — N×M cell board with a tileset sprite. Each cell stores a 1-based frame index (0 = empty). Per-cell shake counters.
+- `Tween2D` — drives `obj.pos.x/y` from a captured "from" to a configured "to" over `duration` seconds, with Linear / Smoothstep / EaseIn / EaseOut. Smoothstep matches Pixic's `t*t*(3-2*t)` exactly.
+- `Shake2D` — transient random per-frame offset on `obj.pos` for a frames budget; captures baseline on trigger and restores on stop.
+
+Existing 2D components used alongside the new ones: `Sprite2D` (subrect blit + tint + scale), `Label2D` (rdpq_text), `Panel2D`, `NinePatch2D`, `Button2D`, `ProgressBar2D`, `HBox/VBoxLayout`.
+
+**Engine subsystems added for 2D games.**
+
+- `P64::Save` (`n64/engine/{include,src}/save/`) — typed key/value persistence on libdragon `eepfs`. `init(slotCount)` allocates an in-RAM int32 buffer + registers one eepfs file with checksum + backup. `setInt/Float/Bool`, `getInt/Float/Bool` against user-managed slot indices. `commit()` flushes to EEPROM. Mirrors PICO-8's `dset/dget` contract.
+- `AudioManager::Handle::fadeTo(targetVolume, durationMs, stopAtEnd)` — linear volume ramp, optional stop on completion. Crossfading = calling `fadeTo` on the outgoing handle to 0 (stopAtEnd=true) and on the incoming one from 0 to target.
+
+**2D viewport editor affordances.** Drag-to-move now snaps to a configurable grid step (1/4/8/12/16/32 px) via a toolbar combo on `Viewport2D`. Step=1 keeps the original single-pixel snap; larger steps line up with `Grid2D` tile sizes.
+
+**Sample project: Pixic.** Live port of `pixic_src_python_pico.txt` (a PICO-8 match-3 puzzle) at `B:\PyriteProjects\Pixic64\`. Authoring split:
+
+- Per-state prefabs (Title / ModeSelect / Settings / Tutorial / Play / EnterName / Highscores / GameOver).
+- **Dense gameplay logic lives in `src/user/Play.{h,cpp}`** as `P64_NODE` C++ helpers — the rectangular-match scanner, rotation setup (2x2 and 3x3), bomb countdowns, Normal/Hardcore round cadence, settings access. The graphs in each prefab call these via PrefabFunc nodes once the graph palette merges (math + array + iteration nodes are coordinated with the main-branch Claude — see `B:\PyriteProjects\Pixic64\PORT_GAPS.md`).
+- Resolution: native 320×240, no letterboxing. Menus get re-laid-out, board sits in a 96×96 area.
+- Audio: stubbed for the M5 ship — settings menu wired to `P64::Save`, but SFX/music helpers are no-ops pending re-authored `.xm64` tracks.
+
+The full port plan + status ledger lives in the game project at `B:\PyriteProjects\Pixic64\PORT_PLAN.md` and `B:\PyriteProjects\Pixic64\PORT_GAPS.md`.
+
 ## When debugging a runtime issue
 
 The editor cannot run engine code on the host — it only previews. To actually exercise engine changes you must build a project (e.g. SPBF64) through the editor's CLI build, then run the resulting `.z64` in **Ares (v147+)** or gopher64. HLE emulators (Project64, Mupen64Plus stock) will not be accurate enough.
