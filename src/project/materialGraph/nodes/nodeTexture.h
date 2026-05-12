@@ -22,7 +22,7 @@ namespace Project::MaterialGraph::Node
   {
     private:
       int slot{0};
-      Project::Assets::MaterialTex tex{};
+      ::Project::Assets::MaterialTex tex{};
 
     public:
       constexpr static const char* NAME = ICON_MDI_IMAGE_OUTLINE " Texture";
