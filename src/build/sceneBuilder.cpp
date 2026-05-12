@@ -262,7 +262,9 @@ void Build::buildScene(Project::Project &project, const Project::SceneEntry &sce
   ctx.fileScene.write<uint8_t>(sc->conf.renderPipeline.value);
   ctx.fileScene.write<uint8_t>(sc->conf.frameLimit.value);
   ctx.fileScene.write<uint8_t>(sc->conf.filter.value);
-  ctx.fileScene.write<uint8_t>(0); // padding
+  // Was a padding byte; repurposed as Scene::renderMode (0=Mode3D, 1=Mode2D).
+  // Old scenes wrote 0 here, which decodes as Mode3D, so backwards-compatible.
+  ctx.fileScene.write<uint8_t>(static_cast<uint8_t>(sc->conf.renderMode.value));
 
   ctx.fileScene.write<uint16_t>(sc->conf.audioFreq.value);
   ctx.fileScene.write<uint16_t>(std::clamp(sc->conf.physicsTickRate.value, 1, 100));

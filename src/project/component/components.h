@@ -196,6 +196,12 @@ namespace Project::Component
   MAKE_COMP(HBoxLayout)
   MAKE_COMP(VBoxLayout)
   MAKE_COMP(Button2D)
+  MAKE_COMP(Rect2D)
+  MAKE_COMP(Line2D)
+  MAKE_COMP(Particles2D)
+  MAKE_COMP(Grid2D)
+  MAKE_COMP(Tween2D)
+  MAKE_COMP(Shake2D)
   MAKE_COMP(ParticleEmitter)
 
   constexpr std::array TABLE{
@@ -507,6 +513,84 @@ namespace Project::Component
     },
     CompInfo{
       .id = 24,
+      .icon = ICON_MDI_RECTANGLE " ",
+      .name = "Rect (2D)",
+      .funcInit = Rect2D::init,
+      .funcDraw = Rect2D::draw,
+      .funcSerialize = Rect2D::serialize,
+      .funcDeserialize = Rect2D::deserialize,
+      .funcBuild = Rect2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Rect2D::draw2D,
+      .funcWidgetSize = Rect2D::widgetSize,
+    },
+    CompInfo{
+      .id = 25,
+      .icon = ICON_MDI_VECTOR_LINE " ",
+      .name = "Line (2D)",
+      .funcInit = Line2D::init,
+      .funcDraw = Line2D::draw,
+      .funcSerialize = Line2D::serialize,
+      .funcDeserialize = Line2D::deserialize,
+      .funcBuild = Line2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Line2D::draw2D,
+      .funcWidgetSize = Line2D::widgetSize,
+    },
+    CompInfo{
+      .id = 26,
+      .icon = ICON_MDI_SHIMMER " ",
+      .name = "Particles (2D)",
+      .funcInit = Particles2D::init,
+      .funcDraw = Particles2D::draw,
+      .funcSerialize = Particles2D::serialize,
+      .funcDeserialize = Particles2D::deserialize,
+      .funcBuild = Particles2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Particles2D::draw2D,
+      .funcWidgetSize = Particles2D::widgetSize,
+    },
+    CompInfo{
+      .id = 27,
+      .icon = ICON_MDI_GRID " ",
+      .name = "Grid (2D)",
+      .funcInit = Grid2D::init,
+      .funcDraw = Grid2D::draw,
+      .funcSerialize = Grid2D::serialize,
+      .funcDeserialize = Grid2D::deserialize,
+      .funcBuild = Grid2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Grid2D::draw2D,
+      .funcWidgetSize = Grid2D::widgetSize,
+    },
+    CompInfo{
+      .id = 28,
+      .icon = ICON_MDI_MOTION_SENSOR " ",
+      .name = "Tween (2D)",
+      .funcInit = Tween2D::init,
+      .funcDraw = Tween2D::draw,
+      .funcSerialize = Tween2D::serialize,
+      .funcDeserialize = Tween2D::deserialize,
+      .funcBuild = Tween2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Tween2D::draw2D,
+      .funcWidgetSize = Tween2D::widgetSize,
+    },
+    CompInfo{
+      .id = 29,
+      .icon = ICON_MDI_VIBRATE " ",
+      .name = "Shake (2D)",
+      .funcInit = Shake2D::init,
+      .funcDraw = Shake2D::draw,
+      .funcSerialize = Shake2D::serialize,
+      .funcDeserialize = Shake2D::deserialize,
+      .funcBuild = Shake2D::build,
+      .funcGetAABB = nullptr,
+      .funcDraw2D = Shake2D::draw2D,
+      .funcWidgetSize = Shake2D::widgetSize,
+    },
+    CompInfo{
+      .id = 30,
       .icon = ICON_MDI_SHIMMER " ",
       .name = "Particle Emitter",
       .funcInit = ParticleEmitter::init,

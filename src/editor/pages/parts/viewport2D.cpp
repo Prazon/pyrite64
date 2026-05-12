@@ -152,6 +152,15 @@ void Editor::Viewport2D::draw()
   ImGui::TextDisabled("zoom %.2fx  |  hover: %s%s",
     zoom, hoveredUUID ? "yes" : "no",
     canvasMode ? "  |  CANVAS" : "");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(80.0f);
+  constexpr const char* SNAP_LABELS[] = {"1px", "4px", "8px", "12px", "16px", "32px"};
+  constexpr int SNAP_VALUES[] = {1, 4, 8, 12, 16, 32};
+  int snapIdx = 0;
+  for (int i = 0; i < 6; ++i) if (SNAP_VALUES[i] == snapStep) { snapIdx = i; break; }
+  if (ImGui::Combo("snap", &snapIdx, SNAP_LABELS, 6)) {
+    snapStep = SNAP_VALUES[snapIdx];
+  }
 
   ImVec2 canvasTL = ImGui::GetCursorScreenPos();
   ImVec2 canvasSize = ImGui::GetContentRegionAvail();
@@ -300,10 +309,15 @@ void Editor::Viewport2D::draw()
       ImVec2 mp = ImGui::GetMousePos();
       float dx = (mp.x - dragMouseStart.x) / zoom;
       float dy = (mp.y - dragMouseStart.y) / zoom;
-      // Snap to integer pixels (N64 framebuffer has no subpixel).
       auto p = o->pos.resolve(o->propOverrides);
-      p.x = std::round(dragObjStartPos.x + dx);
-      p.y = std::round(dragObjStartPos.y + dy);
+      // Snap to the configured grid step. step=1 is the original pixel
+      // snap (N64 framebuffer has no subpixel); larger steps line up
+      // with Grid2D tile sizes for board / tilemap authoring.
+      int step = snapStep > 0 ? snapStep : 1;
+      float tx = dragObjStartPos.x + dx;
+      float ty = dragObjStartPos.y + dy;
+      p.x = (float)((int)std::round(tx / (float)step) * step);
+      p.y = (float)((int)std::round(ty / (float)step) * step);
       o->pos.value = p;
     }
   }

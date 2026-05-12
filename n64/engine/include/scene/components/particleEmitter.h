@@ -16,7 +16,7 @@ namespace P64::Comp
 {
   struct ParticleEmitter
   {
-    static constexpr uint32_t ID = 24;
+    static constexpr uint32_t ID = 30;
 
     PTX::EmitterFromAsset *emitter{nullptr};
     uint8_t  autoPlay{1};

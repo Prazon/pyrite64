@@ -54,6 +54,13 @@ namespace Editor
       // Pan state.
       bool   panActive{false};
 
+      // Snap step (canvas pixels) applied to drag-to-move. 1 = single
+      // pixel snap (the default; matches the existing N64-framebuffer
+      // integer rounding). Setting to 8/12/16 etc. snaps to a tile
+      // grid -- useful for laying out Grid2D content or tilemap
+      // backgrounds. Configurable via the toolbar combo in draw().
+      int    snapStep{1};
+
       // Hover info: the topmost 2D object under the cursor this frame.
       uint32_t hoveredUUID{0};
 

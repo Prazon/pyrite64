@@ -30,6 +30,12 @@
 #include "scene/components/hboxLayout.h"
 #include "scene/components/vboxLayout.h"
 #include "scene/components/button2D.h"
+#include "scene/components/rect2D.h"
+#include "scene/components/line2D.h"
+#include "scene/components/particles2D.h"
+#include "scene/components/grid2D.h"
+#include "scene/components/tween2D.h"
+#include "scene/components/shake2D.h"
 #include "scene/components/particleEmitter.h"
 
 // some template magic to auto-detect if a function exists in a component
@@ -92,6 +98,12 @@ namespace P64
     SET_COMP(HBoxLayout),
     SET_COMP(VBoxLayout),
     SET_COMP(Button2D),
+    SET_COMP(Rect2D),
+    SET_COMP(Line2D),
+    SET_COMP(Particles2D),
+    SET_COMP(Grid2D),
+    SET_COMP(Tween2D),
+    SET_COMP(Shake2D),
     SET_COMP(ParticleEmitter),
   };
 }
