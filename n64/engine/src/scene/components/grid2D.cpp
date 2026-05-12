@@ -33,7 +33,7 @@ namespace
     uint8_t  _pad0;
     uint8_t  _pad1;
   };
-  static_assert(sizeof(InitData) == 16);
+  static_assert(sizeof(InitData) == 14);
 
   inline int clampInt(int v, int lo, int hi) {
     return v < lo ? lo : (v > hi ? hi : v);
