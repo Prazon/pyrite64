@@ -16,6 +16,7 @@
 #include "nodes/nodeRenderMode.h"
 #include "nodes/nodeTexture.h"
 #include "nodes/nodeGeometry.h"
+#include "nodes/nodeSampling.h"
 
 namespace Project::MaterialGraph::Node
 {
@@ -74,6 +75,7 @@ namespace Project::MaterialGraph
   constexpr uint32_t TYPE_RENDER_MODE     = 3;
   constexpr uint32_t TYPE_TEXTURE         = 4;
   constexpr uint32_t TYPE_GEOMETRY        = 5;
+  constexpr uint32_t TYPE_SAMPLING        = 6;
 
   static auto NODE_TABLE = std::to_array<TableEntry>({
     TABLE_ENTRY(Output),
@@ -82,6 +84,7 @@ namespace Project::MaterialGraph
     TABLE_ENTRY(RenderMode),
     TABLE_ENTRY(Texture),
     TABLE_ENTRY(Geometry),
+    TABLE_ENTRY(Sampling),
   });
 
   const std::vector<std::string>& Graph::getNodeNames()
@@ -107,6 +110,7 @@ namespace Project::MaterialGraph
       { TYPE_RENDER_MODE,    Node::RenderMode::NAME,     "Constants", 0,   MAT },
       { TYPE_TEXTURE,        Node::Texture::NAME,        "Constants", 0,   MAT },
       { TYPE_GEOMETRY,       Node::Geometry::NAME,       "Constants", 0,   MAT },
+      { TYPE_SAMPLING,       Node::Sampling::NAME,       "Constants", 0,   MAT },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Material palette entries out of sync with NODE_TABLE");
