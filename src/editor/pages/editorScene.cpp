@@ -412,6 +412,7 @@ void Editor::Scene::draw()
   processPendingRestores();
 
   float HEIGHT_TOP_BAR = 28_px;
+  float HEIGHT_TOOLBAR = 40_px;
   float HEIGHT_STATUS_BAR = 24_px;
 
   ImViewGuizmo::BeginFrame();
@@ -426,10 +427,10 @@ void Editor::Scene::draw()
   // to the main viewport's Pos rather than (0,0). Without this the host
   // dockspace, top bar, and status bar end up offscreen relative to the main
   // SDL window when ViewportsEnable is on.
-  ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + HEIGHT_TOP_BAR});
+  ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + HEIGHT_TOP_BAR + HEIGHT_TOOLBAR});
   ImGui::SetNextWindowSize({
     viewport->Size.x,
-    viewport->Size.y - HEIGHT_TOP_BAR - HEIGHT_STATUS_BAR,
+    viewport->Size.y - HEIGHT_TOP_BAR - HEIGHT_TOOLBAR - HEIGHT_STATUS_BAR,
   });
   ImGui::SetNextWindowViewport(viewport->ID);
 
@@ -1034,30 +1035,107 @@ void Editor::Scene::draw()
         ImGui::EndMenu();
       }
 
-      ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 40_px);
-
-      const char* tooltip{};
-      ImGui::PushFont(nullptr, 20.0_px);
-      if(isRunning){
-        ImGui::BeginDisabled();
-        ImGui::MenuItem(ICON_MDI_STOP);
-        ImGui::EndDisabled();
-      } else {
-        ImGui::PushStyleColor(ImGuiCol_Text, {0.6f, 0.85f, 0.6f, 1.0f});
-        if(ImGui::MenuItem(ICON_MDI_PLAY))Actions::call(Actions::Type::PROJECT_BUILD, "run");
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))tooltip = "Run (F12)";
-        ImGui::PopStyleColor();
-      }
-
-      ImGui::PopFont();
-
-      if(tooltip)ImGui::SetTooltip("%s", tooltip);
-
       ImGui::EndMenuBar();
     }
     ImGui::End();
   }
   ImGui::PopStyleVar();
+
+  // Unreal-style toolbar strip — sits between TOP_BAR (menus) and the
+  // dockspace. Left cluster of small icon buttons (Save / Build / Clean),
+  // centered green Play split-button with a chevron dropdown for variants.
+  // While a build/run is in progress the primary swaps to a disabled Stop.
+  ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + HEIGHT_TOP_BAR}, ImGuiCond_Always);
+  ImGui::SetNextWindowSize({viewport->Size.x, HEIGHT_TOOLBAR}, ImGuiCond_Always);
+  ImGui::SetNextWindowViewport(viewport->ID);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{8_px, 4_px});
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{4_px, 4_px});
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.10f, 0.10f, 0.12f, 1.0f});
+  if(ImGui::Begin("TOOLBAR", 0,
+    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration
+    | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDocking
+    | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+    | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus
+  )) {
+    const float btnH = HEIGHT_TOOLBAR - 12_px;
+    const float btnSqW = btnH;
+
+    auto toolButton = [&](const char *icon, const char *tip, bool enabled, auto &&onClick) {
+      if (!enabled) ImGui::BeginDisabled();
+      if (ImGui::Button(icon, ImVec2{btnSqW, btnH})) onClick();
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", tip);
+      if (!enabled) ImGui::EndDisabled();
+    };
+
+    toolButton(ICON_MDI_CONTENT_SAVE_OUTLINE, "Save project", !isRunning, [&]{
+      if (ctx.project) { ctx.project->save(); save(); }
+    });
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    toolButton(ICON_MDI_HAMMER, "Build (compile only)", !isRunning, []{
+      Actions::call(Actions::Type::PROJECT_BUILD);
+    });
+    ImGui::SameLine();
+    toolButton(ICON_MDI_BROOM, "Clean build outputs", !isRunning, []{
+      Actions::call(Actions::Type::PROJECT_CLEAN);
+    });
+
+    // Centered split-button: [▶ Play] [▾]. Compute width and place.
+    const float playLabelPad = 14_px;
+    ImVec2 playSize = ImGui::CalcTextSize(ICON_MDI_PLAY " Play");
+    const float playW = playSize.x + playLabelPad * 2;
+    const float chevronW = btnH;
+    const float splitW = playW + chevronW;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - splitW) * 0.5f);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{0, 4_px});
+    if (isRunning) {
+      ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4{0.55f, 0.20f, 0.20f, 1.0f});
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{0.55f, 0.20f, 0.20f, 1.0f});
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4{0.55f, 0.20f, 0.20f, 1.0f});
+      ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4{1.0f, 0.85f, 0.85f, 1.0f});
+      ImGui::BeginDisabled();
+      ImGui::Button(ICON_MDI_STOP " Stop", ImVec2{playW, btnH});
+      ImGui::SameLine();
+      ImGui::Button(ICON_MDI_MENU_DOWN "##playmenu_disabled", ImVec2{chevronW, btnH});
+      ImGui::EndDisabled();
+      ImGui::PopStyleColor(4);
+    } else {
+      ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4{0.22f, 0.55f, 0.25f, 1.0f});
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{0.30f, 0.70f, 0.32f, 1.0f});
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4{0.18f, 0.45f, 0.20f, 1.0f});
+      ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4{0.95f, 1.0f, 0.95f, 1.0f});
+      if (ImGui::Button(ICON_MDI_PLAY " Play", ImVec2{playW, btnH})) {
+        Actions::call(Actions::Type::PROJECT_BUILD, "run");
+      }
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Build & Run (F12)");
+      ImGui::SameLine();
+      if (ImGui::Button(ICON_MDI_MENU_DOWN "##playmenu", ImVec2{chevronW, btnH})) {
+        ImGui::OpenPopup("##playmenu_popup");
+      }
+      ImGui::PopStyleColor(4);
+
+      if (ImGui::BeginPopup("##playmenu_popup")) {
+        if (ImGui::MenuItem(ICON_MDI_PLAY " Build & Run")) {
+          Actions::call(Actions::Type::PROJECT_BUILD, "run");
+        }
+        if (ImGui::MenuItem(ICON_MDI_HAMMER " Build only")) {
+          Actions::call(Actions::Type::PROJECT_BUILD);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem(ICON_MDI_BROOM " Clean")) {
+          Actions::call(Actions::Type::PROJECT_CLEAN);
+        }
+        ImGui::EndPopup();
+      }
+    }
+    ImGui::PopStyleVar();
+  }
+  ImGui::End();
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(2);
 
   // Bottom Status bar — anchor to main viewport (see TOP_BAR comment).
   ImGui::SetNextWindowPos(
