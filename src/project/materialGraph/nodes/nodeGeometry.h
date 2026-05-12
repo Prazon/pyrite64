@@ -6,6 +6,7 @@
 
 #include "baseNode.h"
 #include "../../../utils/hash.h"
+#include "../../../n64/libdragon.h"
 
 namespace Project::MaterialGraph::Node
 {
@@ -39,11 +40,17 @@ namespace Project::MaterialGraph::Node
           &vertexFX,
           "None\0Spherical UV\0Cel-shade Color\0Cel-shade Alpha\0Outline\0UV Offset\0");
 
-        // T3D::FLAG_NO_LIGHT etc. are simple bit flags; CheckboxFlags works
-        // directly on the uint without an intermediate temporary.
-        ImGui::CheckboxFlags("Unlit",       &drawFlags, 0x01);  // T3D::FLAG_NO_LIGHT
-        ImGui::CheckboxFlags("Cull-Front",  &drawFlags, 0x04);  // T3D::FLAG_CULL_FRONT
-        ImGui::CheckboxFlags("Cull-Back",   &drawFlags, 0x08);  // T3D::FLAG_CULL_BACK
+        // T3D::FLAG_* are the canonical constants (src/n64/libdragon.h). Prior
+        // versions of this node used literal 0x01 / 0x04 / 0x08, which mapped
+        // to FLAG_DEPTH / FLAG_TEXTURED / FLAG_CULL_FRONT rather than the
+        // intended Unlit/Cull-Front/Cull-Back, so graphs that ticked Unlit
+        // were silently flipping the depth bit instead.
+        ImGui::CheckboxFlags("Unlit",       &drawFlags, T3D::FLAG_NO_LIGHT);
+        ImGui::CheckboxFlags("Cull-Front",  &drawFlags, T3D::FLAG_CULL_FRONT);
+        ImGui::CheckboxFlags("Cull-Back",   &drawFlags, T3D::FLAG_CULL_BACK);
+        ImGui::CheckboxFlags("Depth",       &drawFlags, T3D::FLAG_DEPTH);
+        ImGui::CheckboxFlags("Textured",    &drawFlags, T3D::FLAG_TEXTURED);
+        ImGui::CheckboxFlags("Shaded",      &drawFlags, T3D::FLAG_SHADED);
         ImGui::Checkbox("Fog → Alpha", &fogToAlpha);
         ImGui::PopItemWidth();
       }
