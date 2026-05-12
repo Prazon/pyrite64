@@ -33,6 +33,7 @@ namespace Editor
         CHIP_RESOURCE_INSTANCE,
         CHIP_MATERIAL,
         CHIP_WIDGET,
+        CHIP_PARTICLES,
         CHIP_COUNT
       };
 

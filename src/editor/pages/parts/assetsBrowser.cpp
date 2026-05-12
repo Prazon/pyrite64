@@ -24,6 +24,7 @@
 #include "../../../utils/hash.h"
 #include "../../../project/scene/prefab.h"
 #include "../../../project/prefabFunctions.h"
+#include "../../../project/prefabScaffolder.h"
 
 using FileType = Project::FileType;
 namespace fs = std::filesystem;
@@ -62,6 +63,7 @@ namespace
     ChipDef{ "Resources",   ICON_MDI_DATABASE_EDIT_OUTLINE,    FileType::RESOURCE_INSTANCE, false },
     ChipDef{ "Materials",   ICON_MDI_PALETTE_SWATCH,           FileType::MATERIAL,          false },
     ChipDef{ "Widgets",     ICON_MDI_VIEW_DASHBOARD_OUTLINE,   FileType::WIDGET_BLUEPRINT,  false },
+    ChipDef{ "Particles",   ICON_MDI_SHIMMER,                  FileType::PARTICLE_SYSTEM,   false },
   };
 
   // Color the asset card with a thin stripe between icon and label so users can
@@ -80,6 +82,7 @@ namespace
       case FileType::MUSIC_XM:          return IM_COL32(0xB4, 0x14, 0x32, 0xFF); // maroon
       case FileType::FONT:              return IM_COL32(0xFF, 0xE6, 0x3C, 0xFF); // yellow
       case FileType::MATERIAL:          return IM_COL32(0x32, 0xC8, 0x46, 0xFF); // green
+      case FileType::PARTICLE_SYSTEM:   return IM_COL32(0x14, 0x78, 0x1E, 0xFF); // dark green
       case FileType::CODE_OBJ:
       case FileType::CODE_GLOBAL:       return IM_COL32(0x96, 0x96, 0x96, 0xFF); // grey
       case FileType::NODE_GRAPH:        return IM_COL32(0x14, 0xC8, 0xC8, 0xFF); // teal
@@ -113,6 +116,7 @@ namespace
       case FileType::RESOURCE_TYPE:     return "Resource Type";
       case FileType::RESOURCE_INSTANCE: return "Resource";
       case FileType::MATERIAL:          return "Material";
+      case FileType::PARTICLE_SYSTEM:   return "Particles";
       default:                          return "Asset";
     }
   }
@@ -214,6 +218,7 @@ void Editor::AssetsBrowser::draw() {
         activeChips[CHIP_FONTS]              = true;
         activeChips[CHIP_RESOURCE_INSTANCE]  = true;
         activeChips[CHIP_MATERIAL]           = true;
+        activeChips[CHIP_PARTICLES]          = true;
         break;
       case TAB_SCRIPTS:
         activeChips[CHIP_CODE_OBJ]      = true;
@@ -338,13 +343,13 @@ void Editor::AssetsBrowser::draw() {
     prefab.obj.scale.value = {1.0f, 1.0f, 1.0f};
     prefab.obj.rot.value = {0, 0, 0, 1};
 
-    Utils::FS::saveTextFile(fullPath.string(), prefab.serialize());
-
-    // Scaffold the per-prefab user source pair alongside the .prefab so the
-    // Code panel in the prefab editor has files to list immediately.
-    Project::ensurePrefabUserSource(
-      ctx.project->getPath(), fullPath.filename().string()
+    // Scaffold default lifecycle (OnReady/OnEnable/OnDisable) + pre-wired
+    // event graph BEFORE the .prefab hits disk so the on-disk file already
+    // matches what the editor will show on first open.
+    Project::PrefabScaffolder::seedDefaultsForNewPrefab(
+      ctx.project->getPath(), prefab, fullPath.filename().string()
     );
+    Utils::FS::saveTextFile(fullPath.string(), prefab.serialize());
     ctx.project->getAssets().reload();
     return fullPath;
   };
@@ -424,6 +429,26 @@ void Editor::AssetsBrowser::draw() {
       } else {
         Editor::Noti::add(Editor::Noti::Type::ERROR,
           "Failed to create widget blueprint.");
+      }
+    }
+
+    if (ImGui::MenuItem(ICON_MDI_SHIMMER " New Particle System")) {
+      fs::path ptxRoot = fs::path(ctx.project->getPath()) / "assets";
+      auto findFreeName = [&]() -> std::string {
+        for (int i = 1; i < 1000; ++i) {
+          std::string n = (i == 1) ? "ParticleSystem" : ("ParticleSystem_" + std::to_string(i));
+          if (!fs::exists(ptxRoot / (n + ".p64ptx"))) return n;
+        }
+        return "ParticleSystem_X";
+      };
+      uint64_t newUUID = ctx.project->getAssets().createParticleSystem(
+        findFreeName(), currentDir
+      );
+      if (newUUID) {
+        enterRenameForUUID(newUUID);
+      } else {
+        Editor::Noti::add(Editor::Noti::Type::ERROR,
+          "Failed to create particle system asset.");
       }
     }
 
@@ -1673,6 +1698,7 @@ void Editor::AssetsBrowser::draw() {
       case FileType::CODE_GLOBAL: iconTxt = ICON_MDI_SCRIPT_OUTLINE;           break;
       case FileType::NODE_GRAPH:  iconTxt = ICON_MDI_GRAPH_OUTLINE;            break;
       case FileType::MATERIAL:    iconTxt = ICON_MDI_PALETTE_SWATCH;           break;
+      case FileType::PARTICLE_SYSTEM: iconTxt = ICON_MDI_SHIMMER;              break;
       default: break;
     }
     if (asset.texture) {
@@ -1739,6 +1765,9 @@ void Editor::AssetsBrowser::draw() {
         } else if (asset.type == FileType::MATERIAL) {
           ctx.editorScene->openMaterialEditor(asset.getUUID());
           handled = true;
+        } else if (asset.type == FileType::PARTICLE_SYSTEM) {
+          ctx.editorScene->openParticleSystemEditor(asset.getUUID());
+          handled = true;
         } else if (asset.type == FileType::FONT) {
           ctx.editorScene->openFontEditor(asset.getUUID());
           handled = true;
@@ -1778,12 +1807,24 @@ void Editor::AssetsBrowser::draw() {
 
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       auto tooltipPath = currentDir.empty() ? asset.name : (currentDir + "/" + asset.name);
-      ImGui::SetTooltip("File: %s", tooltipPath.c_str());
+      // For child prefabs, surface the parent in the hover tooltip so the
+      // inheritance chain is visible from the asset browser without opening
+      // the editor.
+      if (asset.type == FileType::PREFAB && asset.prefab && asset.prefab->isVariant()) {
+        auto *par = ctx.project->getAssets().getEntryByUUID(
+          asset.prefab->uuidParentPrefab.value
+        );
+        ImGui::SetTooltip("File: %s\nChild prefab of: %s",
+          tooltipPath.c_str(),
+          par ? par->name.c_str() : "(missing parent)");
+      } else {
+        ImGui::SetTooltip("File: %s", tooltipPath.c_str());
+      }
     }
 
     if (ImGui::BeginPopupContextItem(asset.path.c_str())) {
       if (asset.type == FileType::PREFAB && asset.prefab) {
-        if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " Create Variant")) {
+        if (ImGui::MenuItem(ICON_MDI_PACKAGE_VARIANT_CLOSED_PLUS " Create Child Prefab Class")) {
           fs::path srcPath{asset.path};
           fs::path dir = srcPath.parent_path();
           std::string baseStem = srcPath.stem().string() + "_Variant";
@@ -1801,7 +1842,6 @@ void Editor::AssetsBrowser::draw() {
           variant.uuidParentPrefab.value = asset.prefab->uuid.value;
           variant.obj = Project::Object{};
           variant.obj.name = outPath.stem().string();
-          variant.patchOps = nlohmann::json::array();
 
           Utils::FS::saveTextFile(outPath.string(), variant.serialize());
           ctx.project->getAssets().reload();
@@ -1809,6 +1849,16 @@ void Editor::AssetsBrowser::draw() {
           if (ctx.editorScene) {
             auto* entry = ctx.project->getAssets().getByPath(outPath.string());
             if (entry) ctx.editorScene->openPrefabEditor(entry->getUUID());
+          }
+        }
+        if (asset.prefab->isVariant()) {
+          auto *par = ctx.project->getAssets().getEntryByUUID(
+            asset.prefab->uuidParentPrefab.value
+          );
+          std::string label = std::string(ICON_MDI_ARROW_UP_THIN " Open Parent Prefab")
+            + (par ? std::string(" (") + par->name + ")" : std::string(""));
+          if (ImGui::MenuItem(label.c_str(), nullptr, false, par != nullptr)) {
+            if (par && ctx.editorScene) ctx.editorScene->openPrefabEditor(par->getUUID());
           }
         }
       }

@@ -1,4 +1,6 @@
 {
+  "author": "",
+  "cartSize": 3,
   "collLayer0": "Solid",
   "collLayer1": "Hurt",
   "collLayer2": "Layer 2",
@@ -7,11 +9,19 @@
   "collLayer5": "",
   "collLayer6": "",
   "collLayer7": "",
+  "description": "",
+  "editorVersion": "0.7.0",
+  "gameImageUUID": 0,
   "name": "Cathode Quest 64",
   "pathEmu": "ares",
   "pathN64Inst": "",
+  "regionFree": false,
   "romName": "gj25_cathode_quest",
-  "sceneIdLastOpened": 7,
+  "romTitle": "",
+  "rtcSupport": false,
+  "saveType": 0,
+  "sceneIdLastOpened": 9,
   "sceneIdOnBoot": 10,
-  "sceneIdOnReset": 10
+  "sceneIdOnReset": 10,
+  "version": ""
 }

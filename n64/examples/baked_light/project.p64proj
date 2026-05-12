@@ -1,4 +1,6 @@
 {
+  "author": "",
+  "cartSize": 3,
   "collLayer0": "Layer 0",
   "collLayer1": "Layer 1",
   "collLayer2": "Layer 2",
@@ -7,11 +9,19 @@
   "collLayer5": "Layer 5",
   "collLayer6": "Layer 6",
   "collLayer7": "Layer 7",
+  "description": "",
+  "editorVersion": "0.7.0",
+  "gameImageUUID": 0,
   "name": "baked_light",
   "pathEmu": "ares",
   "pathN64Inst": "",
+  "regionFree": false,
   "romName": "baked_light",
+  "romTitle": "",
+  "rtcSupport": false,
+  "saveType": 0,
   "sceneIdLastOpened": 2,
   "sceneIdOnBoot": 1,
-  "sceneIdOnReset": 1
+  "sceneIdOnReset": 1,
+  "version": ""
 }

@@ -128,6 +128,7 @@ namespace
       case Project::FileType::RESOURCE_INSTANCE: return "resourceInstance";
       case Project::FileType::MATERIAL:          return "material";
       case Project::FileType::WIDGET_BLUEPRINT:  return "widgetBlueprint";
+      case Project::FileType::PARTICLE_SYSTEM:   return "particleSystem";
       default: return "?";
     }
   }
@@ -365,9 +366,16 @@ namespace
 
   // Persist a prefab back to its on-disk location (NOT Prefab::save, which
   // hardcodes <project>/assets/<name>.prefab and would silently move files
-  // out of subdirectories).
-  void savePrefabAt(const std::string &absPath, const Project::Prefab &prefab)
+  // out of subdirectories). For variants, recomputes structured overrides
+  // from the resolved obj tree before serializing.
+  void savePrefabAt(const std::string &absPath, Project::Prefab &prefab)
   {
+    if (prefab.isVariant()) {
+      auto parent = ctx.project
+        ? ctx.project->getAssets().getPrefabByUUID(prefab.uuidParentPrefab.value)
+        : std::shared_ptr<Project::Prefab>{};
+      if (parent) prefab.rebuildOverridesFromCurrent(*parent);
+    }
     Utils::FS::saveTextFile(absPath, prefab.serialize());
   }
 
@@ -670,7 +678,6 @@ namespace
     variant.uuidParentPrefab.value = parent->prefab->uuid.value;
     variant.obj = Project::Object{};
     variant.obj.name = a.name;
-    variant.patchOps = nlohmann::json::array();
     Utils::FS::saveTextFile(outPath.string(), variant.serialize());
     project.getAssets().reload();
     auto *e = project.getAssets().getByPath(outPath.string());
@@ -1137,6 +1144,19 @@ namespace
     auto *e = project.getAssets().getEntryByUUID(uuid);
     nlohmann::json out;
     out["created"] = a.name + ".p64widget";
+    if (e) out["asset"] = serializeAssetEntry(*e, false);
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdParticleSystemCreate(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.name.empty()) { emitErr("--name is required"); return 1; }
+    uint64_t uuid = project.getAssets().createParticleSystem(a.name, a.dir);
+    if (uuid == 0) { emitErr("createParticleSystem failed (name conflict?)"); return 1; }
+    auto *e = project.getAssets().getEntryByUUID(uuid);
+    nlohmann::json out;
+    out["created"] = a.name + ".p64ptx";
     if (e) out["asset"] = serializeAssetEntry(*e, false);
     emitJSON(out);
     return 0;
@@ -3264,72 +3284,309 @@ namespace
     return doProjectCreate(a);
   }
 
-  // ── Variant patch ops ──────────────────────────────────────────────
+  // ── Variant inheritance commands ───────────────────────────────────
+  //
+  // The legacy RFC-6902 patchOps commands (list/add/remove-patch) are gone;
+  // the structured override model replaces them. Shims below print a clear
+  // deprecation message so existing scripts get a useful error instead of
+  // "unknown command".
 
-  int cmdPrefabListPatches(const CLI::Commands::Args &a, Project::Project &project)
+  int cmdPrefabListPatches(const CLI::Commands::Args &/*a*/, Project::Project &/*project*/)
+  {
+    emitErr("prefab-list-patches is removed — use prefab-describe-inheritance");
+    return 1;
+  }
+
+  int cmdPrefabAddPatch(const CLI::Commands::Args &/*a*/, Project::Project &/*project*/)
+  {
+    emitErr("prefab-add-patch is removed — use prefab-override-prop / prefab-remove-inherited-{object,component}");
+    return 1;
+  }
+
+  int cmdPrefabRemovePatch(const CLI::Commands::Args &/*a*/, Project::Project &/*project*/)
+  {
+    emitErr("prefab-remove-patch is removed — use prefab-reset-prop");
+    return 1;
+  }
+
+  // Helper: parse "name|id" into a component slot uuid on an inherited
+  // object. Returns 0 (= Object-level transform) when comp string is empty.
+  uint64_t resolveCompUuidOnObject(Project::Object *target, const std::string &comp)
+  {
+    if (comp.empty()) return 0;
+    auto *entry = findComponent(*target, comp);
+    return entry ? entry->uuid : 0;
+  }
+
+  int cmdPrefabOverrideProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty() || a.value.empty()) {
+      emitErr("--asset, --field, --value are required (use --comp to target a component, --path to choose an object)");
+      return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant()) {
+      emitErr("prefab-override-prop only valid on variant (child) prefabs; use prefab-set-prop / prefab-set-transform on standalone prefabs");
+      return 1;
+    }
+    auto *target = findObjectByPath(&e->prefab->obj, a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    uint64_t compUuid = a.comp.empty() ? 0 : resolveCompUuidOnObject(target, a.comp);
+    if (!a.comp.empty() && compUuid == 0) {
+      emitErr("component not present on object: " + a.comp);
+      return 1;
+    }
+    auto v = parseValueJSON(a.value);
+
+    // Apply directly to the resolved tree first (so users see immediate effect)
+    // — savePrefabAt will rebuild structured overrides from the diff.
+    if (compUuid == 0) {
+      // Transform field on the Object itself.
+      if (a.field == "pos" || a.field == "scale") {
+        if (!v.is_array() || v.size() != 3) {
+          emitErr("--value must be [x,y,z] for pos/scale"); return 1;
+        }
+        glm::vec3 vec{ v[0].get<float>(), v[1].get<float>(), v[2].get<float>() };
+        if (a.field == "pos") target->pos.value = vec; else target->scale.value = vec;
+      } else if (a.field == "rot") {
+        if (!v.is_array() || v.size() != 4) {
+          emitErr("--value must be [x,y,z,w] for rot"); return 1;
+        }
+        target->rot.value = {v[0].get<float>(), v[1].get<float>(),
+                             v[2].get<float>(), v[3].get<float>()};
+      } else {
+        emitErr("--field must be pos/rot/scale when --comp omitted");
+        return 1;
+      }
+    } else {
+      Project::Component::Entry *entry = findComponent(*target, a.comp);
+      if (!entry) { emitErr("component vanished: " + a.comp); return 1; }
+      auto &def = Project::Component::TABLE[entry->id];
+      auto data = def.funcSerialize(*entry);
+      if (!data.is_object()) {
+        emitErr("component has no editable fields"); return 1;
+      }
+      data[a.field] = v;
+      entry->data = def.funcDeserialize(data);
+    }
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["overrode"] = a.field;
+    out["objUuid"]  = target->uuid;
+    if (compUuid) out["compUuid"] = compUuid;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabResetProp(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.field.empty()) {
+      emitErr("--asset and --field are required (--comp + --path to target a component)"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant()) {
+      emitErr("prefab-reset-prop only valid on variant prefabs"); return 1;
+    }
+    auto parent = project.getAssets().getPrefabByUUID(e->prefab->uuidParentPrefab.value);
+    if (!parent) { emitErr("parent prefab missing"); return 1; }
+
+    auto *target = findObjectByPath(&e->prefab->obj, a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    // Look up the parent's same-uuid object to copy back the inherited value.
+    std::function<Project::Object*(Project::Object&, uint32_t)> findByUuid =
+      [&](Project::Object &o, uint32_t u) -> Project::Object* {
+        if (o.uuid == u) return &o;
+        for (auto &c : o.children) if (auto *r = findByUuid(*c, u)) return r;
+        return nullptr;
+      };
+    auto *parentObj = findByUuid(parent->obj, target->uuid);
+    if (!parentObj) { emitErr("inherited object not in parent — cannot reset"); return 1; }
+
+    if (a.comp.empty()) {
+      if (a.field == "pos")   target->pos.value   = parentObj->pos.value;
+      else if (a.field == "rot")   target->rot.value   = parentObj->rot.value;
+      else if (a.field == "scale") target->scale.value = parentObj->scale.value;
+      else { emitErr("--field must be pos/rot/scale when --comp omitted"); return 1; }
+    } else {
+      auto *entry = findComponent(*target, a.comp);
+      if (!entry) { emitErr("component not on object"); return 1; }
+      const Project::Component::Entry *pe = nullptr;
+      for (auto &p : parentObj->components) {
+        if (p.uuid == entry->uuid) { pe = &p; break; }
+      }
+      if (!pe) { emitErr("matching component not in parent — child added it; remove it instead"); return 1; }
+      auto &def = Project::Component::TABLE[entry->id];
+      auto cd = def.funcSerialize(*entry);
+      auto pd = def.funcSerialize(*pe);
+      if (!cd.is_object() || !pd.is_object() || !pd.contains(a.field)) {
+        emitErr("field not present on parent component"); return 1;
+      }
+      cd[a.field] = pd[a.field];
+      entry->data = def.funcDeserialize(cd);
+    }
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["resetField"] = a.field;
+    out["objUuid"] = target->uuid;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabOverrideVarDefault(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty() || a.value.empty()) {
+      emitErr("--asset, --name (variable), --value are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant()) {
+      emitErr("prefab-override-var-default only valid on variant prefabs"); return 1;
+    }
+    Project::PrefabVarDef *def = nullptr;
+    for (auto &v : e->prefab->variables) if (v.name == a.name) { def = &v; break; }
+    if (!def) { emitErr("variable not found: " + a.name); return 1; }
+    auto v = parseValueJSON(a.value);
+    def->defaultValue.deserialize(v.is_string() ? v.get<std::string>() : v.dump());
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["overrodeVar"] = a.name;
+    out["uuid"] = def->uuid;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabResetVarDefault(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.name.empty()) {
+      emitErr("--asset and --name are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant()) {
+      emitErr("prefab-reset-var-default only valid on variant prefabs"); return 1;
+    }
+    auto parent = project.getAssets().getPrefabByUUID(e->prefab->uuidParentPrefab.value);
+    if (!parent) { emitErr("parent prefab missing"); return 1; }
+    Project::PrefabVarDef *child = nullptr;
+    for (auto &v : e->prefab->variables) if (v.name == a.name) { child = &v; break; }
+    if (!child) { emitErr("variable not found: " + a.name); return 1; }
+    const Project::PrefabVarDef *par = nullptr;
+    for (auto &v : parent->variables) if (v.uuid == child->uuid) { par = &v; break; }
+    if (!par) { emitErr("variable was added by child — remove it instead"); return 1; }
+    child->defaultValue = par->defaultValue;
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["resetVar"] = a.name;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabRemoveInheritedObject(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.path.empty()) {
+      emitErr("--asset and --path are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant()) {
+      emitErr("only valid on variant prefabs; use prefab-remove-object on standalone");
+      return 1;
+    }
+    Project::Object *parentObj = nullptr;
+    size_t idx = 0;
+    auto *target = findObjectByPathWithParent(&e->prefab->obj, a.path, &parentObj, &idx);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    if (!parentObj) { emitErr("cannot remove the root object"); return 1; }
+    // Drop from the resolved tree; rebuildOverridesFromCurrent on save will
+    // record this as a removedObjects entry against the parent prefab.
+    parentObj->children.erase(parentObj->children.begin() + idx);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["removedPath"] = a.path;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabRemoveInheritedComponent(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty() || a.comp.empty()) {
+      emitErr("--asset and --comp are required"); return 1;
+    }
+    auto *e = resolvePrefabOrWidget(project, a.asset);
+    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
+    if (!e->prefab->isVariant()) {
+      emitErr("only valid on variant prefabs; use prefab-remove-component on standalone");
+      return 1;
+    }
+    auto *target = findObjectByPath(&e->prefab->obj, a.path);
+    if (!target) { emitErr("path not found: " + a.path); return 1; }
+    auto *entry = findComponent(*target, a.comp);
+    if (!entry) { emitErr("component not present: " + a.comp); return 1; }
+    target->removeComponent(entry->uuid);
+    savePrefabAt(e->path, *e->prefab);
+    project.getAssets().reload();
+    nlohmann::json out;
+    out["removedComp"] = a.comp;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefabDescribeInheritance(const CLI::Commands::Args &a, Project::Project &project)
   {
     if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
     auto *e = resolvePrefabOrWidget(project, a.asset);
     if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
-    if (!e->prefab->isVariant()) {
-      emitErr("not a variant prefab"); return 1;
-    }
     nlohmann::json out;
-    out["variantOf"] = e->prefab->uuidParentPrefab.value;
-    out["patch"] = e->prefab->patchOps;
-    emitJSON(out);
-    return 0;
-  }
+    out["uuid"] = e->prefab->uuid.value;
+    out["name"] = e->name;
+    out["isVariant"] = e->prefab->isVariant();
+    if (!e->prefab->isVariant()) { emitJSON(out); return 0; }
+    out["uuidParentPrefab"] = e->prefab->uuidParentPrefab.value;
+    if (auto *parent = project.getAssets().getEntryByUUID(e->prefab->uuidParentPrefab.value)) {
+      out["parentName"] = parent->name;
+      out["parentPath"] = parent->path;
+    }
 
-  int cmdPrefabAddPatch(const CLI::Commands::Args &a, Project::Project &project)
-  {
-    if (a.asset.empty() || a.value.empty()) {
-      emitErr("--asset and --value (RFC-6902 patch op) are required"); return 1;
+    // Rebuild structured overrides on-the-fly so the output reflects the
+    // current resolved tree (in case the caller mutated obj and hasn't
+    // saved yet).
+    if (auto parent = project.getAssets().getPrefabByUUID(e->prefab->uuidParentPrefab.value)) {
+      e->prefab->rebuildOverridesFromCurrent(*parent);
     }
-    auto *e = resolvePrefabOrWidget(project, a.asset);
-    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
-    if (!e->prefab->isVariant()) {
-      emitErr("not a variant prefab"); return 1;
-    }
-    auto v = parseValueJSON(a.value);
-    if (!v.is_object() || !v.contains("op") || !v.contains("path")) {
-      emitErr("--value must be an RFC-6902 op object: {op, path, [value]}");
-      return 1;
-    }
-    if (!e->prefab->patchOps.is_array()) e->prefab->patchOps = nlohmann::json::array();
-    e->prefab->patchOps.push_back(v);
-    savePrefabAt(e->path, *e->prefab);
-    project.getAssets().reload();
-    nlohmann::json out;
-    out["addedIndex"] = (int)e->prefab->patchOps.size() - 1;
-    out["patch"] = e->prefab->patchOps;
-    emitJSON(out);
-    return 0;
-  }
+    out["propOverrideCount"]   = (int)e->prefab->propOverrides.size();
+    out["addedComponentCount"] = (int)e->prefab->addedComponents.size();
+    out["addedObjectCount"]    = (int)e->prefab->addedObjects.size();
+    out["removedObjectCount"]  = (int)e->prefab->removedObjects.size();
+    out["removedCompCount"]    = (int)e->prefab->removedComponents.size();
+    out["varDefaultOverrideCount"] = (int)e->prefab->varDefaultOverrides.size();
+    out["addedVariableCount"]  = (int)e->prefab->addedVariables.size();
+    out["removedVariableCount"]= (int)e->prefab->removedVariables.size();
 
-  int cmdPrefabRemovePatch(const CLI::Commands::Args &a, Project::Project &project)
-  {
-    if (a.asset.empty() || a.field.empty()) {
-      emitErr("--asset and --field (index) are required"); return 1;
+    auto propJ = nlohmann::json::array();
+    for (auto &o : e->prefab->propOverrides) {
+      propJ.push_back({
+        {"obj",  o.objUuid},
+        {"comp", o.compUuid},
+        {"pid",  o.propId},
+      });
     }
-    auto *e = resolvePrefabOrWidget(project, a.asset);
-    if (!e || !e->prefab) { emitErr("prefab not found: " + a.asset); return 1; }
-    if (!e->prefab->isVariant() || !e->prefab->patchOps.is_array()) {
-      emitErr("no patch ops"); return 1;
-    }
-    int idx = 0;
-    try { idx = std::stoi(a.field); } catch (...) {
-      emitErr("--field must be a numeric index"); return 1;
-    }
-    if (idx < 0 || idx >= (int)e->prefab->patchOps.size()) {
-      emitErr("index out of range"); return 1;
-    }
-    e->prefab->patchOps.erase(e->prefab->patchOps.begin() + idx);
-    savePrefabAt(e->path, *e->prefab);
-    project.getAssets().reload();
-    nlohmann::json out;
-    out["removed"] = idx;
-    out["patch"] = e->prefab->patchOps;
+    out["propOverrides"] = propJ;
+
+    auto removedObjJ = nlohmann::json::array();
+    for (auto u : e->prefab->removedObjects) removedObjJ.push_back(u);
+    out["removedObjects"] = removedObjJ;
+
+    auto removedCompJ = nlohmann::json::array();
+    for (auto u : e->prefab->removedComponents) removedCompJ.push_back(u);
+    out["removedComponents"] = removedCompJ;
+
     emitJSON(out);
     return 0;
   }
@@ -4566,6 +4823,7 @@ namespace CLI::Commands
     {"graph-create",            cmdGraphCreate},
     {"material-create",         cmdMaterialCreate},
     {"widget-create",           cmdWidgetCreate},
+    {"particle-system-create",  cmdParticleSystemCreate},
     // Widget structural editing reuses the prefab commands (widgets share
     // the prefab on-disk shape; resolvePrefabOrWidget accepts either type).
     {"widget-describe",         cmdPrefabDescribe},
@@ -4665,7 +4923,17 @@ namespace CLI::Commands
     {"asset-find-unused",       cmdAssetFindUnused},
     // Bootstrap a fresh project from the empty template.
     {"project-create",          cmdProjectCreate},
-    // Variant prefab RFC-6902 patch ops.
+    // Variant prefab inheritance — structured sparse overrides keyed by
+    // stable Object/Component uuids (Blueprint-Actor style).
+    {"prefab-override-prop",            cmdPrefabOverrideProp},
+    {"prefab-reset-prop",               cmdPrefabResetProp},
+    {"prefab-override-var-default",     cmdPrefabOverrideVarDefault},
+    {"prefab-reset-var-default",        cmdPrefabResetVarDefault},
+    {"prefab-remove-inherited-object",  cmdPrefabRemoveInheritedObject},
+    {"prefab-remove-inherited-component", cmdPrefabRemoveInheritedComponent},
+    {"prefab-describe-inheritance",     cmdPrefabDescribeInheritance},
+    // Removed: prefab-{list,add,remove}-patch (RFC-6902 model retired).
+    // Kept as shims so existing scripts get a useful deprecation message.
     {"prefab-list-patches",     cmdPrefabListPatches},
     {"prefab-add-patch",        cmdPrefabAddPatch},
     {"prefab-remove-patch",     cmdPrefabRemovePatch},

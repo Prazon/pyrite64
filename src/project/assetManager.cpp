@@ -151,6 +151,11 @@ namespace
       // resolved Material into its own data). outPath is left unset so
       // the projectBuilder skip list catches it.
       type = Project::FileType::MATERIAL;
+    } else if (ext == ".p64ptx") {
+      // Particle-system assets resolve at editor build time. Components
+      // that reference them stamp the conf into their own InitData, so
+      // no rom artifact is needed (same pattern as MATERIAL).
+      type = Project::FileType::PARTICLE_SYSTEM;
     }
 
     if (type == Project::FileType::UNKNOWN) {
@@ -361,6 +366,18 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
       }
     } break;
 
+    case FileType::PARTICLE_SYSTEM:
+    {
+      entry.particleAsset = std::make_shared<Assets::ParticleSystemAsset>();
+      entry.particleAsset->deserialize(Utils::FS::loadTextFile(path));
+      if (entry.particleAsset->uuid == 0) {
+        entry.particleAsset->uuid = entry.conf.uuid;
+        Utils::FS::saveTextFile(entry.path, entry.particleAsset->serialize());
+      } else {
+        entry.conf.uuid = entry.particleAsset->uuid;
+      }
+    } break;
+
     case FileType::MODEL_3D:
     {
       try{
@@ -501,6 +518,10 @@ void Project::AssetManager::reload() {
       if (assetEntry.type == FileType::MATERIAL) {
         // Materials must be resolved before MODEL_3D so the second-pass
         // model loader can stamp asset-driven materials onto model slots.
+        reloadEntry(assetEntry, path.string());
+      }
+
+      if (assetEntry.type == FileType::PARTICLE_SYSTEM) {
         reloadEntry(assetEntry, path.string());
       }
 
@@ -798,7 +819,8 @@ bool Project::AssetManager::pollWatch()
       || entry->type == FileType::PREFAB
       || entry->type == FileType::WIDGET_BLUEPRINT
       || entry->type == FileType::RESOURCE_INSTANCE
-      || entry->type == FileType::MATERIAL)
+      || entry->type == FileType::MATERIAL
+      || entry->type == FileType::PARTICLE_SYSTEM)
     {
       reloadEntry(*entry, entry->path);
       if ((entry->type == FileType::PREFAB
@@ -917,7 +939,8 @@ void Project::AssetManager::save()
       || entry->type == FileType::CODE_GLOBAL
       || entry->type == FileType::PREFAB
       || entry->type == FileType::WIDGET_BLUEPRINT
-      || entry->type == FileType::MATERIAL)
+      || entry->type == FileType::MATERIAL
+      || entry->type == FileType::PARTICLE_SYSTEM)
     {
       dirtyAssetMeta.erase(uuid);
       savedAssetMetaState.erase(uuid);
@@ -1191,6 +1214,39 @@ uint64_t Project::AssetManager::createResourceInstance(
   inst.uuid = Utils::Hash::randomU64();
   inst.typeUuid = typeUuid;
   Utils::FS::saveTextFile(filePath, inst.serialize());
+
+  reload();
+  auto entry = getByPath(filePath.string());
+  return entry ? entry->getUUID() : 0;
+}
+
+uint64_t Project::AssetManager::createParticleSystem(
+  const std::string &name, const std::string &subDir)
+{
+  if (name.empty()) return 0;
+  if (name.find_first_of("/\\:*?\"<>|") != std::string::npos) return 0;
+
+  auto assetPath = getAssetPath(project);
+  fs::path dirPath = assetPath;
+  if (!subDir.empty()) {
+    fs::path relPath{subDir};
+    if (!relPath.is_absolute()) {
+      relPath = relPath.lexically_normal();
+      bool hasParent = false;
+      for (const auto &part : relPath) {
+        if (part == "..") { hasParent = true; break; }
+      }
+      if (!hasParent) dirPath /= relPath;
+    }
+  }
+  fs::create_directories(dirPath);
+
+  auto filePath = dirPath / (name + ".p64ptx");
+  if (fs::exists(filePath)) return 0;
+
+  ::Project::Assets::ParticleSystemAsset asset{};
+  asset.uuid = Utils::Hash::randomU64();
+  Utils::FS::saveTextFile(filePath, asset.serialize());
 
   reload();
   auto entry = getByPath(filePath.string());

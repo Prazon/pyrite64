@@ -30,6 +30,7 @@ namespace Editor
   class PrefabEventGraphEditor;
   class PrefabFunctionCodeEditor;
   class MaterialEditor;
+  class ParticleSystemEditor;
   class WidgetBlueprintEditor;
   class FontEditor;
   class AudioEditor;
@@ -60,6 +61,8 @@ namespace Editor
       // Per-asset .p64mat material editors. Lifecycle parallel to the
       // model/image editors above — keyed on the asset's UUID for de-dupe.
       std::map<uint64_t, std::shared_ptr<MaterialEditor>> materialEditors{};
+      // Per-asset .p64ptx particle-system editors. Same lifecycle pattern.
+      std::map<uint64_t, std::shared_ptr<ParticleSystemEditor>> particleSystemEditors{};
       // Per-asset .p64widget editors (WYSIWYG canvas tab for HUD/menu
       // authoring). Lifecycle mirrors the prefab/material editors above.
       std::map<uint64_t, std::shared_ptr<WidgetBlueprintEditor>> widgetEditors{};
@@ -177,6 +180,7 @@ namespace Editor
       // focus the existing window. dockTarget is honoured the same way as
       // the prefab event graph opener.
       void openMaterialEditor(uint64_t assetUUID, ImGuiID dockTarget = 0);
+      void openParticleSystemEditor(uint64_t assetUUID, ImGuiID dockTarget = 0);
       // Open the widget blueprint editor (.p64widget). Idempotent: re-opens
       // focus the existing window. Same dock-target convention as the other
       // asset editors above.

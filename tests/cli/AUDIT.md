@@ -4,8 +4,8 @@ Scope: every GUI mutation discoverable in `src/editor/pages/parts/*.cpp`, `src/e
 
 ## Summary
 
-- Total GUI actions enumerated: 89
-- Covered by CLI: 56
+- Total GUI actions enumerated: 92
+- Covered by CLI: 59
 - Gaps: 33 (P0: 9, P1: 14, P2: 10)
 
 The dominant gap surface is **graph/node editing** (material, event, node-graph) — 11 P0+P1 entries by itself — followed by **prefab functions** (5 entries) and **scene/widget node-level UI hookups** (event binding, canvas2D fields).
@@ -22,6 +22,7 @@ The dominant gap surface is **graph/node editing** (material, event, node-graph)
 | New Resource Type (`:393`) | `restype-create` | OK | - |
 | New Widget Blueprint (`:412`) | `widget-create` | OK | - |
 | New Material (`:430`) | `material-create` | OK | - |
+| New Particle System (`assetsBrowser.cpp` New menu) | `particle-system-create` | OK | - |
 | New Object Script / Global Script (`:482-483`) | `script-create` | OK | - |
 | New Node Graph (`:484`) | `graph-create` | OK | - |
 | New Resource Instance (`:498`) | `resource-create` | OK | - |
@@ -34,7 +35,14 @@ The dominant gap surface is **graph/node editing** (material, event, node-graph)
 | Scene delete (`:1633`) | `scene-delete` | OK | - |
 | Asset rename (`:2041`) | `asset-rename` | OK | - |
 | Asset delete (`:2048`) | `asset-delete` | OK | - |
-| **Create Prefab Variant from existing prefab** (`:1786`) | `prefab-variant` | OK | - |
+| **Create Child Prefab Class** (`:1787`) | `prefab-variant` | OK | - |
+| Override inherited property on child prefab | `prefab-override-prop` | OK | - |
+| Reset inherited property to parent default | `prefab-reset-prop` | OK | - |
+| Override inherited variable default on child prefab | `prefab-override-var-default` | OK | - |
+| Reset inherited variable default to parent | `prefab-reset-var-default` | OK | - |
+| Remove inherited Object from child prefab | `prefab-remove-inherited-object` | OK | - |
+| Remove inherited Component from child prefab | `prefab-remove-inherited-component` | OK | - |
+| Describe child prefab inheritance (override counts, lists) | `prefab-describe-inheritance` | OK | - |
 | **Drag-drop scene into folder** (`:1478-1483`) | `scene-set-relpath` | OK | - |
 | **Drag-drop asset to reparent (folder)** | `asset-move` | OK | - |
 | Scene browser settings (view mode, thumb scale, chips) (`:889-930,1995-2007`) | (editor pref) | n/a P2 | P2 |
@@ -181,6 +189,9 @@ Proposed CLI (all asset-keyed by node-graph .p64graph UUID/name):
 | Drop variable from My-Prefab to canvas (`:359-365` -> creates PrefabVarGet) | none | missing | P1 |
 | Drop function from My-Prefab to canvas (`:371-376` -> creates PrefabFunc call) | none | missing | P1 |
 | Compile / validate (`:215`) | none | missing | P1 |
+| **Tier 1 auto-scaffold on first open** (prefabScaffolder seeds lifecycle events on first open of empty graph) | `prefab-scaffold-defaults` | OK | - |
+| **"Create stub" inline button on PrefabFunc node with missing target** (`nodePrefabFunc.h`) | `prefab-graph-validate --autofix` | OK | - |
+| **"Create variable" inline button on PrefabVarGet node with stale uuid** (`nodePrefabVarGet.h`) | `prefab-graph-validate --autofix` | OK | - |
 
 Proposed CLI (all asset-keyed by prefab name/UUID — event graph is owned by the .prefab):
 - `event-graph-list-nodes --asset Foo` (P0)

@@ -15,6 +15,7 @@
 #include "../renderer/texture.h"
 #include "assets/materialAsset.h"
 #include "assets/model3d.h"
+#include "assets/particleSystemAsset.h"
 #include "assets/resourceInstance.h"
 #include "assets/resourceType.h"
 #include "scene/prefab.h"
@@ -49,6 +50,7 @@ namespace Project
     RESOURCE_INSTANCE, // .p64res json file, holds field values for one RESOURCE_TYPE
     MATERIAL,          // .p64mat material asset (node-graph driven)
     WIDGET_BLUEPRINT,  // .p64widget HUD/menu blueprint (a 2D-only Prefab variant)
+    PARTICLE_SYSTEM,   // .p64ptx sprite particle-system asset (CPU-sim emitter)
 
     _SIZE
   };
@@ -93,6 +95,7 @@ namespace Project
     // holds the parsed C++ struct schema.
     std::shared_ptr<Resource::Type> resourceType{nullptr};
     std::shared_ptr<Assets::MaterialAsset> materialAsset{nullptr};
+    std::shared_ptr<Assets::ParticleSystemAsset> particleAsset{nullptr};
     AssetConf conf{};
     Utils::CPP::Struct params{};
 
@@ -231,6 +234,10 @@ namespace Project
       // UUID, or 0 on failure.
       uint64_t createWidgetBlueprint(const std::string &name);
       uint64_t createResourceInstance(const std::string &name, uint64_t typeUuid, const std::string &subDir = {});
+      // Creates a fresh .p64ptx particle-system asset under <project>/assets
+      // with all defaults from ParticleSystemAsset's in-struct initializers.
+      // Returns the new asset's UUID, or 0 on validation/IO failure.
+      uint64_t createParticleSystem(const std::string &name, const std::string &subDir = {});
       // Creates an editor-authored RESOURCE_TYPE schema (.p64restype) under
       // <project>/assets/<subDir>/<name>.p64restype with no fields. Returns
       // the new asset's UUID, or 0 on validation/IO failure.

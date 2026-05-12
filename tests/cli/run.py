@@ -226,11 +226,40 @@ TESTS: List[Test] = [
     Test("prefab-duplicate-variable",  "prefab-duplicate-variable", ["--asset", "TPrefab1", "--from", "velocity", "--to", "velocityCopy"]),
     Test("prefab-remove-variable",     "prefab-remove-variable",["--asset", "TPrefab1", "--name", "velocity"]),
 
-    # === prefab variant + patch ========================================
+    # === prefab variant (Blueprint-Actor inheritance) ==================
     Test("prefab-variant",             "prefab-variant",      ["--parent", "TPrefab1", "--name", "TPrefabVar"]),
-    Test("prefab-list-patches",        "prefab-list-patches", ["--asset", "TPrefabVar"]),
-    Test("prefab-add-patch",           "prefab-add-patch",    ["--asset", "TPrefabVar", "--value", '{"op":"replace","path":"/obj/name","value":"VarRoot"}']),
-    Test("prefab-remove-patch",        "prefab-remove-patch", ["--asset", "TPrefabVar", "--field", "0"]),
+    Test("prefab-describe-inheritance","prefab-describe-inheritance", ["--asset", "TPrefabVar"]),
+
+    # Structural overrides on the inherited tree. TPrefab1 left Leaf at the
+    # root after prefab-remove-object Child (see above), so Leaf is the
+    # canonical inherited child we can hang overrides off.
+    Test("prefab-override-prop-pos",   "prefab-override-prop",
+         ["--asset", "TPrefabVar", "--path", "Leaf", "--field", "pos", "--value", "[9,9,9]"]),
+    Test("prefab-describe-after-override", "prefab-describe-inheritance",
+         ["--asset", "TPrefabVar"]),
+    Test("prefab-reset-prop-pos",      "prefab-reset-prop",
+         ["--asset", "TPrefabVar", "--path", "Leaf", "--field", "pos"]),
+
+    # Variable default-value overrides. velocityCopy is the variable that
+    # survives the rename/remove flow above (still on TPrefab1).
+    Test("prefab-override-var-default","prefab-override-var-default",
+         ["--asset", "TPrefabVar", "--name", "velocityCopy", "--value", "12.0"]),
+    Test("prefab-reset-var-default",   "prefab-reset-var-default",
+         ["--asset", "TPrefabVar", "--name", "velocityCopy"]),
+
+    # Inherited-removal: drop the inherited Leaf entirely on the variant.
+    Test("prefab-remove-inherited-object","prefab-remove-inherited-object",
+         ["--asset", "TPrefabVar", "--path", "Leaf"]),
+
+    # Deprecation shims for the old RFC-6902 patch CLI — must now fail
+    # with a useful error so old scripts get pointed at the new commands.
+    Test("prefab-list-patches-removed", "prefab-list-patches",
+         ["--asset", "TPrefabVar"], expect_json=False, expect_fail=True),
+    Test("prefab-add-patch-removed",   "prefab-add-patch",
+         ["--asset", "TPrefabVar", "--value", '{"op":"test"}'],
+         expect_json=False, expect_fail=True),
+    Test("prefab-remove-patch-removed","prefab-remove-patch",
+         ["--asset", "TPrefabVar", "--field", "0"], expect_json=False, expect_fail=True),
 
     # === path component (prefab) =======================================
     Test("prefab-add-path-comp",       "prefab-add-component",["--asset", "TPrefab1", "--path", "", "--comp", "Path"]),
@@ -343,6 +372,7 @@ TESTS: List[Test] = [
     Test("graph-create",               "graph-create",        ["--name", "TGraph"]),
     Test("material-create",            "material-create",     ["--name", "TMat"]),
     Test("material-set-prop",          "material-set-prop",   ["--asset", "TMat", "--field", "dither", "--value", "7"]),
+    Test("particle-system-create",     "particle-system-create", ["--name", "TPtx"]),
 
     # === graph node-level ops (P0 patch) ==============================
     Test("graph-list-nodes-empty",     "graph-list-nodes",    ["--asset", "TGraph"]),

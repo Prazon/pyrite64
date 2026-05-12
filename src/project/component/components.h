@@ -196,6 +196,7 @@ namespace Project::Component
   MAKE_COMP(HBoxLayout)
   MAKE_COMP(VBoxLayout)
   MAKE_COMP(Button2D)
+  MAKE_COMP(ParticleEmitter)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -503,6 +504,18 @@ namespace Project::Component
       .funcGetAABB = nullptr,
       .funcDraw2D = Button2D::draw2D,
       .funcWidgetSize = Button2D::widgetSize,
+    },
+    CompInfo{
+      .id = 24,
+      .icon = ICON_MDI_SHIMMER " ",
+      .name = "Particle Emitter",
+      .funcInit = ParticleEmitter::init,
+      .funcDraw = ParticleEmitter::draw,
+      .funcDraw3D = ParticleEmitter::draw3D,
+      .funcSerialize = ParticleEmitter::serialize,
+      .funcDeserialize = ParticleEmitter::deserialize,
+      .funcBuild = ParticleEmitter::build,
+      .funcGetAABB = nullptr,
     },
   };
 

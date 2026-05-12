@@ -26,6 +26,7 @@
 #include "nodes/nodeNote.h"
 #include "nodes/nodePrefabEvent.h"
 #include "nodes/nodePrefabFunc.h"
+#include "nodes/nodePrefabSuper.h"
 #include "nodes/nodePrefabVarGet.h"
 #include "nodes/nodeReroute.h"
 #include "nodes/nodeDeltaTime.h"
@@ -217,6 +218,7 @@ namespace Project::Graph
     TABLE_ENTRY(ForEach),         // 64
     TABLE_ENTRY(Break),           // 65
     TABLE_ENTRY(Continue),        // 66
+    TABLE_ENTRY(PrefabSuper),     // 67 — Super:: call into parent prefab dispatcher
   });
 
   const std::vector<std::string> & Graph::getNodeNames()
@@ -315,6 +317,7 @@ namespace Project::Graph
       { 64, Node::ForEach::NAME,       "Flow Control", EXEC,         EXEC | FLOAT  },
       { 65, Node::Break::NAME,         "Flow Control", EXEC,         0             },
       { 66, Node::Continue::NAME,      "Flow Control", EXEC,         0             },
+      { 67, Node::PrefabSuper::NAME,   "Functions",    EXEC,         EXEC          },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Palette entries out of sync with NODE_TABLE");

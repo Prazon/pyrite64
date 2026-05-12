@@ -261,6 +261,8 @@ add_executable(pyrite64 src/main.cpp
         src/project/scene/prefab.cpp
         src/project/prefabFunctions.h
         src/project/prefabFunctions.cpp
+        src/project/prefabScaffolder.h
+        src/project/prefabScaffolder.cpp
         src/project/assets/resourceInstance.h
         src/project/assets/resourceInstance.cpp
         src/project/assets/resourceType.h
@@ -314,6 +316,7 @@ add_executable(pyrite64 src/main.cpp
         src/project/component/types/compHBoxLayout.cpp
         src/project/component/types/compVBoxLayout.cpp
         src/project/component/types/compButton2D.cpp
+        src/project/component/types/compParticleEmitter.cpp
         src/project/component/widgetSize.cpp
         src/editor/pages/parts/assets/widgetBlueprintEditor.cpp
         src/project/component/types/compPrimitive.cpp
@@ -372,8 +375,12 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/modelThumbnailCache.cpp
         src/editor/pages/parts/assets/materialEditor.h
         src/editor/pages/parts/assets/materialEditor.cpp
+        src/editor/pages/parts/assets/particleSystemEditor.h
+        src/editor/pages/parts/assets/particleSystemEditor.cpp
         src/project/assets/materialAsset.h
         src/project/assets/materialAsset.cpp
+        src/project/assets/particleSystemAsset.h
+        src/project/assets/particleSystemAsset.cpp
         src/project/materialGraph/graph.h
         src/project/materialGraph/graph.cpp
         src/project/materialGraph/nodes/baseNode.h

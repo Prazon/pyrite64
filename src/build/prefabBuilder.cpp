@@ -131,17 +131,60 @@ namespace
     out += "#include <libdragon.h>\n\n";
     out += "namespace P64::Prefab {\n\n";
 
+    // Walk parent chain to find an emittable Vars_<Parent> base — only
+    // present when the parent prefab itself declared at least one var.
+    // We need this lookup because a variant inherits its parent's struct
+    // even when the variant added no new variables of its own.
+    auto parentVarsBase = [&](const Project::AssetManagerEntry &a) -> std::string {
+      if (!a.prefab || !a.prefab->isVariant()) return "";
+      auto pp = project.getAssets().getPrefabByUUID(a.prefab->uuidParentPrefab.value);
+      if (!pp || pp->variables.empty()) return "";
+      for (const auto &candidate : assets) {
+        if (candidate.prefab && candidate.prefab->uuid.value == pp->uuid.value) {
+          return "Vars_" + toIdent(candidate.name);
+        }
+      }
+      return "";
+    };
+
     bool wroteAny = false;
     for (const auto &asset : assets) {
       if (asset.conf.exclude || !asset.prefab) continue;
       const auto &vars = asset.prefab->variables;
-      if (vars.empty()) continue;
+      const std::string baseStruct = parentVarsBase(asset);
+      // For variants we emit a struct even when the variant has no new
+      // variables of its own — so user code can still write
+      // P64::Prefab::Vars_Child v{}; and access inherited fields.
+      const bool emitForInheritance = !baseStruct.empty();
+      if (vars.empty() && !emitForInheritance) continue;
 
       const std::string ident = toIdent(asset.name);
-      out += "struct Vars_" + ident + " {\n";
-      for (const auto &v : vars) {
-        out += "  " + kindToTypeFull(v)
-             + " " + toIdent(v.name) + " = " + formatDefault(v) + ";\n";
+      // Variants subclass their parent's struct so the child sees inherited
+      // fields via member access — UE Blueprint's "variables visible from
+      // parent" model implemented as plain C++ inheritance.
+      if (!baseStruct.empty()) {
+        out += "struct Vars_" + ident + " : public " + baseStruct + " {\n";
+      } else {
+        out += "struct Vars_" + ident + " {\n";
+      }
+      // Only the *newly-introduced* variables emit as struct members on a
+      // variant; inherited fields come from the base. rebuildOverridesFromCurrent
+      // (Phase 1) ensures the variant's vars list is the union — we filter
+      // back down to the additions here for the struct shape.
+      if (!baseStruct.empty()) {
+        auto pp = project.getAssets().getPrefabByUUID(asset.prefab->uuidParentPrefab.value);
+        std::unordered_set<uint64_t> parentUuids;
+        if (pp) for (const auto &pv : pp->variables) parentUuids.insert(pv.uuid);
+        for (const auto &v : vars) {
+          if (parentUuids.contains(v.uuid)) continue;
+          out += "  " + kindToTypeFull(v)
+               + " " + toIdent(v.name) + " = " + formatDefault(v) + ";\n";
+        }
+      } else {
+        for (const auto &v : vars) {
+          out += "  " + kindToTypeFull(v)
+               + " " + toIdent(v.name) + " = " + formatDefault(v) + ";\n";
+        }
       }
       out += "  // Stable variable uuids — kept in sync with the prefab asset.\n";
       out += "  // Use these when looking up overrides at scene-load time.\n";
@@ -235,7 +278,8 @@ namespace
   // block via buildLoopHeader/buildLoopFooter, and Break/Continue map
   // directly onto the C++ keywords. See graph.cpp's parallel pass.
   std::string buildPrefabDispatchBody(
-    Project::Graph::Graph &graph, const std::string &ident)
+    Project::Graph::Graph &graph, const std::string &ident,
+    const std::string &parentIdent = "")
   {
     // Collect nodes + entries, build nodeMap for link filtering.
     std::vector<std::pair<uint16_t, uint64_t>> entries;
@@ -269,7 +313,15 @@ namespace
         (unsigned)evtId, (unsigned long long)nodeUUID);
       switchText += buf;
     }
-    switchText += "    default: return;\n";
+    // Blueprint-style "inherit unhandled events": if this prefab is a
+    // variant and the parent has its own dispatcher, route any event not
+    // explicitly handled here to the parent's dispatch.
+    if (!parentIdent.empty()) {
+      switchText += "    default: dispatch_" + parentIdent
+                  + "(self, eventType, deltaTime); return;\n";
+    } else {
+      switchText += "    default: return;\n";
+    }
     switchText += "  }\n";
 
     // Count exec outputs by leading-style match. Exec pins always come
@@ -471,6 +523,28 @@ namespace
     body += nctx.source;
 
     body = Utils::replaceAll(body, "{{PFX}}", ident);
+    // Substitute the PrefabSuper node's parent-dispatch placeholder. When
+    // the prefab has no parent, drop the line entirely — leaving the call
+    // expression in place would refer to a non-existent function.
+    if (!parentIdent.empty()) {
+      body = Utils::replaceAll(body, "{{PARENT_DISPATCH}}", "dispatch_" + parentIdent);
+    } else {
+      // Strip the whole line so Super:: nodes on a non-variant compile out.
+      std::string filtered;
+      filtered.reserve(body.size());
+      size_t i = 0;
+      while (i < body.size()) {
+        size_t nl = body.find('\n', i);
+        std::string line = body.substr(i, nl == std::string::npos ? std::string::npos : nl - i);
+        if (line.find("{{PARENT_DISPATCH}}") == std::string::npos) {
+          filtered += line;
+          if (nl != std::string::npos) filtered += '\n';
+        }
+        if (nl == std::string::npos) break;
+        i = nl + 1;
+      }
+      body = std::move(filtered);
+    }
     return body;
   }
 
@@ -509,11 +583,54 @@ namespace
     }
     cpp += "\nnamespace P64::PrefabEvents { namespace {\n\n";
 
+    // Look up the parent prefab's asset name for variants so we can emit
+    // qualified `dispatch_<ParentIdent>` calls. Empty when the prefab is
+    // standalone or its parent has been deleted.
+    auto parentIdentOf = [&](const Project::AssetManagerEntry &a) -> std::string {
+      if (!a.prefab || !a.prefab->isVariant()) return "";
+      auto pp = project.getAssets().getPrefabByUUID(a.prefab->uuidParentPrefab.value);
+      if (!pp) return "";
+      // Find the asset name for the resolved parent prefab.
+      for (const auto &candidate : assets) {
+        if (candidate.prefab && candidate.prefab->uuid.value == pp->uuid.value) {
+          return toIdent(candidate.name);
+        }
+      }
+      return "";
+    };
+
+    // Forward-declare every prefab dispatcher up front. Variant dispatchers
+    // call into their parent's, and prefabs aren't necessarily emitted in
+    // dependency order — a forward decl keeps the linker happy without a
+    // topological sort.
+    for (const auto &asset : assets) {
+      if (asset.conf.exclude || !asset.prefab) continue;
+      cpp += "void dispatch_" + toIdent(asset.name)
+           + "(P64::Object* self, uint16_t eventType, float deltaTime);\n";
+    }
+    cpp += "\n";
+
     // Per-prefab dispatch functions.
     std::vector<std::pair<uint32_t, std::string>> registry; // (prefabUUID, fnName)
     for (const auto &asset : assets) {
       if (asset.conf.exclude || !asset.prefab) continue;
-      if (asset.prefab->eventGraphJSON.empty()) continue;
+
+      const std::string ident = toIdent(asset.name);
+      const uint32_t prefabUUID = asset.prefab->uuid.value;
+      const std::string fnName = "dispatch_" + ident;
+      const std::string parentIdent = parentIdentOf(asset);
+
+      // Variants with no event graph of their own still need a dispatcher
+      // so the runtime can route to them — that dispatcher unconditionally
+      // forwards to the parent.
+      if (asset.prefab->eventGraphJSON.empty()) {
+        if (parentIdent.empty()) continue;
+        registry.push_back({prefabUUID, fnName});
+        cpp += "void " + fnName + "(P64::Object* self, uint16_t eventType, float deltaTime)\n{\n";
+        cpp += "  dispatch_" + parentIdent + "(self, eventType, deltaTime);\n";
+        cpp += "}\n\n";
+        continue;
+      }
 
       // Materialize a Graph from the saved JSON. Free-standing here — the
       // editor's live ImNodeFlow graphs are not reachable from the build
@@ -527,14 +644,11 @@ namespace
       // the prefab event graph editor.
       live.validate(&ctx.compileErrors, asset.getUUID());
 
-      const std::string ident = toIdent(asset.name);
-      const uint32_t prefabUUID = asset.prefab->uuid.value;
-      const std::string fnName = "dispatch_" + ident;
       registry.push_back({prefabUUID, fnName});
 
       cpp += "void " + fnName + "(P64::Object* self, uint16_t eventType, float deltaTime)\n{\n";
       cpp += "  (void)deltaTime; // referenced by OnTick paths only\n";
-      cpp += buildPrefabDispatchBody(live, ident);
+      cpp += buildPrefabDispatchBody(live, ident, parentIdent);
       cpp += "}\n\n";
     }
 

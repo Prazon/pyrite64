@@ -26,6 +26,7 @@
 #include "../../../../project/graph/nodes/nodePrefabEvent.h"
 #include "../../../../project/graph/nodes/nodePrefabFunc.h"
 #include "../../../../project/graph/nodes/nodePrefabVarGet.h"
+#include "../../../../project/prefabScaffolder.h"
 #include "../../../dragDropPayloads.h"
 
 namespace
@@ -68,50 +69,16 @@ Editor::PrefabEventGraphEditor::PrefabEventGraphEditor(uint64_t prefabAssetUUID)
   if (!asset || !asset->prefab) return;
 
   // Load existing graph state if any. When the prefab has no graph yet,
-  // seed default event entry nodes — same idea as GameMaker's pre-listed
-  // object events (Create / Step / Draw): users open the graph to a layout
-  // that already shows the common entry points, ready to be wired up.
-  const std::string &jsonState = asset->prefab->eventGraphJSON;
-  if (!jsonState.empty()) {
-    graph.deserialize(jsonState);
-  } else {
-    // Find the registry indices for our PrefabEvent nodes by name. The
-    // alternative — hardcoding the index — is fragile against future
-    // additions to NODE_TABLE.
-    auto &names = Project::Graph::Graph::getNodeNames();
-    auto findIdx = [&](const char* needle) -> int {
-      for (size_t i = 0; i < names.size(); ++i) {
-        if (names[i].find(needle) != std::string::npos) return static_cast<int>(i);
-      }
-      return -1;
-    };
-    int eventIdx = findIdx("Event");
-    if (eventIdx >= 0) {
-      using Kind = Project::Graph::Node::PrefabEvent::Kind;
-      struct Seed { Kind kind; float y; };
-      Seed seeds[] = {
-        {Kind::Ready,   40.0f},
-        {Kind::Enable,  180.0f},
-        {Kind::Disable, 320.0f},
-      };
-      for (const auto &s : seeds) {
-        auto node = graph.addNode(static_cast<uint32_t>(eventIdx), {40.0f, s.y});
-        if (auto evt = dynamic_cast<Project::Graph::Node::PrefabEvent*>(node.get())) {
-          evt->kind = s.kind;
-          evt->updateTitle();
-        }
-      }
-    }
-  }
+  // run the scaffolder to install default lifecycle events + matching
+  // PrefabFunc calls (same shape used at prefab-create time). The
+  // scaffolder writes its JSON straight into eventGraphJSON, so we
+  // immediately deserialize the in-memory representation from it.
+  Project::PrefabScaffolder::seedDefaultEventGraph(*asset->prefab);
+  graph.deserialize(asset->prefab->eventGraphJSON);
   // savedState reflects whatever's on screen now — including seeded nodes.
   // That way the editor doesn't immediately read as dirty on first open;
   // the seeds become "the saved state" until the user actually edits.
   savedState = graph.serialize();
-  // Persist the seeded layout immediately so a fresh prefab on disk
-  // matches the in-editor state next time it's opened.
-  if (jsonState.empty() && !savedState.empty()) {
-    asset->prefab->eventGraphJSON = savedState;
-  }
 
   graph.graph.droppedLinkPopUpContent([this](ImFlow::Pin* pin) {
     uint32_t typeIdx = 0;

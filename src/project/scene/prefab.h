@@ -4,6 +4,8 @@
 */
 #pragma once
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,33 @@ namespace Project
   using PrefabVarKind = VarKind;
   using PrefabVarDef = VarDef;
 
+  // A single sparse property override on an inherited component (or on an
+  // inherited Object's transform when compUuid == 0). Keyed by uuid so it
+  // survives parent-side reorders and unrelated edits.
+  struct PrefabPropOverride
+  {
+    uint32_t objUuid{0};   // Object::uuid in the inherited tree
+    uint64_t compUuid{0};  // Component::Entry::uuid (0 = property on Object itself, e.g. pos/rot/scale)
+    uint64_t propId{0};    // Property<T>::id (crc64 of the field name)
+    GenericValue value{};
+  };
+
+  // A new component added by the child that the parent does not have. The
+  // component's own uuid is unique to the child.
+  struct PrefabAddedComponent
+  {
+    uint32_t objUuid{0};   // Inherited Object::uuid this attaches to (or 0 = root)
+    Component::Entry entry{};
+  };
+
+  // A new child Object the parent's tree does not contain. parentUuid points
+  // at an Object in the inherited tree (0 = under the prefab root).
+  struct PrefabAddedObject
+  {
+    uint32_t parentUuid{0};
+    std::shared_ptr<Object> obj{};
+  };
+
   class Prefab
   {
     public:
@@ -41,13 +70,34 @@ namespace Project
       // means "no graph yet" (the editor renders a blank canvas).
       std::string eventGraphJSON{};
 
-      // Variant inheritance: when uuidParentPrefab is non-zero, this prefab's
-      // effective tree is derived by deserializing the parent prefab's
-      // serialized obj, applying `patchOps` (RFC 6902 JSON Patch) on top,
-      // then deserializing the result into `obj`. Non-variant prefabs leave
-      // both fields default and serialize their full obj tree as before.
+      // For child prefabs (uuidParentPrefab != 0) the per-event subgraph map
+      // records how the child treats each event entry from the parent's graph:
+      //   "inherited" (use parent's), "overridden" (child supplies own), or
+      //   "added" (event the parent did not define). Codegen consults this to
+      //   emit super-calls vs direct dispatch. Empty for standalone prefabs.
+      // Keys are PrefabEvent::Kind ident strings ("Ready", "Tick", "Custom0"…).
+      std::unordered_map<std::string, std::string> eventOverrideMode{};
+
+      // Variant inheritance: when uuidParentPrefab is non-zero this prefab's
+      // effective tree is derived by deep-copying the parent's resolved tree
+      // (uuids preserved), removing anything in the *removed* sets, applying
+      // structured property overrides, and finally inserting *added* objects
+      // and components. Survives parent-side reorders cleanly.
       PROP_U64(uuidParentPrefab);
-      nlohmann::json patchOps = nlohmann::json::array();
+
+      std::vector<PrefabPropOverride>          propOverrides{};
+      std::unordered_set<uint32_t>             removedObjects{};
+      std::unordered_set<uint64_t>             removedComponents{};
+      std::vector<PrefabAddedComponent>        addedComponents{};
+      std::vector<PrefabAddedObject>           addedObjects{};
+      std::unordered_map<uint64_t, GenericValue> varDefaultOverrides{};
+      std::vector<PrefabVarDef>                addedVariables{};
+      std::unordered_set<uint64_t>             removedVariables{};
+
+      // Legacy RFC 6902 JSON Patch payload kept around only long enough for
+      // migrateFromLegacyPatch() to convert it into the structured overrides
+      // above. Always empty on save.
+      nlohmann::json legacyPatchOps = nlohmann::json::array();
 
       bool isVariant() const { return uuidParentPrefab.value != 0; }
 
@@ -56,15 +106,22 @@ namespace Project
 
       void deserialize(const std::string &str);
 
-      // Re-resolve this variant's `obj` from a (resolved) parent prefab.
-      // No-op for non-variants. Logs and falls back to a copy of parent.obj
-      // if the patch fails to apply cleanly.
+      // Re-resolve this variant's `obj` (and effective `variables`) from a
+      // (resolved) parent prefab. No-op for non-variants.
       void resolveAgainstParent(const Prefab &parent);
 
-      // Recompute this variant's `patchOps` as the JSON Patch diff between
-      // parent's serialized obj and this prefab's current obj. Caller is
-      // responsible for ensuring `parent` has been resolved already.
-      void rebuildPatchFromCurrent(const Prefab &parent);
+      // Convert a legacy patchOps payload into structured override fields.
+      // Run after resolveAgainstParent has already produced a resolved `obj`.
+      // No-op when legacyPatchOps is empty (already migrated).
+      void migrateFromLegacyPatch(const Prefab &parent);
+
+      // Recompute structured override fields by diffing this variant's
+      // current `obj` against the parent's resolved tree. Called on save.
+      void rebuildOverridesFromCurrent(const Prefab &parent);
+
+      // Walk obj tree and assign a fresh stable uuid to any Object whose
+      // uuid is 0 (legacy / never-saved data). Idempotent.
+      void ensureStableUuids();
 
       void save();
   };

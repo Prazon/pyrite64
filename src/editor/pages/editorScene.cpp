@@ -29,6 +29,7 @@
 #include "parts/assets/prefabEventGraphEditor.h"
 #include "parts/assets/prefabFunctionCodeEditor.h"
 #include "parts/assets/materialEditor.h"
+#include "parts/assets/particleSystemEditor.h"
 #include "parts/assets/widgetBlueprintEditor.h"
 #include "parts/assets/fontEditor.h"
 #include "parts/assets/audioEditor.h"
@@ -158,6 +159,7 @@ void Editor::Scene::onProjectClosing()
   prefabFunctionCodeEditors.clear();
   for (auto &[uuid, editor] : materialEditors) pendingMaterialEditorErase.push_back(std::move(editor));
   materialEditors.clear();
+  particleSystemEditors.clear();
   widgetEditors.clear();
   fontEditors.clear();
   audioEditors.clear();
@@ -255,6 +257,19 @@ void Editor::Scene::openMaterialEditor(uint64_t assetUUID, ImGuiID dockTarget)
   auto editor = std::make_shared<MaterialEditor>(assetUUID);
   if (dockTarget) editor->setFirstDockTarget(dockTarget);
   materialEditors[assetUUID] = std::move(editor);
+}
+
+void Editor::Scene::openParticleSystemEditor(uint64_t assetUUID, ImGuiID dockTarget)
+{
+  auto it = particleSystemEditors.find(assetUUID);
+  if (it != particleSystemEditors.end()) {
+    if (dockTarget) it->second->setFirstDockTarget(dockTarget);
+    it->second->focus();
+    return;
+  }
+  auto editor = std::make_shared<ParticleSystemEditor>(assetUUID);
+  if (dockTarget) editor->setFirstDockTarget(dockTarget);
+  particleSystemEditors[assetUUID] = std::move(editor);
 }
 
 void Editor::Scene::openWidgetBlueprintEditor(uint64_t assetUUID, ImGuiID dockTarget)
@@ -781,6 +796,17 @@ void Editor::Scene::draw()
     }
   }
 
+  // Particle-system asset editors. Pure ImGui-drawn (preview is just textured
+  // rects on the window draw list — no SDL_GPU framebuffer), so immediate
+  // erase is safe.
+  std::vector<uint64_t> delPtxUUIDs{};
+  for(auto &[uuid, editor] : particleSystemEditors) {
+    if (!editor->draw(dockSpaceID)) {
+      delPtxUUIDs.push_back(uuid);
+    }
+  }
+  for(auto &uuid : delPtxUUIDs) particleSystemEditors.erase(uuid);
+
   // Widget blueprint editors. Lifecycle parallel to material editors but
   // without a GPU framebuffer of their own (pure ImGui-drawn 2D canvas), so
   // immediate erase is safe; no pendingErase queue needed.
@@ -1020,6 +1046,8 @@ void Editor::Scene::draw()
         section(ICON_MDI_CUBE_OUTLINE,           "Models",             modelEditors);
         section(ICON_MDI_IMAGE_OUTLINE,          "Images",             imageEditors);
         section(ICON_MDI_CODE_BRACES,            "Code",               codeEditors);
+        section(ICON_MDI_PALETTE_SWATCH,         "Materials",          materialEditors);
+        section(ICON_MDI_SHIMMER,                "Particle Systems",   particleSystemEditors);
         if (!nodeEditors.empty()) {
           if (any) ImGui::Separator();
           ImGui::TextDisabled("Node Graphs");

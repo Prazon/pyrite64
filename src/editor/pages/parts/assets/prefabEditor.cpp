@@ -108,17 +108,18 @@ void Editor::PrefabEditor::saveToDisk()
   // Push the editor's working variables list onto the prefab before serialize.
   asset->prefab->variables = variables;
 
-  // For variants, recompute the patch (diff against parent) before persisting
-  // so the on-disk file stores deltas, not the resolved tree.
+  // For variants, recompute the structured overrides (diff against parent)
+  // before persisting so the on-disk file stores sparse deltas, not the
+  // resolved tree.
   if (asset->prefab->isVariant()) {
     auto parent = ctx.project->getAssets().getPrefabByUUID(
       asset->prefab->uuidParentPrefab.value
     );
     if (parent) {
-      asset->prefab->rebuildPatchFromCurrent(*parent);
+      asset->prefab->rebuildOverridesFromCurrent(*parent);
     } else {
       Utils::Logger::log(
-        "Variant prefab " + filePath + " parent missing on save — skipping patch rebuild.",
+        "Variant prefab " + filePath + " parent missing on save — skipping override rebuild.",
         Utils::Logger::LEVEL_ERROR
       );
     }
@@ -222,6 +223,27 @@ bool Editor::PrefabEditor::draw(ImGuiID defDockId)
   if (ImGui::Button(ICON_MDI_CONTENT_SAVE " Save")) saveToDisk();
   ImGui::SameLine();
   ImGui::TextDisabled("%s", filePath.c_str());
+
+  // Blueprint-style parent breadcrumb for child prefabs. Shows the parent
+  // class and offers a one-click "Open Parent" — analogous to the UE5
+  // "Parent Class" link at the top of a Blueprint editor.
+  if (ctx.project) {
+    auto *assetCur = ctx.project->getAssets().getEntryByUUID(assetUUID);
+    if (assetCur && assetCur->prefab && assetCur->prefab->isVariant()) {
+      ImGui::SameLine();
+      auto *par = ctx.project->getAssets().getEntryByUUID(
+        assetCur->prefab->uuidParentPrefab.value
+      );
+      ImGui::Text(ICON_MDI_ARROW_UP_THIN " Child of: %s",
+        par ? par->name.c_str() : "(missing parent)");
+      if (par) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Open Parent")) {
+          if (ctx.editorScene) ctx.editorScene->openPrefabEditor(par->getUUID());
+        }
+      }
+    }
+  }
 
   if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
     ImGuiIO &io = ImGui::GetIO();

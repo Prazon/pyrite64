@@ -3,6 +3,7 @@
 #include "baseNode.h"
 #include "../../../utils/hash.h"
 #include "../../../project/prefabFunctions.h"
+#include "../../../project/prefabScaffolder.h"
 
 namespace Project::Graph::Node
 {
@@ -59,6 +60,30 @@ namespace Project::Graph::Node
               }
             }
             ImGui::EndCombo();
+          }
+          // Tier 2 autofix: if funcName is bound but not present in the
+          // header scan, expose a one-click "Create stub" button that
+          // appends a P64_NODE void <funcName>(P64::Object*) declaration
+          // and an empty body. Avoids forcing the user to alt-tab to a
+          // text editor when they typed/dropped a name that doesn't exist.
+          if (!funcName.empty()) {
+            bool found = false;
+            for (const auto &f : funcs) {
+              if (f.name == funcName) { found = true; break; }
+            }
+            if (!found) {
+              ImGui::PushStyleColor(ImGuiCol_Button,
+                IM_COL32(0xC0, 0x70, 0x30, 0xFF));
+              if (ImGui::SmallButton("Create stub")) {
+                ::Project::PrefabScaffolder::autofixFunctions(
+                  pctx.projectPath, pctx.prefabName,
+                  {{funcName, uuid}}
+                );
+              }
+              ImGui::PopStyleColor();
+              ImGui::SameLine();
+              ImGui::TextDisabled("(missing)");
+            }
           }
         } else {
           if (ImGui::InputText("##fn", &funcName)) {
