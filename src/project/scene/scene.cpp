@@ -69,6 +69,7 @@ nlohmann::json Project::SceneConf::serialize() const {
     .set(doClearColor)
     .set(doClearDepth)
     .set(renderPipeline)
+    .set(renderMode)
     .set(frameLimit)
     .set(filter)
     .set(audioFreq)
@@ -506,6 +507,7 @@ void Project::Scene::deserialize(const std::string &data)
     Utils::JSON::readProp(docConf, conf.doClearColor);
     Utils::JSON::readProp(docConf, conf.doClearDepth);
     Utils::JSON::readProp(docConf, conf.renderPipeline);
+    Utils::JSON::readProp(docConf, conf.renderMode, 0);
     Utils::JSON::readProp(docConf, conf.frameLimit, 0);
     Utils::JSON::readProp(docConf, conf.filter, 0);
     Utils::JSON::readProp(docConf, conf.audioFreq, 32000);

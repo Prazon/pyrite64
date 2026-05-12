@@ -525,38 +525,60 @@ void Editor::Scene::draw()
   }
   ImGui::End();
 
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2_px, 2_px));
-  ImGui::Begin("3D-Viewport");
-    // Re-apply the central-viewport lock every frame so it survives returning
-    // users whose imgui.ini already has the layout cached (LocalFlags isn't
-    // fully restored from .ini). The tab bar must remain enabled here so
-    // 2D-Viewport can dock as a sibling tab.
-    if (auto *node = ImGui::GetWindowDockNode()) {
-      node->LocalFlags |=
-        ImGuiDockNodeFlags_NoDockingOverMe |
-        ImGuiDockNodeFlags_NoDockingSplit;
-      // Clear NoTabBar in case a stale imgui.ini from before the 2D
-      // viewport was added still locks it off. Otherwise the user can
-      // never see the 2D-Viewport tab.
-      node->LocalFlags &= ~ImGuiDockNodeFlags_NoTabBar;
-    }
-    viewport3d.draw();
-  ImGui::End();
+  // Pick which viewport to show based on the loaded scene's renderMode.
+  // Mode3D (0, default): the existing 3D-Viewport, which composites 2D
+  // overlays on top of the 3D pass. Mode2D (1): the dedicated 2D-Viewport
+  // showing the canvas tree in screen space, no 3D pass.
+  //
+  // The "other" viewport is simply not drawn this frame -- ImGui keeps
+  // its docked-but-hidden slot in imgui.ini so a Mode flip resurrects the
+  // right tab without re-laying-out. The widget blueprint editor's
+  // canvas-mode Viewport2D is unaffected; it lives in a per-asset
+  // editor window, not in the central dock.
+  int sceneRenderMode = (ctx.project && ctx.project->getScenes().getLoadedScene())
+                          ? ctx.project->getScenes().getLoadedScene()->conf.renderMode.value
+                          : 0;
+  bool show3D = (sceneRenderMode != 1);
+  bool show2D = (sceneRenderMode == 1);
 
-  // Returning users already have an imgui.ini that predates this window, so
-  // DockBuilderDockWindow inside the first-time-setup branch never runs for
-  // them and sceneDockCenterID stays 0. Resolve the central node from the
-  // 3D-Viewport's current DockId (we just drew it above), then dock 2D-
-  // Viewport into the same node with FirstUseEver — ImGui's .ini takes over
-  // afterwards so user rearrangements stick.
-  ImGuiID centerNode = sceneDockCenterID;
-  if (auto *w = ImGui::FindWindowByName("3D-Viewport")) {
-    if (w->DockId) centerNode = w->DockId;
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2_px, 2_px));
+  if (show3D) {
+    ImGui::Begin("3D-Viewport");
+      // Re-apply the central-viewport lock every frame so it survives
+      // returning users whose imgui.ini already has the layout cached
+      // (LocalFlags isn't fully restored from .ini). Tab bar stays
+      // enabled so legacy projects that still have both tabs docked can
+      // see them.
+      if (auto *node = ImGui::GetWindowDockNode()) {
+        node->LocalFlags |=
+          ImGuiDockNodeFlags_NoDockingOverMe |
+          ImGuiDockNodeFlags_NoDockingSplit;
+        node->LocalFlags &= ~ImGuiDockNodeFlags_NoTabBar;
+      }
+      viewport3d.draw();
+    ImGui::End();
   }
-  if (centerNode) ImGui::SetNextWindowDockID(centerNode, ImGuiCond_FirstUseEver);
-  ImGui::Begin("2D-Viewport");
-    viewport2d.draw();
-  ImGui::End();
+
+  if (show2D) {
+    // Returning users already have an imgui.ini that predates the 2D
+    // viewport, so DockBuilderDockWindow inside the first-time-setup
+    // branch never runs for them and sceneDockCenterID stays 0. Resolve
+    // the central node from the 3D-Viewport's DockId when available.
+    ImGuiID centerNode = sceneDockCenterID;
+    if (auto *w = ImGui::FindWindowByName("3D-Viewport")) {
+      if (w->DockId) centerNode = w->DockId;
+    }
+    if (centerNode) ImGui::SetNextWindowDockID(centerNode, ImGuiCond_FirstUseEver);
+    ImGui::Begin("2D-Viewport");
+      if (auto *node = ImGui::GetWindowDockNode()) {
+        node->LocalFlags |=
+          ImGuiDockNodeFlags_NoDockingOverMe |
+          ImGuiDockNodeFlags_NoDockingSplit;
+        node->LocalFlags &= ~ImGuiDockNodeFlags_NoTabBar;
+      }
+      viewport2d.draw();
+    ImGui::End();
+  }
   ImGui::PopStyleVar(1);
 
   // Asset editors dock into the outer top region (siblings of the

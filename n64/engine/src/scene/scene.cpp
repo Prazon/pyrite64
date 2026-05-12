@@ -157,6 +157,22 @@ P64::Scene::~Scene()
   delete renderPipeline;
 }
 
+// Forward-declare the generated prefab-event dispatch entry without pulling
+// in the project-side header (which only exists once the editor has run a
+// build). The project's prefabEvents.cpp defines the strong symbol; the
+// weak default below is what n64/tests and n64/examples (which build the
+// engine standalone) link against so they don't fail to link.
+//
+// deltaTime is meaningful only for EVENT_TYPE_TICK dispatches; every other
+// event passes 0.0f. The Tick dispatch happens once per frame from
+// Scene::update; lifecycle events (Ready/Enable/Disable/Custom) flow
+// through runPendingEvents which has no deltaTime in scope.
+namespace P64::PrefabEvents {
+  void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType, float deltaTime);
+}
+__attribute__((weak))
+void P64::PrefabEvents::dispatch(P64::Object*, uint32_t, uint16_t, float) {}
+
 void P64::Scene::update(float deltaTime)
 {
   accumulator_ticks += TICKS_FROM_US((uint32_t)(deltaTime * 1000000.0f));
@@ -415,22 +431,6 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
 #endif
 }
 
-// Forward-declare the generated prefab-event dispatch entry without pulling
-// in the project-side header (which only exists once the editor has run a
-// build). The project's prefabEvents.cpp defines the strong symbol; the
-// weak default below is what n64/tests and n64/examples (which build the
-// engine standalone) link against so they don't fail to link.
-//
-// deltaTime is meaningful only for EVENT_TYPE_TICK dispatches; every other
-// event passes 0.0f. The Tick dispatch happens once per frame from
-// Scene::update; lifecycle events (Ready/Enable/Disable/Custom) flow
-// through runPendingEvents which has no deltaTime in scope.
-namespace P64::PrefabEvents {
-  void dispatch(P64::Object* self, uint32_t prefabUUID, uint16_t eventType, float deltaTime);
-}
-__attribute__((weak))
-void P64::PrefabEvents::dispatch(P64::Object*, uint32_t, uint16_t, float) {}
-
 void P64::Scene::runPendingEvents()
 {
   // events, switch now to prevent infinite loops for objects that push events in response to events
@@ -453,11 +453,16 @@ void P64::Scene::runPendingEvents()
 
       // Prefab event-graph dispatch. Fires after component handlers so
       // built-in component behavior (e.g. RigidBody enable/disable bookkeeping)
-      // runs before user graph nodes. No-op when prefabUUID is 0 (object
-      // isn't a prefab instance root or the build didn't generate dispatch
-      // for this prefab).
-      if(obj->prefabUUID != 0) {
-        P64::PrefabEvents::dispatch(obj, obj->prefabUUID, entry.event.type, 0.0f);
+      // runs before user graph nodes. If the target object isn't itself a
+      // prefab root, walk up the parent chain so widgets nested inside a
+      // prefab (Button2D children of a *Inst) still route their events to
+      // the enclosing prefab's event graph.
+      Object* dispatchTarget = obj;
+      while(dispatchTarget && dispatchTarget->prefabUUID == 0) {
+        dispatchTarget = dispatchTarget->getParent();
+      }
+      if(dispatchTarget) {
+        P64::PrefabEvents::dispatch(dispatchTarget, dispatchTarget->prefabUUID, entry.event.type, 0.0f);
       }
     }
   }

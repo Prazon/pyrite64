@@ -26,6 +26,13 @@ void Editor::SceneInspector::draw() {
       OPTIONS, 3
     );
 
+    constexpr const char* MODE_OPTIONS[] = {"3D", "2D"};
+    ImTable::addComboBox(
+      "Mode",
+      scene->conf.renderMode.value,
+      MODE_OPTIONS, 2
+    );
+
     std::vector<ImTable::ComboEntry> fpsEntries{
       {0, "Unlimited"},
       {1, "30 / 25"},
