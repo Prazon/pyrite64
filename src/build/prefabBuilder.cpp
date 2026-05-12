@@ -149,10 +149,8 @@ namespace
       if (!a.prefab || !a.prefab->isVariant()) return "";
       auto pp = project.getAssets().getPrefabByUUID(a.prefab->uuidParentPrefab.value);
       if (!pp || pp->variables.empty()) return "";
-      for (const auto &candidate : assets) {
-        if (candidate.prefab && candidate.prefab->uuid.value == pp->uuid.value) {
-          return "Vars_" + toIdent(candidate.name);
-        }
+      if (auto *e = project.getAssets().getEntryByUUID(a.prefab->uuidParentPrefab.value)) {
+        return "Vars_" + toIdent(e->name);
       }
       return "";
     };
@@ -596,11 +594,10 @@ namespace
       if (!a.prefab || !a.prefab->isVariant()) return "";
       auto pp = project.getAssets().getPrefabByUUID(a.prefab->uuidParentPrefab.value);
       if (!pp) return "";
-      // Find the asset name for the resolved parent prefab.
-      for (const auto &candidate : assets) {
-        if (candidate.prefab && candidate.prefab->uuid.value == pp->uuid.value) {
-          return toIdent(candidate.name);
-        }
+      // Look up the asset entry that owns the resolved parent prefab so we
+      // can emit qualified dispatch_<ParentIdent> calls.
+      if (auto *e = project.getAssets().getEntryByUUID(a.prefab->uuidParentPrefab.value)) {
+        return toIdent(e->name);
       }
       return "";
     };
