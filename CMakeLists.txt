@@ -383,10 +383,18 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/assets/materialEditor.cpp
         src/editor/pages/parts/assets/particleSystemEditor.h
         src/editor/pages/parts/assets/particleSystemEditor.cpp
+        src/editor/pages/parts/assets/saveFileEditor.h
+        src/editor/pages/parts/assets/saveFileEditor.cpp
+        src/editor/pages/parts/assets/saveFileEditorWindow.h
+        src/editor/pages/parts/assets/saveFileEditorWindow.cpp
         src/project/assets/materialAsset.h
         src/project/assets/materialAsset.cpp
         src/project/assets/particleSystemAsset.h
         src/project/assets/particleSystemAsset.cpp
+        src/project/assets/saveFileAsset.h
+        src/project/assets/saveFileAsset.cpp
+        src/build/saveTableBuilder.h
+        src/build/saveTableBuilder.cpp
         src/project/materialGraph/graph.h
         src/project/materialGraph/graph.cpp
         src/project/materialGraph/nodes/baseNode.h

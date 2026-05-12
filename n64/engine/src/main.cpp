@@ -12,6 +12,7 @@
 #include "scene/scene.h"
 #include "scene/sceneManager.h"
 #include "scene/globalState.h"
+#include "save/saveAutoInit.h"
 #include "./audio/audioManagerPrivate.h"
 #include "assets/assetManager.h"
 #include "libdragon/utils.h"
@@ -94,6 +95,7 @@ int main()
   P64::MatrixManager::reset();
   P64::VI::SwapChain::init();
 
+  P64::saveAutoInit();
   P64::GlobalScript::callHooks(P64::GlobalScript::HookType::GAME_INIT);
 
   P64::Log::info("Reset: %d\n", sys_reset_type());

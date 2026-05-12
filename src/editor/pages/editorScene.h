@@ -36,6 +36,7 @@ namespace Editor
   class AudioEditor;
   class ResourceTypeEditorWindow;
   class ResourceInstanceEditor;
+  class SaveFileEditorWindow;
 
   class Scene
   {
@@ -75,6 +76,8 @@ namespace Editor
       std::map<uint64_t, std::shared_ptr<AudioEditor>> audioEditors{};
       std::map<uint64_t, std::shared_ptr<ResourceTypeEditorWindow>> resourceTypeEditors{};
       std::map<uint64_t, std::shared_ptr<ResourceInstanceEditor>> resourceInstanceEditors{};
+      // Per-asset .p64save schema editors. Same lifecycle as ResourceTypeEditor.
+      std::map<uint64_t, std::shared_ptr<SaveFileEditorWindow>> saveFileEditors{};
 
       // Material thumbnail cache (browser-wide). Each entry owns its own
       // tiny offscreen viewport so the framebuffer texture is stable across
@@ -191,6 +194,7 @@ namespace Editor
       void openFontEditor(uint64_t assetUUID);
       void openAudioEditor(uint64_t assetUUID);
       void openResourceTypeEditor(uint64_t assetUUID);
+      void openSaveFileEditor(uint64_t assetUUID);
       void openResourceInstanceEditor(uint64_t assetUUID);
 
       // Open the standalone NODE_GRAPH editor for the given asset. Idempotent

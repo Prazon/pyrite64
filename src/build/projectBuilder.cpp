@@ -3,6 +3,7 @@
 * @license MIT
 */
 #include "projectBuilder.h"
+#include "saveTableBuilder.h"
 
 #include <filesystem>
 #include <thread>
@@ -226,6 +227,15 @@ bool Build::buildProject(const std::string &configPath, bool runMake)
   // Must run after sceneCtx.assetList is fully populated (above) so the
   // emitted typeForAssetIdx[] aligns with the rom asset table.
   buildResourceTable(project, sceneCtx);
+
+  // Save schema -> Game::Save namespace + P64::saveAutoInit override.
+  // Always emits, even with no .p64save assets (engine main.cpp calls
+  // P64::saveAutoInit unconditionally via a weak default).
+  if (!buildSaveTable(project)) {
+    Utils::Logger::log("Save schema build failed (capacity overflow)",
+      Utils::Logger::LEVEL_ERROR);
+    return false;
+  }
 
   // Scenes
   project.getScenes().reload();

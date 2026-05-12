@@ -40,7 +40,8 @@ void Editor::AssetInspector::draw(uint64_t assetUUID)
     || asset->type == FileType::CODE_GLOBAL
     || asset->type == FileType::PREFAB
     || asset->type == FileType::RESOURCE_TYPE
-    || asset->type == FileType::RESOURCE_INSTANCE)
+    || asset->type == FileType::RESOURCE_INSTANCE
+    || asset->type == FileType::SAVE_FILE)
   {
     hasAssetConf = false;
   }

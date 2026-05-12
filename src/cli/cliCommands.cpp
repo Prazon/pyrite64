@@ -129,6 +129,7 @@ namespace
       case Project::FileType::MATERIAL:          return "material";
       case Project::FileType::WIDGET_BLUEPRINT:  return "widgetBlueprint";
       case Project::FileType::PARTICLE_SYSTEM:   return "particleSystem";
+      case Project::FileType::SAVE_FILE:         return "saveFile";
       default: return "?";
     }
   }
@@ -1159,6 +1160,252 @@ namespace
     out["created"] = a.name + ".p64ptx";
     if (e) out["asset"] = serializeAssetEntry(*e, false);
     emitJSON(out);
+    return 0;
+  }
+
+  // ── Save file (.p64save) ────────────────────────────────────────────
+
+  // Locally-scoped helpers so the same string<->enum mapping is used by
+  // every save-file-* command without leaking into the shared header.
+  const char *saveFieldTypeName(::Project::Assets::SaveFileAsset::FieldType t)
+  {
+    using FT = ::Project::Assets::SaveFileAsset::FieldType;
+    switch (t) {
+      case FT::FT_INT:    return "Int";
+      case FT::FT_FLOAT:  return "Float";
+      case FT::FT_BOOL:   return "Bool";
+      case FT::FT_STRING: return "String";
+      case FT::FT_VEC2:   return "Vec2";
+      case FT::FT_VEC3:   return "Vec3";
+    }
+    return "?";
+  }
+  bool parseSaveFieldType(const std::string &raw, ::Project::Assets::SaveFileAsset::FieldType &out)
+  {
+    using FT = ::Project::Assets::SaveFileAsset::FieldType;
+    auto eq = [&](const char *a) {
+      if (raw.size() != strlen(a)) return false;
+      for (size_t i = 0; i < raw.size(); ++i) {
+        char c = raw[i] >= 'A' && raw[i] <= 'Z' ? (char)(raw[i] - 'A' + 'a') : raw[i];
+        char d = a[i]   >= 'A' && a[i]   <= 'Z' ? (char)(a[i]   - 'A' + 'a') : a[i];
+        if (c != d) return false;
+      }
+      return true;
+    };
+    if (eq("int"))    { out = FT::FT_INT;    return true; }
+    if (eq("float"))  { out = FT::FT_FLOAT;  return true; }
+    if (eq("bool"))   { out = FT::FT_BOOL;   return true; }
+    if (eq("string")) { out = FT::FT_STRING; return true; }
+    if (eq("vec2"))   { out = FT::FT_VEC2;   return true; }
+    if (eq("vec3"))   { out = FT::FT_VEC3;   return true; }
+    return false;
+  }
+  nlohmann::json serializeSaveAsset(const Project::AssetManagerEntry &e)
+  {
+    nlohmann::json out;
+    out["uuid"] = e.conf.uuid;
+    out["name"] = e.name;
+    out["path"] = e.path;
+    if (!e.saveFileAsset) { out["fields"] = nlohmann::json::array(); return out; }
+    out["groupName"] = e.saveFileAsset->groupName;
+    nlohmann::json arr = nlohmann::json::array();
+    uint32_t slot = 0;
+    for (const auto &f : e.saveFileAsset->fields) {
+      nlohmann::json fj;
+      fj["name"]  = f.name;
+      fj["type"]  = saveFieldTypeName(f.type);
+      fj["slot"]  = slot;
+      fj["slots"] = ::Project::Assets::SaveFileAsset::fieldSlotCount(f);
+      switch (f.type) {
+        case ::Project::Assets::SaveFileAsset::FT_INT:    fj["default"] = f.defInt; break;
+        case ::Project::Assets::SaveFileAsset::FT_FLOAT:  fj["default"] = f.defFloat; break;
+        case ::Project::Assets::SaveFileAsset::FT_BOOL:   fj["default"] = f.defBool; break;
+        case ::Project::Assets::SaveFileAsset::FT_STRING:
+          fj["default"]   = f.defString;
+          fj["stringLen"] = f.stringLen;
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_VEC2:
+          fj["default"] = nlohmann::json::array({f.defVec[0], f.defVec[1]});
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_VEC3:
+          fj["default"] = nlohmann::json::array({f.defVec[0], f.defVec[1], f.defVec[2]});
+          break;
+      }
+      arr.push_back(fj);
+      slot += ::Project::Assets::SaveFileAsset::fieldSlotCount(f);
+    }
+    out["fields"]    = arr;
+    out["slotsUsed"] = slot;
+    return out;
+  }
+  void persistSaveAsset(Project::AssetManagerEntry &e)
+  {
+    if (!e.saveFileAsset) return;
+    Utils::FS::saveTextFile(e.path, e.saveFileAsset->serialize());
+  }
+
+  int cmdSaveFileCreate(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.name.empty()) { emitErr("--name is required"); return 1; }
+    uint64_t uuid = project.getAssets().createSaveFile(a.name, a.dir);
+    if (uuid == 0) { emitErr("createSaveFile failed (name conflict?)"); return 1; }
+    auto *e = project.getAssets().getEntryByUUID(uuid);
+    nlohmann::json out;
+    out["created"] = a.name + ".p64save";
+    if (e) out["asset"] = serializeSaveAsset(*e);
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSaveFileList(const CLI::Commands::Args &/*a*/, Project::Project &project)
+  {
+    nlohmann::json out = nlohmann::json::array();
+    for (const auto &e : project.getAssets().getTypeEntries(Project::FileType::SAVE_FILE)) {
+      out.push_back(serializeSaveAsset(e));
+    }
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdSaveFileDescribe(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::SAVE_FILE);
+    if (!e) { emitErr("save asset not found: " + a.asset); return 1; }
+    emitJSON(serializeSaveAsset(*e));
+    return 0;
+  }
+
+  int cmdSaveFileAddField(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    if (a.field.empty()) { emitErr("--field is required"); return 1; }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::SAVE_FILE);
+    if (!e || !e->saveFileAsset) { emitErr("save asset not found: " + a.asset); return 1; }
+
+    ::Project::Assets::SaveFileAsset::FieldType ft = ::Project::Assets::SaveFileAsset::FT_INT;
+    if (!a.type.empty() && !parseSaveFieldType(a.type, ft)) {
+      emitErr("--type must be Int|Float|Bool|String|Vec2|Vec3"); return 1;
+    }
+
+    for (const auto &f : e->saveFileAsset->fields) {
+      if (f.name == a.field) {
+        emitErr("field already exists: " + a.field); return 1;
+      }
+    }
+
+    ::Project::Assets::SaveFileAsset::Field f{};
+    f.name = a.field;
+    f.type = ft;
+    if (!a.value.empty()) {
+      auto j = parseValueJSON(a.value);
+      switch (ft) {
+        case ::Project::Assets::SaveFileAsset::FT_INT:
+          if (j.is_number()) f.defInt = j.get<int32_t>();
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_FLOAT:
+          if (j.is_number()) f.defFloat = j.get<float>();
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_BOOL:
+          if (j.is_boolean()) f.defBool = j.get<bool>();
+          else if (j.is_number()) f.defBool = j.get<int>() != 0;
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_STRING:
+          if (j.is_string()) f.defString = j.get<std::string>();
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_VEC2:
+        case ::Project::Assets::SaveFileAsset::FT_VEC3: {
+          if (j.is_array()) {
+            for (size_t i = 0; i < j.size() && i < 3; ++i) {
+              if (j[i].is_number()) f.defVec[i] = j[i].get<float>();
+            }
+          }
+          break;
+        }
+      }
+    }
+    e->saveFileAsset->fields.push_back(std::move(f));
+    persistSaveAsset(*e);
+    emitJSON(serializeSaveAsset(*e));
+    return 0;
+  }
+
+  int cmdSaveFileRemoveField(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    if (a.field.empty()) { emitErr("--field is required"); return 1; }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::SAVE_FILE);
+    if (!e || !e->saveFileAsset) { emitErr("save asset not found: " + a.asset); return 1; }
+    auto &fields = e->saveFileAsset->fields;
+    for (auto it = fields.begin(); it != fields.end(); ++it) {
+      if (it->name == a.field) {
+        fields.erase(it);
+        persistSaveAsset(*e);
+        emitJSON(serializeSaveAsset(*e));
+        return 0;
+      }
+    }
+    emitErr("field not found: " + a.field);
+    return 1;
+  }
+
+  int cmdSaveFileSetField(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.asset.empty()) { emitErr("--asset is required"); return 1; }
+    if (a.field.empty()) { emitErr("--field is required"); return 1; }
+    auto *e = resolveAsset(project, a.asset, Project::FileType::SAVE_FILE);
+    if (!e || !e->saveFileAsset) { emitErr("save asset not found: " + a.asset); return 1; }
+
+    ::Project::Assets::SaveFileAsset::Field *f = nullptr;
+    for (auto &fld : e->saveFileAsset->fields) {
+      if (fld.name == a.field) { f = &fld; break; }
+    }
+    if (!f) { emitErr("field not found: " + a.field); return 1; }
+
+    if (!a.type.empty()) {
+      ::Project::Assets::SaveFileAsset::FieldType ft;
+      if (!parseSaveFieldType(a.type, ft)) {
+        emitErr("--type must be Int|Float|Bool|String|Vec2|Vec3"); return 1;
+      }
+      f->type = ft;
+    }
+    if (!a.to.empty()) {
+      // Rename (avoid collision)
+      for (const auto &fld : e->saveFileAsset->fields) {
+        if (&fld != f && fld.name == a.to) {
+          emitErr("field name collision: " + a.to); return 1;
+        }
+      }
+      f->name = a.to;
+    }
+    if (!a.value.empty()) {
+      auto j = parseValueJSON(a.value);
+      switch (f->type) {
+        case ::Project::Assets::SaveFileAsset::FT_INT:
+          if (j.is_number()) f->defInt = j.get<int32_t>();
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_FLOAT:
+          if (j.is_number()) f->defFloat = j.get<float>();
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_BOOL:
+          if (j.is_boolean()) f->defBool = j.get<bool>();
+          else if (j.is_number()) f->defBool = j.get<int>() != 0;
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_STRING:
+          if (j.is_string()) f->defString = j.get<std::string>();
+          break;
+        case ::Project::Assets::SaveFileAsset::FT_VEC2:
+        case ::Project::Assets::SaveFileAsset::FT_VEC3:
+          if (j.is_array()) {
+            for (size_t i = 0; i < j.size() && i < 3; ++i) {
+              if (j[i].is_number()) f->defVec[i] = j[i].get<float>();
+            }
+          }
+          break;
+      }
+    }
+    persistSaveAsset(*e);
+    emitJSON(serializeSaveAsset(*e));
     return 0;
   }
 
@@ -4824,6 +5071,12 @@ namespace CLI::Commands
     {"material-create",         cmdMaterialCreate},
     {"widget-create",           cmdWidgetCreate},
     {"particle-system-create",  cmdParticleSystemCreate},
+    {"save-file-create",        cmdSaveFileCreate},
+    {"save-file-list",          cmdSaveFileList},
+    {"save-file-describe",      cmdSaveFileDescribe},
+    {"save-file-add-field",     cmdSaveFileAddField},
+    {"save-file-remove-field",  cmdSaveFileRemoveField},
+    {"save-file-set-field",     cmdSaveFileSetField},
     // Widget structural editing reuses the prefab commands (widgets share
     // the prefab on-disk shape; resolvePrefabOrWidget accepts either type).
     {"widget-describe",         cmdPrefabDescribe},

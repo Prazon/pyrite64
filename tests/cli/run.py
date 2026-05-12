@@ -374,6 +374,21 @@ TESTS: List[Test] = [
     Test("material-set-prop",          "material-set-prop",   ["--asset", "TMat", "--field", "dither", "--value", "7"]),
     Test("particle-system-create",     "particle-system-create", ["--name", "TPtx"]),
 
+    # === save file (.p64save) =========================================
+    Test("save-file-create",           "save-file-create",       ["--name", "TSave"]),
+    Test("save-file-list",             "save-file-list"),
+    Test("save-file-add-int",          "save-file-add-field",    ["--asset", "TSave", "--field", "playerLevel", "--type", "Int", "--value", "1"]),
+    Test("save-file-add-float",        "save-file-add-field",    ["--asset", "TSave", "--field", "bestTime", "--type", "Float", "--value", "0.0"]),
+    Test("save-file-add-bool",         "save-file-add-field",    ["--asset", "TSave", "--field", "tutorialDone", "--type", "Bool", "--value", "false"]),
+    Test("save-file-add-string",       "save-file-add-field",    ["--asset", "TSave", "--field", "playerName", "--type", "String", "--value", "\"AAA\""]),
+    Test("save-file-add-vec3",         "save-file-add-field",    ["--asset", "TSave", "--field", "spawnPos", "--type", "Vec3", "--value", "[0,1,0]"]),
+    Test("save-file-describe",         "save-file-describe",     ["--asset", "TSave"]),
+    Test("save-file-set-field-rename", "save-file-set-field",    ["--asset", "TSave", "--field", "playerLevel", "--to", "level", "--value", "5"]),
+    Test("save-file-remove-field",     "save-file-remove-field", ["--asset", "TSave", "--field", "tutorialDone"]),
+    Test("save-file-add-bad-type",     "save-file-add-field",    ["--asset", "TSave", "--field", "x", "--type", "Garbage"], expect_fail=True),
+    Test("save-file-add-dup",          "save-file-add-field",    ["--asset", "TSave", "--field", "level", "--type", "Int"], expect_fail=True),
+    Test("save-file-remove-missing",   "save-file-remove-field", ["--asset", "TSave", "--field", "doesnotexist"], expect_fail=True),
+
     # === graph node-level ops (P0 patch) ==============================
     Test("graph-list-nodes-empty",     "graph-list-nodes",    ["--asset", "TGraph"]),
     Test("graph-add-node-start",       "graph-add-node",      ["--asset", "TGraph", "--type", "Start"]),

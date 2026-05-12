@@ -64,6 +64,7 @@ namespace
     ChipDef{ "Materials",   ICON_MDI_PALETTE_SWATCH,           FileType::MATERIAL,          false },
     ChipDef{ "Widgets",     ICON_MDI_VIEW_DASHBOARD_OUTLINE,   FileType::WIDGET_BLUEPRINT,  false },
     ChipDef{ "Particles",   ICON_MDI_SHIMMER,                  FileType::PARTICLE_SYSTEM,   false },
+    ChipDef{ "Save Files",  ICON_MDI_CONTENT_SAVE_OUTLINE,     FileType::SAVE_FILE,         false },
   };
 
   // Color the asset card with a thin stripe between icon and label so users can
@@ -83,6 +84,7 @@ namespace
       case FileType::FONT:              return IM_COL32(0xFF, 0xE6, 0x3C, 0xFF); // yellow
       case FileType::MATERIAL:          return IM_COL32(0x32, 0xC8, 0x46, 0xFF); // green
       case FileType::PARTICLE_SYSTEM:   return IM_COL32(0x14, 0x78, 0x1E, 0xFF); // dark green
+      case FileType::SAVE_FILE:         return IM_COL32(0x46, 0x46, 0xC8, 0xFF); // indigo
       case FileType::CODE_OBJ:
       case FileType::CODE_GLOBAL:       return IM_COL32(0x96, 0x96, 0x96, 0xFF); // grey
       case FileType::NODE_GRAPH:        return IM_COL32(0x14, 0xC8, 0xC8, 0xFF); // teal
@@ -117,6 +119,7 @@ namespace
       case FileType::RESOURCE_INSTANCE: return "Resource";
       case FileType::MATERIAL:          return "Material";
       case FileType::PARTICLE_SYSTEM:   return "Particles";
+      case FileType::SAVE_FILE:         return "Save File";
       default:                          return "Asset";
     }
   }
@@ -449,6 +452,26 @@ void Editor::AssetsBrowser::draw() {
       } else {
         Editor::Noti::add(Editor::Noti::Type::ERROR,
           "Failed to create particle system asset.");
+      }
+    }
+
+    if (ImGui::MenuItem(ICON_MDI_CONTENT_SAVE_OUTLINE " New Save File")) {
+      fs::path saveRoot = fs::path(ctx.project->getPath()) / "assets";
+      auto findFreeName = [&]() -> std::string {
+        for (int i = 1; i < 1000; ++i) {
+          std::string n = (i == 1) ? "SaveFile" : ("SaveFile_" + std::to_string(i));
+          if (!fs::exists(saveRoot / (n + ".p64save"))) return n;
+        }
+        return "SaveFile_X";
+      };
+      uint64_t newUUID = ctx.project->getAssets().createSaveFile(
+        findFreeName(), currentDir
+      );
+      if (newUUID) {
+        enterRenameForUUID(newUUID);
+      } else {
+        Editor::Noti::add(Editor::Noti::Type::ERROR,
+          "Failed to create save file asset.");
       }
     }
 
@@ -1699,6 +1722,7 @@ void Editor::AssetsBrowser::draw() {
       case FileType::NODE_GRAPH:  iconTxt = ICON_MDI_GRAPH_OUTLINE;            break;
       case FileType::MATERIAL:    iconTxt = ICON_MDI_PALETTE_SWATCH;           break;
       case FileType::PARTICLE_SYSTEM: iconTxt = ICON_MDI_SHIMMER;              break;
+      case FileType::SAVE_FILE:       iconTxt = ICON_MDI_CONTENT_SAVE_OUTLINE; break;
       default: break;
     }
     if (asset.texture) {
@@ -1767,6 +1791,9 @@ void Editor::AssetsBrowser::draw() {
           handled = true;
         } else if (asset.type == FileType::PARTICLE_SYSTEM) {
           ctx.editorScene->openParticleSystemEditor(asset.getUUID());
+          handled = true;
+        } else if (asset.type == FileType::SAVE_FILE) {
+          ctx.editorScene->openSaveFileEditor(asset.getUUID());
           handled = true;
         } else if (asset.type == FileType::FONT) {
           ctx.editorScene->openFontEditor(asset.getUUID());

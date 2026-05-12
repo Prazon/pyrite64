@@ -156,6 +156,11 @@ namespace
       // that reference them stamp the conf into their own InitData, so
       // no rom artifact is needed (same pattern as MATERIAL).
       type = Project::FileType::PARTICLE_SYSTEM;
+    } else if (ext == ".p64save") {
+      // Save-file assets are pure schema. The build collects every save
+      // asset and emits typed accessors into <project>/src/p64/saveTable.*.
+      // No rom artifact.
+      type = Project::FileType::SAVE_FILE;
     }
 
     if (type == Project::FileType::UNKNOWN) {
@@ -378,6 +383,18 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
       }
     } break;
 
+    case FileType::SAVE_FILE:
+    {
+      entry.saveFileAsset = std::make_shared<Assets::SaveFileAsset>();
+      entry.saveFileAsset->deserialize(Utils::FS::loadTextFile(path));
+      if (entry.saveFileAsset->uuid == 0) {
+        entry.saveFileAsset->uuid = entry.conf.uuid;
+        Utils::FS::saveTextFile(entry.path, entry.saveFileAsset->serialize());
+      } else {
+        entry.conf.uuid = entry.saveFileAsset->uuid;
+      }
+    } break;
+
     case FileType::MODEL_3D:
     {
       try{
@@ -522,6 +539,10 @@ void Project::AssetManager::reload() {
       }
 
       if (assetEntry.type == FileType::PARTICLE_SYSTEM) {
+        reloadEntry(assetEntry, path.string());
+      }
+
+      if (assetEntry.type == FileType::SAVE_FILE) {
         reloadEntry(assetEntry, path.string());
       }
 
@@ -820,7 +841,8 @@ bool Project::AssetManager::pollWatch()
       || entry->type == FileType::WIDGET_BLUEPRINT
       || entry->type == FileType::RESOURCE_INSTANCE
       || entry->type == FileType::MATERIAL
-      || entry->type == FileType::PARTICLE_SYSTEM)
+      || entry->type == FileType::PARTICLE_SYSTEM
+      || entry->type == FileType::SAVE_FILE)
     {
       reloadEntry(*entry, entry->path);
       if ((entry->type == FileType::PREFAB
@@ -940,7 +962,8 @@ void Project::AssetManager::save()
       || entry->type == FileType::PREFAB
       || entry->type == FileType::WIDGET_BLUEPRINT
       || entry->type == FileType::MATERIAL
-      || entry->type == FileType::PARTICLE_SYSTEM)
+      || entry->type == FileType::PARTICLE_SYSTEM
+      || entry->type == FileType::SAVE_FILE)
     {
       dirtyAssetMeta.erase(uuid);
       savedAssetMetaState.erase(uuid);
@@ -1246,6 +1269,53 @@ uint64_t Project::AssetManager::createParticleSystem(
 
   ::Project::Assets::ParticleSystemAsset asset{};
   asset.uuid = Utils::Hash::randomU64();
+  Utils::FS::saveTextFile(filePath, asset.serialize());
+
+  reload();
+  auto entry = getByPath(filePath.string());
+  return entry ? entry->getUUID() : 0;
+}
+
+uint64_t Project::AssetManager::createSaveFile(
+  const std::string &name, const std::string &subDir)
+{
+  if (name.empty()) return 0;
+  if (name.find_first_of("/\\:*?\"<>|") != std::string::npos) return 0;
+
+  auto assetPath = getAssetPath(project);
+  fs::path dirPath = assetPath;
+  if (!subDir.empty()) {
+    fs::path relPath{subDir};
+    if (!relPath.is_absolute()) {
+      relPath = relPath.lexically_normal();
+      bool hasParent = false;
+      for (const auto &part : relPath) {
+        if (part == "..") { hasParent = true; break; }
+      }
+      if (!hasParent) dirPath /= relPath;
+    }
+  }
+  fs::create_directories(dirPath);
+
+  auto filePath = dirPath / (name + ".p64save");
+  if (fs::exists(filePath)) return 0;
+
+  ::Project::Assets::SaveFileAsset asset{};
+  asset.uuid = Utils::Hash::randomU64();
+  // Sanitize the name into a C++ identifier for the generated namespace.
+  // Keep alnum + underscore; lead with underscore if first char is a digit.
+  std::string g;
+  g.reserve(name.size());
+  for (char c : name) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_') {
+      g.push_back(c);
+    } else {
+      g.push_back('_');
+    }
+  }
+  if (!g.empty() && g[0] >= '0' && g[0] <= '9') g.insert(g.begin(), '_');
+  asset.groupName = g;
   Utils::FS::saveTextFile(filePath, asset.serialize());
 
   reload();

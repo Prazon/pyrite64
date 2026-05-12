@@ -23,6 +23,11 @@ The dominant gap surface is **graph/node editing** (material, event, node-graph)
 | New Widget Blueprint (`:412`) | `widget-create` | OK | - |
 | New Material (`:430`) | `material-create` | OK | - |
 | New Particle System (`assetsBrowser.cpp` New menu) | `particle-system-create` | OK | - |
+| New Save File (`assetsBrowser.cpp` New menu) | `save-file-create` | OK | - |
+| Save File: add field (saveFileEditor) | `save-file-add-field` | OK | - |
+| Save File: remove field (saveFileEditor) | `save-file-remove-field` | OK | - |
+| Save File: rename / retype / set default (saveFileEditor) | `save-file-set-field` | OK | - |
+| Save File: list / describe (no GUI equiv; for tooling) | `save-file-list` / `save-file-describe` | OK | - |
 | New Object Script / Global Script (`:482-483`) | `script-create` | OK | - |
 | New Node Graph (`:484`) | `graph-create` | OK | - |
 | New Resource Instance (`:498`) | `resource-create` | OK | - |

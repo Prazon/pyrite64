@@ -16,6 +16,7 @@
 #include "assets/materialAsset.h"
 #include "assets/model3d.h"
 #include "assets/particleSystemAsset.h"
+#include "assets/saveFileAsset.h"
 #include "assets/resourceInstance.h"
 #include "assets/resourceType.h"
 #include "scene/prefab.h"
@@ -51,6 +52,7 @@ namespace Project
     MATERIAL,          // .p64mat material asset (node-graph driven)
     WIDGET_BLUEPRINT,  // .p64widget HUD/menu blueprint (a 2D-only Prefab variant)
     PARTICLE_SYSTEM,   // .p64ptx sprite particle-system asset (CPU-sim emitter)
+    SAVE_FILE,         // .p64save typed key/value EEPROM schema (Game::Save codegen)
 
     _SIZE
   };
@@ -96,6 +98,7 @@ namespace Project
     std::shared_ptr<Resource::Type> resourceType{nullptr};
     std::shared_ptr<Assets::MaterialAsset> materialAsset{nullptr};
     std::shared_ptr<Assets::ParticleSystemAsset> particleAsset{nullptr};
+    std::shared_ptr<Assets::SaveFileAsset> saveFileAsset{nullptr};
     AssetConf conf{};
     Utils::CPP::Struct params{};
 
@@ -238,6 +241,10 @@ namespace Project
       // with all defaults from ParticleSystemAsset's in-struct initializers.
       // Returns the new asset's UUID, or 0 on validation/IO failure.
       uint64_t createParticleSystem(const std::string &name, const std::string &subDir = {});
+      // Creates a fresh .p64save asset under <project>/assets/<subDir>/<name>.p64save
+      // with no fields. The group name defaults to a sanitized form of `name`.
+      // Returns the new asset's UUID, or 0 on validation/IO failure.
+      uint64_t createSaveFile(const std::string &name, const std::string &subDir = {});
       // Creates an editor-authored RESOURCE_TYPE schema (.p64restype) under
       // <project>/assets/<subDir>/<name>.p64restype with no fields. Returns
       // the new asset's UUID, or 0 on validation/IO failure.

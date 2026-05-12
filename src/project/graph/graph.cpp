@@ -79,6 +79,17 @@
 #include "nodes/nodeForEach.h"
 #include "nodes/nodeBreak.h"
 #include "nodes/nodeContinue.h"
+#include "nodes/nodeSaveCommit.h"
+#include "nodes/nodeSaveReload.h"
+#include "nodes/nodeSaveClearAll.h"
+#include "nodes/nodeSaveGetInt.h"
+#include "nodes/nodeSaveGetFloat.h"
+#include "nodes/nodeSaveGetBool.h"
+#include "nodes/nodeSaveGetString.h"
+#include "nodes/nodeSaveSetInt.h"
+#include "nodes/nodeSaveSetFloat.h"
+#include "nodes/nodeSaveSetBool.h"
+#include "nodes/nodeSaveSetString.h"
 
 namespace Project::Graph::Node
 {
@@ -219,6 +230,17 @@ namespace Project::Graph
     TABLE_ENTRY(Break),           // 65
     TABLE_ENTRY(Continue),        // 66
     TABLE_ENTRY(PrefabSuper),     // 67 — Super:: call into parent prefab dispatcher
+    TABLE_ENTRY(SaveCommit),      // 68
+    TABLE_ENTRY(SaveReload),      // 69
+    TABLE_ENTRY(SaveClearAll),    // 70
+    TABLE_ENTRY(SaveGetInt),      // 71
+    TABLE_ENTRY(SaveGetFloat),    // 72
+    TABLE_ENTRY(SaveGetBool),     // 73
+    TABLE_ENTRY(SaveGetString),   // 74
+    TABLE_ENTRY(SaveSetInt),      // 75
+    TABLE_ENTRY(SaveSetFloat),    // 76
+    TABLE_ENTRY(SaveSetBool),     // 77
+    TABLE_ENTRY(SaveSetString),   // 78
   });
 
   const std::vector<std::string> & Graph::getNodeNames()
@@ -318,6 +340,17 @@ namespace Project::Graph
       { 65, Node::Break::NAME,         "Flow Control", EXEC,         0             },
       { 66, Node::Continue::NAME,      "Flow Control", EXEC,         0             },
       { 67, Node::PrefabSuper::NAME,   "Functions",    EXEC,         EXEC          },
+      { 68, Node::SaveCommit::NAME,    "Save",         EXEC,         EXEC          },
+      { 69, Node::SaveReload::NAME,    "Save",         EXEC,         EXEC          },
+      { 70, Node::SaveClearAll::NAME,  "Save",         EXEC,         EXEC          },
+      { 71, Node::SaveGetInt::NAME,    "Save",         EXEC,         EXEC | INT    },
+      { 72, Node::SaveGetFloat::NAME,  "Save",         EXEC,         EXEC | FLOAT  },
+      { 73, Node::SaveGetBool::NAME,   "Save",         EXEC,         EXEC | BOOL   },
+      { 74, Node::SaveGetString::NAME, "Save",         EXEC,         EXEC | STR    },
+      { 75, Node::SaveSetInt::NAME,    "Save",         EXEC | INT,   EXEC          },
+      { 76, Node::SaveSetFloat::NAME,  "Save",         EXEC | FLOAT, EXEC          },
+      { 77, Node::SaveSetBool::NAME,   "Save",         EXEC | BOOL,  EXEC          },
+      { 78, Node::SaveSetString::NAME, "Save",         EXEC | STR,   EXEC          },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Palette entries out of sync with NODE_TABLE");

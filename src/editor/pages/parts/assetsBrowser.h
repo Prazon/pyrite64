@@ -34,6 +34,7 @@ namespace Editor
         CHIP_MATERIAL,
         CHIP_WIDGET,
         CHIP_PARTICLES,
+        CHIP_SAVE_FILE,
         CHIP_COUNT
       };
 

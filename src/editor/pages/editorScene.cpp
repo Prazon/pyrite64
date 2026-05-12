@@ -35,6 +35,7 @@
 #include "parts/assets/audioEditor.h"
 #include "parts/assets/resourceTypeEditorWindow.h"
 #include "parts/assets/resourceInstanceEditor.h"
+#include "parts/assets/saveFileEditorWindow.h"
 #include "../../project/compile/compileErrors.h"
 
 namespace
@@ -165,6 +166,7 @@ void Editor::Scene::onProjectClosing()
   audioEditors.clear();
   resourceTypeEditors.clear();
   resourceInstanceEditors.clear();
+  saveFileEditors.clear();
   nodeEditors.clear();
 
   matThumbnails.clear();
@@ -310,6 +312,16 @@ void Editor::Scene::openResourceTypeEditor(uint64_t assetUUID)
     it->second->focus();
   } else {
     resourceTypeEditors[assetUUID] = std::make_shared<ResourceTypeEditorWindow>(assetUUID);
+  }
+}
+
+void Editor::Scene::openSaveFileEditor(uint64_t assetUUID)
+{
+  auto it = saveFileEditors.find(assetUUID);
+  if (it != saveFileEditors.end()) {
+    it->second->focus();
+  } else {
+    saveFileEditors[assetUUID] = std::make_shared<SaveFileEditorWindow>(assetUUID);
   }
 }
 
@@ -864,6 +876,12 @@ void Editor::Scene::draw()
   }
   for(auto &uuid : delResInstUUIDs) resourceInstanceEditors.erase(uuid);
 
+  std::vector<uint64_t> delSaveUUIDs{};
+  for(auto &[uuid, editor] : saveFileEditors) {
+    if (!editor->draw(dockSpaceID)) delSaveUUIDs.push_back(uuid);
+  }
+  for(auto &uuid : delSaveUUIDs) saveFileEditors.erase(uuid);
+
   // SPBF64 fork: graph + inspector now take an explicit scene + selection.
   // Here we drive them with the project's active scene and the main selection.
   // PrefabEditor windows below set up their own EditScope and call these
@@ -1070,6 +1088,7 @@ void Editor::Scene::draw()
         section(ICON_MDI_CODE_BRACES,            "Code",               codeEditors);
         section(ICON_MDI_PALETTE_SWATCH,         "Materials",          materialEditors);
         section(ICON_MDI_SHIMMER,                "Particle Systems",   particleSystemEditors);
+        section(ICON_MDI_CONTENT_SAVE_OUTLINE,   "Save Files",         saveFileEditors);
         if (!nodeEditors.empty()) {
           if (any) ImGui::Separator();
           ImGui::TextDisabled("Node Graphs");
