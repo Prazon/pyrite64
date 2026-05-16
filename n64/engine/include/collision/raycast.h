@@ -16,6 +16,11 @@ namespace P64::Coll {
 
   constexpr int RAYCAST_MAX_COLLIDER_TESTS = 50;
   constexpr int RAYCAST_MAX_TRIANGLE_TESTS = 30;
+  // Static level geometry tends to be denser along a ray than dynamic
+  // bodies, so the mesh-collider broadphase gets its own larger cap.
+  // Overflow past this silently drops candidates (a closer hit could be
+  // missed); the raycast logs it in debug builds so it stays visible.
+  constexpr int RAYCAST_MAX_MESH_CANDIDATES = 128;
 
   enum class RaycastColliderTypeFlags : uint8_t {
     MESH_COLLIDERS = (1 << 0),

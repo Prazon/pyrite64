@@ -1510,8 +1510,11 @@ namespace P64::Coll {
 
     // Test mesh colliders
     if(hasFlag(ray.collTypes, RaycastColliderTypeFlags::MESH_COLLIDERS)) {
-      NodeProxy meshCandidates[RAYCAST_MAX_COLLIDER_TESTS];
-      int meshCount = meshColliderAABBTree.queryRay(ray, meshCandidates, RAYCAST_MAX_COLLIDER_TESTS);
+      NodeProxy meshCandidates[RAYCAST_MAX_MESH_CANDIDATES];
+      int meshCount = meshColliderAABBTree.queryRay(ray, meshCandidates, RAYCAST_MAX_MESH_CANDIDATES);
+      if(meshCount >= RAYCAST_MAX_MESH_CANDIDATES) {
+        debugf("[collision] raycast mesh-candidate cap hit (%d); a closer hit may be missed\n", meshCount);
+      }
       for(int m = 0; m < meshCount; ++m) {
         const MeshCollider* mesh = static_cast<const MeshCollider*>(meshColliderAABBTree.getNodeData(meshCandidates[m]));
         if(!mesh || mesh->triangleCount_ == 0) continue;
