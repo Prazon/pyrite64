@@ -456,6 +456,23 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
             entry.mesh3D = std::make_shared<Renderer::N64Mesh>();
           }
           entry.mesh3D->fromT3DM(entry.model, *this);
+
+          // Faithful-but-flagged: the model renders with the real N64 S10.5
+          // wrap artifacts intact; we just tell the user why and where so
+          // they can rescale UVs or tile the texture.
+          const auto &uvDiag = entry.mesh3D->getUvDiag();
+          if (uvDiag.outOfRange) {
+            std::string msg = entry.name + ": material '" + uvDiag.materialName
+              + "' UVs reach ~" + std::to_string(uvDiag.worstPixel)
+              + "px, past the N64 S10.5 texel limit (~"
+              + std::to_string(Renderer::N64Mesh::S10_5_MAX_PIXEL)
+              + "px). Texture will wrap and color-alias on hardware; "
+                "rescale UVs or tile the texture.";
+            Utils::Logger::log(msg, Utils::Logger::LEVEL_WARN);
+            if (!reloadInBulk && ctx.window) {
+              Editor::Noti::add(Editor::Noti::Type::WARN, msg);
+            }
+          }
         }
       } catch (std::exception &e) {
         Utils::Logger::log("Failed to load 3D model asset: " + entry.path + " - " + e.what(), Utils::Logger::LEVEL_ERROR);

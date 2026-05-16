@@ -191,6 +191,9 @@ TESTS: List[Test] = [
     Test("asset-list",                 "asset-list",          reset=True),
     Test("asset-list-image",           "asset-list",          ["--type", "image"]),
     Test("asset-list-prefab",          "asset-list",          ["--type", "prefab"]),
+    # model3d list doubles as a headless scanner for the N64 S10.5 UV-range
+    # diagnostic (uvOutOfRange flag); in-range fixtures must NOT carry it.
+    Test("asset-list-model3d",         "asset-list",          ["--type", "model3d"]),
     Test("asset-describe-image",       "asset-describe",      ["--asset", "crate32.png"]),
     Test("asset-describe-model",       "asset-describe",      ["--asset", "box.glb"]),
     Test("asset-describe-conf-image",  "asset-describe-conf", ["--asset", "crate32.png"]),

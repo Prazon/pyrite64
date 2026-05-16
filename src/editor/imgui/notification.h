@@ -11,6 +11,7 @@ namespace Editor::Noti
   {
     INFO,
     SUCCESS,
+    WARN,
     ERROR
   };
 

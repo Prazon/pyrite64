@@ -7,6 +7,9 @@
 #include "../context.h"
 #include "../project/assetManager.h"
 #include <filesystem>
+#include <algorithm>
+#include <cstdlib>
+#include <cstdint>
 
 #include "scene.h"
 #include "../shader/defines.h"
@@ -27,6 +30,7 @@ void Renderer::N64Mesh::fromT3DM(const Project::Assets::Model3D &model3d, Projec
   mesh.vertices.clear();
   mesh.indices.clear();
   parts.clear();
+  uvDiag = {};
 
   auto &t3dmData = model3d.t3dm;
   parts.resize(t3dmData.models.size());
@@ -43,10 +47,19 @@ void Renderer::N64Mesh::fromT3DM(const Project::Assets::Model3D &model3d, Projec
     part->texBindings[0].sampler = texSamplerRepeat;
     part->texBindings[1] = part->texBindings[0];
 
+    // Track this part's raw s10.5 UV extents to detect models that exceed the
+    // RDP's S10.5 texel range (see UvRangeDiag). int16 saturates near
+    // ±1024px, and a UV span past that also wraps under wrappedMirror().
+    int16_t minS = INT16_MAX, maxS = INT16_MIN;
+    int16_t minT = INT16_MAX, maxT = INT16_MIN;
+
     //model.material.colorCombiner
     for (auto &tri : model.triangles) {
 
       for (auto &vert : tri.vert) {
+
+        minS = std::min(minS, vert.s); maxS = std::max(maxS, vert.s);
+        minT = std::min(minT, vert.t); maxT = std::max(maxT, vert.t);
 
         uint8_t r = (vert.rgba >> 24) & 0xFF;
         uint8_t g = (vert.rgba >> 16) & 0xFF;
@@ -71,6 +84,23 @@ void Renderer::N64Mesh::fromT3DM(const Project::Assets::Model3D &model3d, Projec
       mesh.indices.push_back(idx++);
       mesh.indices.push_back(idx++);
       mesh.indices.push_back(idx++);
+    }
+
+    if (maxS >= minS) // part had at least one vert
+    {
+      // s10.5 raw -> pixels. Flag both large absolute coords (int16
+      // saturation) and large UV spans (tiled past the S10.5 range, which
+      // wraps under wrappedMirror and produces the rainbow aliasing).
+      int absPx  = std::max({ std::abs((int)minS), std::abs((int)maxS),
+                              std::abs((int)minT), std::abs((int)maxT) }) / 32;
+      int spanPx = std::max((int)maxS - minS, (int)maxT - minT) / 32;
+      int worst  = std::max(absPx, spanPx);
+      if (worst > S10_5_MAX_PIXEL && worst > uvDiag.worstPixel)
+      {
+        uvDiag.outOfRange   = true;
+        uvDiag.worstPixel   = worst;
+        uvDiag.materialName = part->materialName;
+      }
     }
 
     ++part;

@@ -33,12 +33,25 @@ namespace Renderer
         UniformN64Material material{};
         SDL_GPUTextureSamplerBinding texBindings[2]{};
       };
+      // Diagnostic for the N64 RDP S10.5 texel-coordinate limit. UVs are kept
+      // in pixel space as int16 (s10.5), so a coordinate magnitude past
+      // ~1024px (or a UV span past that) saturates/wraps and produces the
+      // rainbow color artifacts on real hardware. We keep rendering it
+      // faithfully and only report it.
+      struct UvRangeDiag
+      {
+        bool outOfRange{false};
+        int worstPixel{0};          // largest |coord| or UV span seen, in pixels
+        std::string materialName{}; // material of the worst offending part
+      };
+
     private:
 
       Mesh mesh{};
       std::vector<MeshPart> parts{};
       bool loaded{false};
       Scene *scene{};
+      UvRangeDiag uvDiag{};
 
     public:
       struct ObjectRef
@@ -63,5 +76,10 @@ namespace Renderer
 
       const Utils::AABB& getAABB() const { return mesh.getAABB(); }
       bool isLoaded() const { return loaded; }
+      const UvRangeDiag& getUvDiag() const { return uvDiag; }
+
+      // Pixel coordinate where the RDP's S10.5 texel format saturates
+      // (int16 raw / 32). Beyond this UVs wrap and color-alias on hardware.
+      static constexpr int S10_5_MAX_PIXEL = 1024;
   };
 }

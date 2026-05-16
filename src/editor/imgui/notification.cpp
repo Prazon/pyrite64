@@ -30,7 +30,7 @@ namespace Editor::Noti
   void add(Type type, const std::string &text)
   {
     std::lock_guard<std::mutex> lock{notiMutex};
-    float time = type == Type::ERROR ? (STAY_TIME * 2) : STAY_TIME;
+    float time = (type == Type::ERROR || type == Type::WARN) ? (STAY_TIME * 2) : STAY_TIME;
     notifications.push_back({type, text, time, time});
   }
 
@@ -81,6 +81,8 @@ namespace Editor::Noti
 
       if(it->type == Type::ERROR) {
         bgColor = ImGui::GetColorU32({0.4f, 0.2f, 0.2f, 0.9f});
+      } else if(it->type == Type::WARN) {
+        bgColor = ImGui::GetColorU32({0.4f, 0.34f, 0.15f, 0.9f});
       }
 
       drawList->AddRectFilled(boxPos, {boxPos.x + boxSize.x, boxPos.y + boxSize.y}, bgColor, 5.0f);
@@ -89,6 +91,8 @@ namespace Editor::Noti
       auto iconPos = ImVec2{boxPos.x + boxSize.x - PADDING.x-14_px, boxPos.y + PADDING.y};
       if (it->type == Type::SUCCESS) {
         drawList->AddText(iconPos, ImGui::GetColorU32({0.2f, 1.0f, 0.2f, 0.9f}), ICON_MDI_CHECK_CIRCLE);
+      } else if (it->type == Type::WARN) {
+        drawList->AddText(iconPos, ImGui::GetColorU32({1.0f, 0.8f, 0.2f, 0.9f}), ICON_MDI_ALERT);
       } else if (it->type == Type::ERROR) {
         drawList->AddText(iconPos, ImGui::GetColorU32({1.0f, 0.2f, 0.2f, 0.9f}), ICON_MDI_ALERT_CIRCLE);
       }

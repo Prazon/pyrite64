@@ -331,6 +331,10 @@ Delivered as CLI commands (all smoketested in `tests/cli/run.py`):
 - `--cmd run` (launch the last-built ROM without rebuilding). Ergonomic shell call, not really a CLI gap; the .z64 path is already known.
 - Show-in-Explorer / Copy-Path / Open-with-OS shell sugar. `asset-describe` returns the on-disk path; the rest is a host-shell concern.
 
+## Diagnostics parity (non-command)
+
+- **N64 S10.5 UV-range warning.** The editor renders large-texture/large-object UVs faithfully (the rainbow wrap artifact is real hardware behaviour) but now flags it: a `WARN` toast + Log line on model load, mirrored headless as `uvRange{outOfRange,worstPixel,limitPixel,material}` in `asset-describe` (detailed) and a compact `uvOutOfRange:true` in `asset-list` (so `asset-list --type model3d` is a headless scanner). Build-time emission rides the shared asset-load `Logger::log(WARN)` → stdout in `--cli --cmd build`. Smoketested via `asset-list-model3d` (in-range fixtures must stay flag-free).
+
 ## CLI bugs fixed by this work
 
 - **Camera `component-describe` aborted when stdout was piped.** `Camera::init` dereferenced `scene` without a null check; the editor side never hit it (a scene was always loaded) but the CLI path called it with no loaded scene. Fixed in `src/project/component/types/compCamera.cpp`.

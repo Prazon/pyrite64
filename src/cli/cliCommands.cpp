@@ -348,6 +348,21 @@ namespace
             j["resource"] = nlohmann::json::parse(e.resource->serialize(), nullptr, false);
           }
           break;
+        case Project::FileType::MODEL_3D:
+          // Headless surfacing of the N64 S10.5 UV-range diagnostic, so
+          // `make p64` / agents catch it without the GUI. Rendering itself
+          // is unchanged; this only reports.
+          if (e.mesh3D) {
+            const auto &d = e.mesh3D->getUvDiag();
+            if (d.outOfRange) {
+              auto &uv = j["uvRange"];
+              uv["outOfRange"] = true;
+              uv["worstPixel"] = d.worstPixel;
+              uv["limitPixel"] = Renderer::N64Mesh::S10_5_MAX_PIXEL;
+              uv["material"]   = d.materialName;
+            }
+          }
+          break;
         case Project::FileType::RESOURCE_TYPE:
           j["fields"] = nlohmann::json::array();
           for (const auto &f : e.params.fields) {
@@ -361,6 +376,12 @@ namespace
           break;
         default: break;
       }
+    }
+    // Compact flag in list output too, so `asset-list --type model3d` works
+    // as a headless scanner for the N64 S10.5 UV-range issue.
+    if (e.type == Project::FileType::MODEL_3D && e.mesh3D
+        && e.mesh3D->getUvDiag().outOfRange) {
+      j["uvOutOfRange"] = true;
     }
     return j;
   }
