@@ -490,6 +490,12 @@ TESTS: List[Test] = [
     Test("project-set-conf",           "project-set-conf",    ["--field", "name", "--value", '"SmokeProj"']),
     Test("project-set-coll-layer",     "project-set-collision-layer", ["--field", "3", "--name", "Hazard"]),
     Test("project-set-coll-bad-idx",   "project-set-collision-layer", ["--field", "9", "--name", "Out"], expect_fail=True),
+    Test("project-reset-conf",         "project-reset-conf",  ["--field", "name"]),
+    Test("project-reset-conf-bad",     "project-reset-conf",  ["--field", "nope"], expect_fail=True),
+    Test("prefs-describe",             "prefs-describe"),
+    Test("prefs-set",                  "prefs-set",           ["--field", "moveSpeed", "--value", "200"]),
+    Test("prefs-reset",                "prefs-reset",         ["--field", "moveSpeed"]),
+    Test("prefs-reset-bad",            "prefs-reset",         ["--field", "nope"], expect_fail=True),
 
     # project-create bootstraps a fresh project from the empty template.
     # Runs via the dispatchBootstrap path so it doesn't need a pre-existing

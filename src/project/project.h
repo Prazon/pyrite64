@@ -106,6 +106,9 @@ namespace Project
 
       void save();
       void saveConfig();
+      // Public view of config-only dirtiness (used by the Project Settings
+      // window to show an unsaved-changes marker).
+      [[nodiscard]] bool hasUnsavedConfig() const { return isConfigDirty(); }
       void markDirty() { dirty = true; }
       void markSaved() { dirty = false; savedState = conf.serialize(); }
       [[nodiscard]] bool isDirty() const { return dirty || conf.serialize() != savedState || assets.isDirty(); }

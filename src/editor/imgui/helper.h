@@ -4,6 +4,7 @@
 */
 #pragma once
 #include <string>
+#include <cctype>
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "IconsMaterialDesignIcons.h"
@@ -220,6 +221,111 @@ namespace ImTable
     ImGui::AlignTextToFramePadding();
     ImGui::Text("%s", name.c_str());
     ImGui::TableSetColumnIndex(1);
+  }
+
+  // Defined later in this header; forward-declared so the pref helpers below
+  // (which precede it) can instantiate against it.
+  template<typename T> bool typedInput(T *value);
+
+  // --- Settings search filter (UE5-style) -----------------------------------
+  // When non-empty (already lowercased), settings-page rows whose label does
+  // not contain this substring are hidden. Only the self-contained pref
+  // helpers below honor it; raw ImGui rows must guard with rowVisible().
+  inline std::string g_searchFilter;
+
+  inline bool rowVisible(const std::string &name) {
+    if (g_searchFilter.empty()) return true;
+    std::string n; n.reserve(name.size());
+    for (char c : name) n += (char)std::tolower((unsigned char)c);
+    return n.find(g_searchFilter) != std::string::npos;
+  }
+
+  inline void setFilter(const std::string &raw) {
+    g_searchFilter.clear();
+    g_searchFilter.reserve(raw.size());
+    for (char c : raw) g_searchFilter += (char)std::tolower((unsigned char)c);
+  }
+
+  // Small "(?)" affordance with a hover tooltip (UE5 setting descriptions).
+  inline void prefHelp(const char *help) {
+    if (!help || !*help) return;
+    ImGui::SameLine(0, 6);
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
+  }
+
+  // Label cell for a settings row: applies the search filter, draws the
+  // label, an optional help marker and a restart-required badge. Returns
+  // false (and emits nothing) when the row is filtered out.
+  inline bool prefRow(const std::string &name, const char *help, bool restart) {
+    if (!rowVisible(name)) return false;
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%s", name.c_str());
+    prefHelp(help);
+    if (restart) {
+      ImGui::SameLine(0, 6);
+      ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), ICON_MDI_RESTART);
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Restart required to take effect.");
+    }
+    ImGui::TableSetColumnIndex(1);
+    return true;
+  }
+
+  // Settings-page input bound to a default. Shows a revert-to-default button
+  // (UE5 yellow arrow) whenever the value differs from `def`.
+  template<typename T>
+  bool addPref(const std::string &name, T &value, const T &def,
+               const char *help = nullptr, bool restart = false) {
+    if (!prefRow(name, help, restart)) return false;
+    ImGui::PushID(name.c_str());
+    bool isDef = (value == def);
+    float full = ImGui::GetContentRegionAvail().x;
+    ImGui::PushItemWidth(isDef ? -FLT_MIN : (full - ImGui::GetFrameHeightWithSpacing()));
+    bool changed = typedInput<T>(&value);
+    ImGui::PopItemWidth();
+    if (!isDef) {
+      ImGui::SameLine(0, 2);
+      if (ImGui::Button(ICON_MDI_BACKUP_RESTORE "##reset", ImVec2(-FLT_MIN, 0))) {
+        value = def;
+        changed = true;
+      }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to default.");
+    }
+    ImGui::PopID();
+    return changed;
+  }
+
+  // Combo variant of addPref for enum/index fields.
+  inline bool addPrefCombo(const std::string &name, int &value, int def,
+                           const std::vector<const char*> &items,
+                           const char *help = nullptr, bool restart = false) {
+    if (!prefRow(name, help, restart)) return false;
+    ImGui::PushID(name.c_str());
+    bool isDef = (value == def);
+    float full = ImGui::GetContentRegionAvail().x;
+    ImGui::SetNextItemWidth(isDef ? -FLT_MIN : (full - ImGui::GetFrameHeightWithSpacing()));
+    bool changed = false;
+    const char *preview = (value >= 0 && value < (int)items.size()) ? items[value] : "<None>";
+    if (ImGui::BeginCombo("##c", preview)) {
+      for (int i = 0; i < (int)items.size(); ++i) {
+        bool sel = (i == value);
+        if (ImGui::Selectable(items[i], sel)) { value = i; changed = true; }
+        if (sel) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    if (!isDef) {
+      ImGui::SameLine(0, 2);
+      if (ImGui::Button(ICON_MDI_BACKUP_RESTORE "##reset", ImVec2(-FLT_MIN, 0))) {
+        value = def;
+        changed = true;
+      }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to default.");
+    }
+    ImGui::PopID();
+    return changed;
   }
 
   template<typename GetLabel, typename ApplySelection>

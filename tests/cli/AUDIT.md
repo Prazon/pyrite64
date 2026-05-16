@@ -141,8 +141,22 @@ P2: `scene-reset-layers` — niche; agents can rebuild via add/remove. Includes 
 | ROM title / save type / region-free / RTC (`:101-123`) | `project-set-conf` | OK | - |
 | Collision layer names (`:131-135`) | `project-set-conf` field=collLayerNames | partial (array set works, no per-index helper) | P2 |
 | Emulator path / N64_INST path (`:141-142`) | `project-set-conf` | OK | - |
+| Per-property revert-to-default arrow (UE5 shell) | `project-reset-conf --field <key>` (or `--field all`) | OK | - |
+| Search filter / category tree (UE5 shell) | presentational; no data model | n/a | - |
 
-No P0/P1 gaps (set-conf is generic). Optional P2: `project-set-collision-layer --index N --name "Foo"` for ergonomics.
+No P0/P1 gaps (set-conf is generic; reset-conf mirrors the revert arrows).
+
+### Editor preferences (`src/editor/pages/parts/preferenceOverlay.cpp`)
+
+Global user-level prefs (`preferences.json`); the PROJ arg is ignored.
+
+| GUI action | CLI command | Status | Severity |
+|-|-|-|-|
+| Inspect all preferences | `prefs-describe` | OK | - |
+| Edit any pref (speeds, AA, VSync, FPS, euler, content browser, keymap) | `prefs-set --field <k> --value <v>` | OK | - |
+| Per-property revert-to-default arrow | `prefs-reset --field <k>` (or `--field all`) | OK | - |
+| Keymap preset / per-action rebind | `prefs-set --field keymapPreset` / `--field keymap` | OK (raw JSON) | - |
+| Search filter / category tree | presentational; no data model | n/a | - |
 
 ### Top menu / global hotkeys (`editorScene.cpp:932-1153`, `window.cpp`)
 

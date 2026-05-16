@@ -3,6 +3,7 @@
 * @license MIT
 */
 #pragma once
+#include <string>
 #include "keymap.h"
 
 namespace Editor
@@ -30,6 +31,10 @@ namespace Editor
 
     void load();
     void save();
+
+    // Serialized form, without touching disk. Used to detect changes for
+    // auto-save (UE5 Editor Preferences apply/persist instantly).
+    std::string toJson() const;
 
     void applyKeymapPreset();
     Input::Keymap getCurrentKeymapPreset() const;

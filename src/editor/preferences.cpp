@@ -44,9 +44,9 @@ void Editor::Preferences::load()
   }
 }
 
-void Editor::Preferences::save()
+std::string Editor::Preferences::toJson() const
 {
-  std::string json = Utils::JSON::Builder{}
+  return Utils::JSON::Builder{}
     .set("keymapPreset", (uint32_t)keymapPreset)
     .set("keymap", keymap.serialize(keymapPreset))
     .set("zoomSpeed", zoomSpeed)
@@ -61,9 +61,13 @@ void Editor::Preferences::save()
     .set("mouseWheelModifiesSpeed", mouseWheelModifiesSpeed)
     .set("contentBrowserMode", (int)contentBrowserMode)
     .toString();
+}
+
+void Editor::Preferences::save()
+{
   auto prefPath = getPrefsPath();
   printf("Saving prefs to %s\n", prefPath.c_str());
-  Utils::FS::saveTextFile(prefPath, json);
+  Utils::FS::saveTextFile(prefPath, toJson());
 }
 
 void Editor::Preferences::applyKeymapPreset()

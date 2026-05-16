@@ -32,6 +32,7 @@
 #include "parts/assets/particleSystemEditor.h"
 #include "parts/assets/widgetBlueprintEditor.h"
 #include "parts/assets/fontEditor.h"
+#include "parts/assets/assetEditorDocking.h"
 #include "parts/assets/audioEditor.h"
 #include "parts/assets/resourceTypeEditorWindow.h"
 #include "parts/assets/resourceInstanceEditor.h"
@@ -943,45 +944,61 @@ void Editor::Scene::draw()
     memoryDashboard.draw();
   ImGui::End();
 
-  if (preferencesOpen) {
-    ImVec2 windowSize{500_px, 300_px};
-    auto screenSize = ImGui::GetMainViewport()->WorkSize;
-    ImGui::SetNextWindowPos({(screenSize.x - windowSize.x) / 2, (screenSize.y - windowSize.y) / 2}, ImGuiCond_Appearing, {0.0f, 0.0f});
-    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Appearing);
-
-    // Thick borders
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0_px);
-    ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    ImGui::Begin(ICON_MDI_COG " Preferences", &preferencesOpen, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking);
-    if (prefOverlay.draw()) {
-      preferencesOpen = false;
+  // Settings windows dock as siblings of the Scene Editor / asset-editor
+  // tabs, using the same proven helper the asset editors use: force the
+  // dock on the first frame after (re)open so a stale floating imgui.ini
+  // entry can't keep them detached, then fall back to FirstUseEver so the
+  // user's later rearrangements stick. The stable ### id invalidates the
+  // pre-rework (NoDocking) imgui.ini entries for these window names.
+  {
+    ImGuiID settingsDockID = dockTopID;
+    if (auto *w = ImGui::FindWindowByName("Scene Editor")) {
+      if (w->DockId) settingsDockID = w->DockId;
     }
-    ImGui::End();
 
-    ImGui::PopStyleColor(1);
-    ImGui::PopStyleVar(1);
-  }
+    // Re-dock on each open transition (closed -> open).
+    static bool prefPrevOpen = false, projPrevOpen = false;
+    static bool prefFirstDock = false, projFirstDock = false;
+    if (preferencesOpen      && !prefPrevOpen) prefFirstDock = true;
+    if (projectSettingsOpen  && !projPrevOpen) projFirstDock = true;
+    prefPrevOpen = preferencesOpen;
+    projPrevOpen = projectSettingsOpen;
 
-  if (projectSettingsOpen) {
-    ImVec2 windowSize{600_px,400_px};
-    auto screenSize = ImGui::GetMainViewport()->WorkSize;
-    ImGui::SetNextWindowPos({(screenSize.x - windowSize.x) / 2, (screenSize.y - windowSize.y) / 2}, ImGuiCond_Appearing, {0.0f, 0.0f});
-    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Appearing);
+    if (preferencesOpen) {
+      ImGui::SetNextWindowSize(ImVec2(900_px, 600_px), ImGuiCond_FirstUseEver);
+      Editor::setupAssetEditorDocking(settingsDockID, prefFirstDock);
+      // Begin() returns false for an inactive docked tab / collapsed window;
+      // the body uses ImGui tables, so it must be skipped when not visible.
+      bool vis = ImGui::Begin(ICON_MDI_COG " Preferences###PyritePrefsWin",
+        &preferencesOpen, ImGuiWindowFlags_NoCollapse);
+      if (vis) prefOverlay.draw();
+      ImGui::End();
 
-    // Thick borders
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0_px);
-    ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    ImGui::Begin(ICON_MDI_FILE_COG_OUTLINE " Project Settings", &projectSettingsOpen,
-      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
-      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    );
-    if (projectSettings.draw()) {
-      projectSettingsOpen = false;
+      // Auto-apply + auto-persist (UE5 Editor Preferences behavior). Seed the
+      // baseline the first frame the window is open so opening it never writes.
+      {
+        static bool seeded = false;
+        static std::string lastJson{};
+        std::string cur = ctx.prefs.toJson();
+        if (!seeded) { lastJson = cur; seeded = true; }
+        else if (cur != lastJson) { ctx.prefs.save(); lastJson = cur; }
+      }
     }
-    ImGui::End();
 
-    ImGui::PopStyleColor(1);
-    ImGui::PopStyleVar(1);
+    if (projectSettingsOpen) {
+      ImGui::SetNextWindowSize(ImVec2(900_px, 600_px), ImGuiCond_FirstUseEver);
+      Editor::setupAssetEditorDocking(settingsDockID, projFirstDock);
+      bool vis = ImGui::Begin(
+        ICON_MDI_FILE_COG_OUTLINE " Project Settings###PyriteProjSettingsWin",
+        &projectSettingsOpen,
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+      );
+      if (vis && projectSettings.draw()) {
+        projectSettingsOpen = false;
+      }
+      ImGui::End();
+    }
   }
 
   // Top bar — anchor to the main viewport (global desktop coords with

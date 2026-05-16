@@ -28,6 +28,8 @@
 #include "../project/prefabFunctions.h"
 #include "../project/prefabScaffolder.h"
 #include "../project/graph/graph.h"
+#include "../utils/proc.h"
+#include "../editor/preferences.h"
 #include "../project/materialGraph/graph.h"
 #include "../project/assets/materialAsset.h"
 #include "../project/compile/compileErrors.h"
@@ -3117,6 +3119,104 @@ namespace
     return 0;
   }
 
+  // Mirrors the GUI's per-property revert-to-default arrow. --field=<key>
+  // resets one conf key to the ProjectConf default; --field=all resets the
+  // whole conf. Round-trips through disk JSON like project-set-conf.
+  int cmdProjectResetConf(const CLI::Commands::Args &a, Project::Project &project)
+  {
+    if (a.field.empty()) {
+      emitErr("--field=<key> (or --field=all) is required"); return 1;
+    }
+    auto defaults = nlohmann::json::parse(Project::ProjectConf{}.serialize(), nullptr, false);
+    if (!defaults.is_object()) { emitErr("could not build defaults"); return 1; }
+
+    auto cfgPath = fs::path(project.getPath()) / "project.p64proj";
+    auto j = Utils::JSON::loadFile(cfgPath);
+    if (!j.is_object()) { emitErr("project conf is not an object"); return 1; }
+
+    if (a.field == "all") {
+      j = defaults;
+    } else if (defaults.contains(a.field)) {
+      j[a.field] = defaults[a.field];
+    } else {
+      emitErr("unknown conf field: " + a.field); return 1;
+    }
+    Utils::FS::saveTextFile(cfgPath.string(), j.dump(2));
+    nlohmann::json out;
+    out["reset"] = a.field;
+    out["conf"] = j;
+    emitJSON(out);
+    return 0;
+  }
+
+  // ── Editor preferences (global, user-level; not per-project) ───────
+  // These operate directly on the user's preferences.json so the headless
+  // surface mirrors the GUI Preferences window (search/reset/auto-save).
+
+  fs::path prefsJsonPath() {
+    return Utils::Proc::getAppDataPath() / "preferences.json";
+  }
+
+  int cmdPrefsDescribe(const CLI::Commands::Args &/*a*/, Project::Project &/*project*/)
+  {
+    Editor::Preferences p{};
+    p.load(); // falls back to defaults if the file is missing/invalid
+    nlohmann::json out;
+    out["path"] = prefsJsonPath().string();
+    out["prefs"] = nlohmann::json::parse(p.toJson(), nullptr, false);
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefsSet(const CLI::Commands::Args &a, Project::Project &/*project*/)
+  {
+    if (a.field.empty() || a.value.empty()) {
+      emitErr("--field, --value are required"); return 1;
+    }
+    auto path = prefsJsonPath();
+    auto j = Utils::JSON::loadFile(path);
+    if (!j.is_object()) {
+      // Seed from defaults so a first-time set produces a complete file.
+      Editor::Preferences def{};
+      def.load();
+      j = nlohmann::json::parse(def.toJson(), nullptr, false);
+    }
+    j[a.field] = parseValueJSON(a.value);
+    Utils::FS::saveTextFile(path.string(), j.dump(2));
+    nlohmann::json out;
+    out["updated"] = a.field;
+    out["prefs"] = j;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdPrefsReset(const CLI::Commands::Args &a, Project::Project &/*project*/)
+  {
+    if (a.field.empty()) {
+      emitErr("--field=<key> (or --field=all) is required"); return 1;
+    }
+    Editor::Preferences def{};
+    auto defaults = nlohmann::json::parse(def.toJson(), nullptr, false);
+
+    auto path = prefsJsonPath();
+    auto j = Utils::JSON::loadFile(path);
+    if (!j.is_object()) j = defaults;
+
+    if (a.field == "all") {
+      j = defaults;
+    } else if (defaults.contains(a.field)) {
+      j[a.field] = defaults[a.field];
+    } else {
+      emitErr("unknown pref field: " + a.field); return 1;
+    }
+    Utils::FS::saveTextFile(path.string(), j.dump(2));
+    nlohmann::json out;
+    out["reset"] = a.field;
+    out["prefs"] = j;
+    emitJSON(out);
+    return 0;
+  }
+
   // Per-index helper for the 8 collLayerN entries on the project conf.
   // The generic project-set-conf would also work (key = collLayer0..7),
   // but this command validates the index and gives a cleaner echo.
@@ -5179,6 +5279,11 @@ namespace CLI::Commands
     // Project-level conf (ROM metadata, boot scenes, cart size, etc.).
     {"project-describe",        cmdProjectDescribe},
     {"project-set-conf",        cmdProjectSetConf},
+    {"project-reset-conf",      cmdProjectResetConf},
+    // Global editor preferences (user-level; PROJ arg is ignored).
+    {"prefs-describe",          cmdPrefsDescribe},
+    {"prefs-set",               cmdPrefsSet},
+    {"prefs-reset",             cmdPrefsReset},
     // Asset folders (mirrored across assets/ and src/user/).
     {"folder-create",           cmdFolderCreate},
     {"folder-rename",           cmdFolderRename},

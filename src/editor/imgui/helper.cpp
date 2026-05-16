@@ -106,6 +106,7 @@ void ImTable::addMultiSelectMask8(
 }
 
 bool ImTable::addKeybind(const std::string &name, ImGuiKeyChord &chord, ImGuiKeyChord defaultValue, bool isChord) {
+  if (!rowVisible(name)) return false;
   add(name);
   ImGui::PushID(name.c_str());
 

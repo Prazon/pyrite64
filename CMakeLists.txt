@@ -202,6 +202,8 @@ add_executable(pyrite64 src/main.cpp
         src/project/compile/compileErrors.cpp
         src/editor/pages/parts/memoryDashboard.h
         src/editor/pages/parts/memoryDashboard.cpp
+        src/editor/pages/parts/settingsShell.h
+        src/editor/pages/parts/settingsShell.cpp
         src/editor/pages/parts/projectSettings.h
         src/editor/pages/parts/projectSettings.cpp
         src/editor/pages/parts/preferenceOverlay.cpp
