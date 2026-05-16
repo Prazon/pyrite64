@@ -13,3 +13,5 @@ preferences.json
 .claude/
 # Per-project editor cache (material thumbnails, restored open-tab list, etc.)
 .cache/
+# Python bytecode cache from the CLI smoketest (tests/cli/run.py)
+__pycache__/
