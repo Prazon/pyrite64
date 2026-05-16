@@ -276,6 +276,14 @@ TESTS: List[Test] = [
     Test("path-remove-branch",         "path-remove-branch",  ["--asset", "TPrefab1", "--path", "", "--field", "0"]),
     Test("path-remove-point",          "path-remove-point",   ["--asset", "TPrefab1", "--path", "", "--field", "0"]),
 
+    # === path-follow component (prefab) ================================
+    Test("component-describe-pathfollow","component-describe", ["--comp", "PathFollow"]),
+    Test("prefab-add-pathfollow-comp", "prefab-add-component",["--asset", "TPrefab1", "--path", "", "--comp", "PathFollow"]),
+    Test("prefab-set-pathfollow-speed","prefab-set-prop",
+         ["--asset", "TPrefab1", "--comp", "PathFollow", "--field", "speed", "--value", "150"]),
+    Test("prefab-set-pathfollow-mode", "prefab-set-prop",
+         ["--asset", "TPrefab1", "--comp", "PathFollow", "--field", "mode", "--value", "1"]),
+
     # === prefab promote-root ===========================================
     Test("prefab-add-promote-child",   "prefab-add-object",   ["--asset", "TPrefab1Dup", "--name", "ToPromote"]),
     Test("prefab-promote-root",        "prefab-promote-root", ["--asset", "TPrefab1Dup", "--path", "ToPromote"]),

@@ -473,6 +473,59 @@ namespace Project::Component::Path
     return m;
   }
 
+  // Shared sampler (declared in components.h). Walks the same dense
+  // Catmull-Rom polyline used for rendering, accumulates arc length, and
+  // returns the world frame at `dist`. The basis matches the in-viewport
+  // "Preview t" ghost: forward from the local tangent, up reconstructed
+  // against world-up so a follower camera stays level through turns.
+  bool sampleAtDistance(Object &obj, Entry &entry, float dist,
+                        int branchGroup, SampleFrame &out)
+  {
+    Data &data = *static_cast<Data*>(entry.data.get());
+    int samplesPerSeg = data.lutPerSegment.value;
+    if (samplesPerSeg < 4)  samplesPerSeg = 4;
+    if (samplesPerSeg > 32) samplesPerSeg = 32;
+
+    glm::mat4 mWorld = objWorldMat(obj);
+
+    std::vector<glm::vec3> pts;
+    std::vector<float>     arcs;
+    walkSpline(data, mWorld, samplesPerSeg, branchGroup,
+               [&](const glm::vec3 &w, float arc) {
+                 pts.push_back(w);
+                 arcs.push_back(arc);
+               });
+    if (pts.size() < 2) return false;
+
+    float total = arcs.back();
+    out.totalLength = total;
+    float d = glm::clamp(dist, 0.0f, total);
+
+    // Locate the segment [i, i+1] containing arc length d.
+    size_t i = 0;
+    while (i + 1 < arcs.size() && arcs[i + 1] < d) ++i;
+    size_t j = (i + 1 < pts.size()) ? i + 1 : i;
+
+    float segLen = arcs[j] - arcs[i];
+    float f = (segLen > 1e-5f) ? (d - arcs[i]) / segLen : 0.0f;
+
+    out.pos = glm::mix(pts[i], pts[j], f);
+
+    glm::vec3 fwd = pts[j] - pts[i];
+    if (glm::length(fwd) < 1e-5f && j + 1 < pts.size()) fwd = pts[j + 1] - pts[j];
+    if (glm::length(fwd) < 1e-5f) fwd = glm::vec3{0.0f, 0.0f, 1.0f};
+    fwd = glm::normalize(fwd);
+
+    glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
+    glm::vec3 right = glm::cross(worldUp, fwd);
+    if (glm::length(right) < 1e-5f) right = glm::vec3{1.0f, 0.0f, 0.0f};
+    right = glm::normalize(right);
+
+    out.fwd = fwd;
+    out.up  = glm::normalize(glm::cross(fwd, right));
+    return true;
+  }
+
   void draw3D(Object &obj, Entry &entry, Editor::Viewport3D &vp,
               SDL_GPUCommandBuffer* /*cmdBuff*/, SDL_GPURenderPass* /*pass*/)
   {

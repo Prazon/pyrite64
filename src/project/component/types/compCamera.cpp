@@ -232,7 +232,8 @@ namespace Project::Component::Camera
     return fallbackAspect > 0.0f ? fallbackAspect : 1.0f;
   }
 
-  void applyToGlobalUniforms(Object& obj, Entry &entry, Renderer::UniformGlobal &uniGlobal, float screenWidth, float screenHeight)
+  void applyToGlobalUniforms(Object& obj, Entry &entry, Renderer::UniformGlobal &uniGlobal, float screenWidth, float screenHeight,
+                             const glm::vec3* overridePos, const glm::quat* overrideRot)
   {
     Data &data = *static_cast<Data*>(entry.data.get());
 
@@ -248,8 +249,10 @@ namespace Project::Component::Camera
       data.far.resolve(obj)
     );
 
-    const glm::vec3 pos = obj.pos.resolve(obj.propOverrides);
-    const glm::quat rot = glm::normalize(obj.rot.resolve(obj.propOverrides));
+    // PathFollow PiP preview feeds an explicit world transform so the
+    // thumbnail rides the spline instead of the camera's authored pose.
+    const glm::vec3 pos = overridePos ? *overridePos : obj.pos.resolve(obj.propOverrides);
+    const glm::quat rot = glm::normalize(overrideRot ? *overrideRot : obj.rot.resolve(obj.propOverrides));
     const glm::vec3 forward = glm::normalize(rot * glm::vec3{0,0,-1});
     const glm::vec3 upDir   = glm::normalize(rot * glm::vec3{0,1,0});
     uniGlobal.cameraMat = glm::lookAt(pos, pos + forward, upDir);

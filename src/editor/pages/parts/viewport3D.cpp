@@ -70,6 +70,30 @@ namespace
     return nullptr;
   }
 
+  constexpr int COMPONENT_ID_PATH_FOLLOW = 31;
+
+  // Depth-first search for a Camera on obj or any descendant. Returns the
+  // owning object and sets outComp. Lets a PathFollow object preview through
+  // a Camera rigged on a child (the common camera-on-a-mount setup).
+  Project::Object* findCameraInTree(Project::Object &obj,
+                                    Project::Component::Entry*& outComp)
+  {
+    if (auto *c = getCameraComponent(obj)) { outComp = c; return &obj; }
+    for (auto &child : obj.children) {
+      if (!child) continue;
+      if (auto *owner = findCameraInTree(*child, outComp)) return owner;
+    }
+    return nullptr;
+  }
+
+  bool hasPathFollow(Project::Object &obj)
+  {
+    for (auto &comp : obj.components) {
+      if (comp.id == COMPONENT_ID_PATH_FOLLOW) return true;
+    }
+    return false;
+  }
+
   constexpr ImGuizmo::OPERATION GIZMO_OPS[3] {
     ImGuizmo::OPERATION::TRANSLATE,
     ImGuizmo::OPERATION::ROTATE,
@@ -590,10 +614,45 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   auto* cameraComp = getCameraComponent(*srcObj);
   if (!cameraComp) return;
 
+  // PathFollow override: ride the spline at the inspector scrub distance.
+  // The path sample is the follower's world pose; the Camera's authored
+  // offset relative to the follower is composed back on so a rigged child
+  // camera previews exactly as it will at runtime.
+  glm::vec3 ovPos; glm::quat ovRot;
+  bool haveOverride = false;
+  if (previewPathFollow && previewFollowUUID) {
+    if (auto followObj = scene->getObjectByUUID(previewFollowUUID)) {
+      Project::Component::Path::SampleFrame sf{};
+      if (Project::Component::PathFollow::previewFollowerFrame(*followObj, sf)) {
+        glm::vec3 z = -glm::normalize(sf.fwd);
+        glm::vec3 x = glm::cross(glm::normalize(sf.up), z);
+        if (glm::length(x) < 1e-5f) x = glm::vec3{1, 0, 0};
+        x = glm::normalize(x);
+        glm::vec3 y = glm::cross(z, x);
+        glm::mat4 mPath = glm::translate(glm::mat4(1.0f), sf.pos)
+          * glm::mat4(glm::mat3(x, y, z));
+
+        auto trsNoScale = [](Project::Object &o) {
+          return glm::translate(glm::mat4(1.0f), o.pos.resolve(o.propOverrides))
+               * glm::toMat4(glm::normalize(o.rot.resolve(o.propOverrides)));
+        };
+        glm::mat4 mFollower = trsNoScale(*followObj);
+        glm::mat4 mCam      = trsNoScale(*previewObj);
+        glm::mat4 mCamWorld = mPath * (glm::inverse(mFollower) * mCam);
+
+        ovPos = glm::vec3(mCamWorld[3]);
+        ovRot = glm::normalize(glm::quat_cast(glm::mat3(mCamWorld)));
+        haveOverride = true;
+      }
+    }
+  }
+
   if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "Camera Preview Pass");
   Project::Component::Camera::applyToGlobalUniforms(
     *previewObj, *cameraComp, previewUniGlobal,
-    (float)fbPreview.getWidth(), (float)fbPreview.getHeight()
+    (float)fbPreview.getWidth(), (float)fbPreview.getHeight(),
+    haveOverride ? &ovPos : nullptr,
+    haveOverride ? &ovRot : nullptr
   );
   // Keep PiP billboards/sprites at the same world-scale as the main viewport.
   previewUniGlobal.spriteSize = uniGlobal.spriteSize;
@@ -607,27 +666,42 @@ void Editor::Viewport3D::updateCameraPreviewState(const ImVec2 &currSize, Projec
   previewCameraUUID = 0;
   previewSrcUUID = 0;
   previewScreenSize = {};
+  previewPathFollow = false;
+  previewFollowUUID = 0;
 
   if (!scene) return;
 
-  // Walk the selection looking for the first object that has (or whose
-  // prefab source has) a Camera component.
-  std::shared_ptr<Project::Object> instanceObj{};
+  // Walk the selection for the first object that has a Camera on it or any
+  // descendant. For prefab instances only a root camera is supported (its
+  // subtree isn't addressable as scene objects), matching prior behavior.
   Project::Object* srcObj = nullptr;
   Project::Component::Entry* cameraComp = nullptr;
+  uint32_t transformUUID = 0; // scene object whose transform drives the PiP
   for (uint32_t selUUID : getSelection().all()) {
     auto selObj = scene->getObjectByUUID(selUUID);
     if (!selObj) continue;
+    bool isPrefab = selObj->isPrefabInstance();
     Project::Object* candidate = selObj.get();
-    if (selObj->isPrefabInstance()) {
+    if (isPrefab) {
       auto prefab = ctx.project->getAssets().getPrefabByUUID(selObj->uuidPrefab.value);
       if (prefab) candidate = &prefab->obj;
     }
-    auto* comp = getCameraComponent(*candidate);
+    Project::Component::Entry* comp = nullptr;
+    Project::Object* camOwner = findCameraInTree(*candidate, comp);
     if (!comp) continue;
-    instanceObj = selObj;
-    srcObj = candidate;
+    if (isPrefab && camOwner != candidate) continue; // deep prefab cam: skip
+
+    srcObj = camOwner;
     cameraComp = comp;
+    // Non-prefab child camera: its own scene transform drives the PiP.
+    // Prefab/root: the instance transform (existing behavior).
+    transformUUID = (!isPrefab) ? camOwner->uuid : selObj->uuid;
+    // The follower is the selected object itself when it carries a
+    // PathFollow that resolves a Path (checked lazily at render time).
+    if (hasPathFollow(*selObj)) {
+      previewPathFollow = true;
+      previewFollowUUID = selObj->uuid;
+    }
     break;
   }
 
@@ -652,7 +726,7 @@ void Editor::Viewport3D::updateCameraPreviewState(const ImVec2 &currSize, Projec
   if (previewSize.x < PREVIEW_MIN_SIZE || previewSize.y < PREVIEW_MIN_SIZE) return;
 
   showCameraPreview = true;
-  previewCameraUUID = instanceObj->uuid;
+  previewCameraUUID = transformUUID;
   previewSrcUUID = srcObj->uuid;
   previewScreenSize = previewSize;
 

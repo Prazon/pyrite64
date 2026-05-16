@@ -172,8 +172,35 @@ namespace Project::Component
     };
     Spec extractSpec(Object &obj, Entry &entry);
 
-    void applyToGlobalUniforms(Object& obj, Entry &entry, Renderer::UniformGlobal &uniGlobal, float screenWidth, float screenHeight);
+    void applyToGlobalUniforms(Object& obj, Entry &entry, Renderer::UniformGlobal &uniGlobal, float screenWidth, float screenHeight,
+                               const glm::vec3* overridePos = nullptr, const glm::quat* overrideRot = nullptr);
     float getAspectRatio(Object& obj, Entry &entry, float fallbackAspect);
+  }
+
+  // Editor-side spline sampler, shared with PathFollow's PiP preview so it
+  // traces the exact curve the runtime samples (reuses the same Catmull-Rom
+  // walk that draws the Path polyline).
+  namespace Path
+  {
+    struct SampleFrame
+    {
+      glm::vec3 pos{0.0f};
+      glm::vec3 fwd{0.0f, 0.0f, 1.0f};
+      glm::vec3 up{0.0f, 1.0f, 0.0f};
+      float     totalLength{0.0f};
+    };
+    // Sample the Path Entry's world-space spline at arc length `dist`
+    // (clamped to [0,totalLength]) for branch group `branchGroup`.
+    // Returns false if the entry has no usable (>=2-point) curve.
+    bool sampleAtDistance(Object &obj, Entry &entry, float dist,
+                          int branchGroup, SampleFrame &out);
+  }
+
+  // PathFollow exposes the resolved follower frame at its inspector preview
+  // distance so the viewport can drive the Camera PiP along the path.
+  namespace PathFollow
+  {
+    bool previewFollowerFrame(Object &followObj, Path::SampleFrame &out);
   }
 
   MAKE_COMP(CollMesh)
@@ -203,6 +230,7 @@ namespace Project::Component
   MAKE_COMP(Tween2D)
   MAKE_COMP(Shake2D)
   MAKE_COMP(ParticleEmitter)
+  MAKE_COMP(PathFollow)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -599,6 +627,19 @@ namespace Project::Component
       .funcSerialize = ParticleEmitter::serialize,
       .funcDeserialize = ParticleEmitter::deserialize,
       .funcBuild = ParticleEmitter::build,
+      .funcGetAABB = nullptr,
+    },
+    // id 31 fills the last slot of the engine COMP_TABLE_SIZE (32). Any
+    // further component needs that size bumped on the engine side.
+    CompInfo{
+      .id = 31,
+      .icon = ICON_MDI_MAP_MARKER_PATH " ",
+      .name = "Path Follow",
+      .funcInit = PathFollow::init,
+      .funcDraw = PathFollow::draw,
+      .funcSerialize = PathFollow::serialize,
+      .funcDeserialize = PathFollow::deserialize,
+      .funcBuild = PathFollow::build,
       .funcGetAABB = nullptr,
     },
   };

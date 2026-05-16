@@ -323,6 +323,7 @@ add_executable(pyrite64 src/main.cpp
         src/project/component/types/compTween2D.cpp
         src/project/component/types/compShake2D.cpp
         src/project/component/types/compParticleEmitter.cpp
+        src/project/component/types/compPathFollow.cpp
         src/project/component/widgetSize.cpp
         src/editor/pages/parts/assets/widgetBlueprintEditor.cpp
         src/project/component/types/compPrimitive.cpp

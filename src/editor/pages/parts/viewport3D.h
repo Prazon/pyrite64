@@ -54,6 +54,11 @@ namespace Editor
       uint32_t previewCameraUUID{0};   // selected scene object whose transform drives the preview
       uint32_t previewSrcUUID{0};      // object whose components own the Camera entry (== previewCameraUUID for non-prefab)
       glm::vec2 previewScreenSize{};
+      // When the selected object carries a PathFollow that resolves a Path,
+      // the PiP rides the spline at the inspector scrubber distance instead
+      // of the camera's authored pose. previewFollowUUID is that object.
+      bool previewPathFollow{false};
+      uint32_t previewFollowUUID{0};
 
       bool isMouseHover{false};
       bool isMouseDown{false};
