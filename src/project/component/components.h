@@ -633,7 +633,7 @@ namespace Project::Component
     // further component needs that size bumped on the engine side.
     CompInfo{
       .id = 31,
-      .icon = ICON_MDI_MAP_MARKER_PATH " ",
+      .icon = ICON_MDI_TRAIN_CAR_GONDOLA " ",
       .name = "Path Follow",
       .funcInit = PathFollow::init,
       .funcDraw = PathFollow::draw,
