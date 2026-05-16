@@ -12,7 +12,7 @@ namespace
   //   2 x uint8 flags (autoPlay, worldSpace)
   //   2 x uint8 padding
   // Keep field order and packing exact — the engine reads it raw.
-  struct __attribute__((packed)) InitData
+  struct __attribute__((packed, aligned(4))) InitData
   {
     P64::PTX::EmitterConf conf;
     uint8_t autoPlay;
