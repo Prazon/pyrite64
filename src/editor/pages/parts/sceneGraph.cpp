@@ -25,6 +25,20 @@ namespace
   uint32_t renameObjectUUID{0};
   std::string renameBuffer{};
   bool startingRename{false};
+  // One-shot: select the whole name the first time the input is shown so
+  // typing replaces it (file-explorer convention). AutoSelectAll alone only
+  // triggers on mouse activation, not the SetKeyboardFocusHere path.
+  bool renameSelectAll{false};
+
+  int renameInputCallback(ImGuiInputTextCallbackData *data)
+  {
+    if (renameSelectAll) {
+      data->SelectionStart = 0;
+      data->SelectionEnd = data->BufTextLen;
+      renameSelectAll = false;
+    }
+    return 0;
+  }
 
   // When set, drawObjectNode appends each Object's components as leaf
   // children under the object's tree node. Toggled by SceneGraph::draw
@@ -70,6 +84,41 @@ namespace
   }
 
   /**
+   * Ellipsizes a tree-node label so it fits within maxWidth, keeping the
+   * leading icon glyph(s) intact and only trimming the trailing name.
+   *
+   * The right-side row controls (selection / enabled toggles) are drawn
+   * after the tree node with SameLine, so on a narrow panel an untruncated
+   * label slides underneath them. Clipping here keeps the row readable.
+   *
+   * @param prefix Leading text kept verbatim (icon glyphs + trailing space).
+   * @param name   Trailing object name, trimmed with an ellipsis if needed.
+   * @param maxWidth Pixel budget for the visible label.
+   * @return The display string (prefix + possibly-truncated name).
+   */
+  std::string ellipsizeLabel(const std::string &prefix, const std::string &name, float maxWidth)
+  {
+    if (maxWidth <= 0.f)
+      return prefix;
+    if (ImGui::CalcTextSize((prefix + name).c_str()).x <= maxWidth)
+      return prefix + name;
+
+    const char *ellipsis = "...";
+    std::string trimmed = name;
+    while (!trimmed.empty()) {
+      trimmed.pop_back();
+      // Don't leave a dangling UTF-8 continuation byte behind.
+      while (!trimmed.empty()
+             && (static_cast<unsigned char>(trimmed.back()) & 0xC0) == 0x80) {
+        trimmed.pop_back();
+      }
+      if (ImGui::CalcTextSize((prefix + trimmed + ellipsis).c_str()).x <= maxWidth)
+        break;
+    }
+    return prefix + trimmed + ellipsis;
+  }
+
+  /**
    * Clears the current inline renaming state.
    */
   void clearRenaming()
@@ -77,6 +126,7 @@ namespace
     renameObjectUUID = 0;
     renameBuffer.clear();
     startingRename = false;
+    renameSelectAll = false;
   }
 
   /**
@@ -91,6 +141,7 @@ namespace
       renameObjectUUID = objectUUID;
       renameBuffer = theObject->name;
       startingRename = true;
+      renameSelectAll = true;
     } else {
       // Selection may have gone stale between frames
       clearRenaming();
@@ -156,14 +207,22 @@ namespace
    *
    * @param obj The scene object currently being renamed.
   */
-  void drawRenameInput(Project::Object &obj, const ImVec2 &nodeRectMin)
+  void drawRenameInput(Project::Object &obj, const ImVec2 &nodeRectMin,
+                       const std::string &iconPrefix)
   {
     const ImVec2 oldCursorPos = ImGui::GetCursorPos();
 
-    // Anchor input to the tree label position
+    // Anchor the input just past the type-icon prefix so the icon stays
+    // visible while editing (Godot/UE keep the node glyph during rename).
+    // Start from the real label position (full tree-node-to-label spacing,
+    // not half) and step over the icon glyphs, then pull back by the
+    // input's own frame padding so the typed text aligns with the label.
     ImVec2 renamePos = nodeRectMin;
     const ImGuiStyle& style = ImGui::GetStyle();
-    renamePos.x += ImGui::GetTreeNodeToLabelSpacing() / 2 - style.FramePadding.x + 2;
+    float iconWidth = iconPrefix.empty()
+      ? 0.f : ImGui::CalcTextSize(iconPrefix.c_str()).x;
+    renamePos.x += ImGui::GetTreeNodeToLabelSpacing() + iconWidth
+      - style.FramePadding.x;
     renamePos.y -= 1;
     ImGui::SetCursorScreenPos(renamePos);
 
@@ -185,12 +244,18 @@ namespace
       ("##Rename" + std::to_string(obj.uuid)).c_str(),
       &renameBuffer,
       ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll
+        | ImGuiInputTextFlags_CallbackAlways,
+      renameInputCallback
     );
 
-    // Escape aborts rename
-    bool cancelRename = ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape);
+    // Escape cancels (discard edit). InputText reverts and deactivates the
+    // widget on the same frame Escape is pressed, so check it before the
+    // commit path and gate on this input having had focus this frame.
+    bool deactivated = ImGui::IsItemDeactivated();
+    bool hadFocus = ImGui::IsItemActive() || deactivated;
+    bool cancelRename = hadFocus && ImGui::IsKeyPressed(ImGuiKey_Escape);
     // Enter or losing focus commits name
-    bool finishRename = confirmRename || ImGui::IsItemDeactivated();
+    bool finishRename = confirmRename || deactivated;
     // Canceled --> Clear renaming
     if (cancelRename) {
       clearRenaming();
@@ -273,10 +338,26 @@ namespace
         }
       }
     }
-    nameID += obj.name + "##" + std::to_string(obj.uuid);
+    // Budget the visible label to whatever's left after the indent/arrow and
+    // the reserved right-side control strip (only present for non-root rows).
+    float reservedRight = obj.parent ? calcRightControlAreaWidth() : 0.f;
+    float labelBudget = ImGui::GetContentRegionAvail().x
+      - ImGui::GetTreeNodeToLabelSpacing()
+      - reservedRight;
+    const std::string iconPrefix = nameID;
+    // While this row is being renamed, draw only the icon prefix so the
+    // underlying name can't peek out from behind the overlaid input box.
+    bool isRenamingThis = (renameObjectUUID == obj.uuid);
+    std::string visibleLabel = isRenamingThis
+      ? iconPrefix
+      : ellipsizeLabel(nameID, obj.name, labelBudget);
+    bool labelTruncated = !isRenamingThis && (visibleLabel != nameID + obj.name);
+    nameID = visibleLabel + "##" + std::to_string(obj.uuid);
 
     bool isOpen = ImGui::TreeNodeEx(nameID.c_str(), flag);
     ImGui::PopStyleVar(2);
+    if (labelTruncated && renameObjectUUID != obj.uuid)
+      ImGui::SetItemTooltip("%s", obj.name.c_str());
     ImVec2 nodeRectMin = ImGui::GetItemRectMin();
 
     bool nodeIsClicked = ImGui::IsItemHovered()
@@ -289,11 +370,13 @@ namespace
       ImGui::OpenPopup("NodePopup");
     }
 
-    // Double-clicked a node --> Start renaming
+    // Double-clicked a node --> Start renaming. The input itself is drawn
+    // next frame (gated on isRenamingThis, computed before the tree node):
+    // showing it the same frame as the double-click means ImGui is still
+    // processing the mouse interaction and the keyboard-focus request never
+    // sticks, leaving the field unfocused (so select-all/Escape also fail).
     if (nodeIsDoubleClicked)
       startRenaming(scene, obj.uuid);
-
-    bool isRenaming = renameObjectUUID == obj.uuid;
 
     if (obj.parent && ImGui::BeginDragDropSource())
     {
@@ -333,8 +416,8 @@ namespace
     }
 
     // Is renaming the object node
-    if (isRenaming)
-      drawRenameInput(obj, nodeRectMin);
+    if (isRenamingThis)
+      drawRenameInput(obj, nodeRectMin, iconPrefix);
 
     if(obj.parent)
     {
@@ -344,7 +427,15 @@ namespace
       auto oldCursorPos = ImGui::GetCursorPos();
 
       float offsetRight = calcRightControlAreaWidth();
-      ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - offsetRight);
+      float controlsX = ImGui::GetWindowContentRegionMax().x - offsetRight;
+      // On an extremely narrow panel that target goes past (or left of) the
+      // label start, flipping the toggles to the left of the type icons.
+      // Floor it at the label-start X (window-local) so the strip stays put
+      // and merely overlaps the ellipsized text instead of inverting.
+      float minControlsX = (nodeRectMin.x - ImGui::GetWindowPos().x)
+        + ImGui::GetTreeNodeToLabelSpacing();
+      controlsX = std::max(controlsX, minControlsX);
+      ImGui::SameLine(controlsX);
 
       if(!parentEnabled)ImGui::BeginDisabled();
 
