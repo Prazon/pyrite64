@@ -38,6 +38,7 @@
 #include "scene/components/shake2D.h"
 #include "scene/components/particleEmitter.h"
 #include "scene/components/pathFollow.h"
+#include "scene/components/charBody.h"
 
 // some template magic to auto-detect if a function exists in a component
 #define HAS_FUNC_TPL(NAME_HAS, NAME_GET, FUNC) \
@@ -107,5 +108,6 @@ namespace P64
     SET_COMP(Shake2D),
     SET_COMP(ParticleEmitter),
     SET_COMP(PathFollow),
+    SET_COMP(CharBody),
   };
 }

@@ -231,6 +231,7 @@ namespace Project::Component
   MAKE_COMP(Shake2D)
   MAKE_COMP(ParticleEmitter)
   MAKE_COMP(PathFollow)
+  MAKE_COMP(CharBody)
 
   constexpr std::array TABLE{
     CompInfo{
@@ -629,8 +630,6 @@ namespace Project::Component
       .funcBuild = ParticleEmitter::build,
       .funcGetAABB = nullptr,
     },
-    // id 31 fills the last slot of the engine COMP_TABLE_SIZE (32). Any
-    // further component needs that size bumped on the engine side.
     CompInfo{
       .id = 31,
       .icon = ICON_MDI_TRAIN_CAR_GONDOLA " ",
@@ -641,6 +640,22 @@ namespace Project::Component
       .funcDeserialize = PathFollow::deserialize,
       .funcBuild = PathFollow::build,
       .funcGetAABB = nullptr,
+    },
+    // id 32 is the last slot of the engine COMP_TABLE_SIZE (33). Any
+    // further component needs that size bumped on the engine side.
+    // CharBody is renumbered from upstream char_ctrl's id 12 (which is
+    // SpriteBillboard in this fork) to keep the append-last invariant.
+    CompInfo{
+      .id = 32,
+      .icon = ICON_MDI_RUN " ",
+      .name = "Character-Body",
+      .funcInit = CharBody::init,
+      .funcDraw = CharBody::draw,
+      .funcDrawPost3D = CharBody::draw3D,
+      .funcSerialize = CharBody::serialize,
+      .funcDeserialize = CharBody::deserialize,
+      .funcBuild = CharBody::build,
+      .funcGetAABB = nullptr
     },
   };
 

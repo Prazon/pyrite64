@@ -85,6 +85,12 @@ add_executable(n64_engine
         engine/src/debug/overlay.cpp
         engine/include/collision/attach.h
         engine/src/collision/attach.cpp
+        engine/include/collision/capsuleSweep.h
+        engine/src/collision/capsuleSweep.cpp
+        engine/include/collision/characterBody.h
+        engine/src/collision/characterBody.cpp
+        engine/include/scene/components/charBody.h
+        engine/src/scene/components/charBody.cpp
         engine/src/scene/componentTable.cpp
         engine/src/scene/components/culling.cpp
         engine/include/renderer/material.h
