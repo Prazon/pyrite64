@@ -30,6 +30,7 @@ namespace CLI::Commands
     std::string to;
     std::string restype;
     std::string elementKind; // --element-kind for ARRAY-typed prefab vars
+    std::string templateId;  // --template for project-create
     bool noScaffold{false};
     bool autofix{false};
   };

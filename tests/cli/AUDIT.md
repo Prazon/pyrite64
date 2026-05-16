@@ -158,6 +158,19 @@ Global user-level prefs (`preferences.json`); the PROJ arg is ignored.
 | Keymap preset / per-action rebind | `prefs-set --field keymapPreset` / `--field keymap` | OK (raw JSON) | - |
 | Search filter / category tree | presentational; no data model | n/a | - |
 
+### Launcher / new project (`src/editor/pages/parts/createProjectOverlay.cpp`)
+
+Project-less; routed through `dispatchBootstrap` (no `.p64proj` yet).
+
+| GUI action | CLI command | Status | Severity |
+|-|-|-|-|
+| Create project (name/path) | `project-create --path <dir> --name <n>` | OK | - |
+| Pick a template (example projects list) | `project-create --template <id>` | OK | - |
+| Template list shown in the dialog | `project-templates` (JSON: id/label/description) | OK | - |
+
+Templates enumerate `n64/examples/*` with a `project.p64proj`; `empty` is
+the default and always sorts first.
+
 ### Top menu / global hotkeys (`editorScene.cpp:932-1153`, `window.cpp`)
 
 | GUI action | CLI command | Status | Severity |

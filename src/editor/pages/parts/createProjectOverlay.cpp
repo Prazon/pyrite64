@@ -4,11 +4,13 @@
 */
 #include "createProjectOverlay.h"
 #include "../../../utils/proc.h"
+#include "../../../project/projectTemplates.h"
 #include "../../actions.h"
 #include "../../imgui/helper.h"
 #include "../../imgui/notification.h"
 #include <iostream>
 #include <cstdlib>
+#include <vector>
 
 namespace
 {
@@ -17,6 +19,9 @@ namespace
   std::string projectName{};
   std::string projectSafeName{};
   std::string projectPath{};
+
+  std::vector<Project::ProjectTemplate> templates{};
+  int templateIdx{0};
 
   std::string makeNameSafe(const std::string &name)
   {
@@ -57,6 +62,12 @@ void Editor::CreateProjectOverlay::open()
   projectName = "New Project";
   projectSafeName = makeNameSafe(projectName);
   projectPath = Utils::Proc::getProjectsPath().string();
+
+  // Refresh the template list each time the dialog opens (cheap; the tree
+  // is small) and default the selection to the empty template, which
+  // listProjectTemplates() guarantees is sorted first when present.
+  templates = Project::listProjectTemplates();
+  templateIdx = 0;
 }
 
 bool Editor::CreateProjectOverlay::draw()
@@ -64,7 +75,7 @@ bool Editor::CreateProjectOverlay::draw()
   // set width/height
   ImGuiIO &io = ImGui::GetIO();
   ImGui::SetNextWindowPos({io.DisplaySize.x / 2, io.DisplaySize.y / 2}, ImGuiCond_Always, {0.5f, 0.5f});
-  ImGui::SetNextWindowSize({400_px, 300_px}, ImGuiCond_Always);
+  ImGui::SetNextWindowSize({520_px, 470_px}, ImGuiCond_Always);
 
   if (ImGui::BeginPopupModal("Create Project", nullptr,
     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
@@ -112,6 +123,30 @@ bool Editor::CreateProjectOverlay::draw()
       ImGui::TextColored({1.0f, 0.5f, 0.5f, 1.0f}, "The project path must not contain spaces!");
     }
 
+    ImGui::Dummy({0, 8_px});
+    ImGui::Text("Template:");
+    if (templates.empty()) {
+      ImGui::TextColored({1.0f, 0.5f, 0.5f, 1.0f},
+        "No templates found (run the editor from the repo root).");
+    } else {
+      if (templateIdx < 0 || templateIdx >= (int)templates.size()) templateIdx = 0;
+
+      ImGui::BeginChild("##templates", {0, 120_px}, ImGuiChildFlags_Borders);
+      for (int i = 0; i < (int)templates.size(); ++i) {
+        if (ImGui::Selectable(templates[i].label.c_str(), templateIdx == i)) {
+          templateIdx = i;
+        }
+      }
+      ImGui::EndChild();
+
+      const auto &sel = templates[templateIdx];
+      if (!sel.description.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored({0.7f, 0.7f, 0.7f, 1.0f}, "%s", sel.description.c_str());
+        ImGui::PopTextWrapPos();
+      }
+    }
+
     ImGui::Dummy({0, 10_px});
     ImGui::Separator();
     ImGui::Dummy({0, 6_px});
@@ -139,6 +174,9 @@ bool Editor::CreateProjectOverlay::draw()
       args["path"] = fullPath;
       args["name"] = projectName;
       args["rom"] = projectSafeName;
+      args["template"] = (!templates.empty() &&
+                          templateIdx >= 0 && templateIdx < (int)templates.size())
+                         ? templates[templateIdx].id : std::string("empty");
 
       if(Editor::Actions::call(Actions::Type::PROJECT_CREATE, args.dump())) {
         projectName.clear();

@@ -501,6 +501,10 @@ TESTS: List[Test] = [
     # Runs via the dispatchBootstrap path so it doesn't need a pre-existing
     # project. Target lives under the per-run workdir so reruns stay clean.
     Test("project-create",             "project-create",      ["--path", "{WORKDIR}/pc_target", "--name", "SmokeNew"], project="{WORKDIR}/_pc_nope.p64proj"),
+    # Template discovery + creation from a non-empty example template.
+    Test("project-templates",          "project-templates",   project="{WORKDIR}/_pc_nope.p64proj"),
+    Test("project-create-template",    "project-create",      ["--path", "{WORKDIR}/pc_tmpl", "--name", "SmokeTmpl", "--template", "bigtex"], project="{WORKDIR}/_pc_nope.p64proj"),
+    Test("project-create-bad-template","project-create",      ["--path", "{WORKDIR}/pc_bad", "--name", "SmokeBad", "--template", "nope"], project="{WORKDIR}/_pc_nope.p64proj", expect_fail=True),
 ]
 
 

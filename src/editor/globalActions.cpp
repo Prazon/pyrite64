@@ -90,16 +90,30 @@ namespace Editor::Actions
         return false;
       }
       
-      // copy example project as template
-      fs::copy("n64/examples/empty", newPath, 
+      // copy the chosen example project as the template (default: empty).
+      // Unknown ids fall back to empty so a stale UI selection can't fail.
+      std::string templateId = args.value("template", std::string("empty"));
+      fs::path templ = fs::path("n64") / "examples" / templateId;
+      if (!fs::exists(templ / "project.p64proj")) {
+        Utils::Logger::log("Unknown template '" + templateId + "', using empty",
+          Utils::Logger::LEVEL_WARN);
+        templ = fs::path("n64") / "examples" / "empty";
+      }
+      fs::copy(templ, newPath,
         fs::copy_options::recursive | fs::copy_options::overwrite_existing
       );
 
-      // clear some temp files
+      // clear generated/temp files (any template, not just the empty one)
       fs::remove(newPath / "p64_project.z64");
       fs::remove(newPath / "Makefile");
       fs::remove_all(newPath / "build");
       fs::remove_all(newPath / "filesystem");
+      std::error_code rmEc;
+      for (const auto &e : fs::directory_iterator(newPath, rmEc)) {
+        if (!rmEc && e.is_regular_file() && e.path().extension() == ".z64") {
+          fs::remove(e.path(), rmEc);
+        }
+      }
 
       // open project.json and patch name
       auto configPath = (newPath / "project.p64proj").string();

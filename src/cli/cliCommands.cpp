@@ -30,6 +30,7 @@
 #include "../project/graph/graph.h"
 #include "../utils/proc.h"
 #include "../editor/preferences.h"
+#include "../project/projectTemplates.h"
 #include "../project/materialGraph/graph.h"
 #include "../project/assets/materialAsset.h"
 #include "../project/compile/compileErrors.h"
@@ -3617,9 +3618,11 @@ namespace
     if (!fs::is_empty(target, ec)) {
       emitErr("target directory is not empty"); return 1;
     }
-    fs::path templ = fs::path("n64") / "examples" / "empty";
-    if (!fs::exists(templ)) {
-      emitErr("template missing: " + templ.string() + " (run from repo root)");
+    std::string templateId = a.templateId.empty() ? "empty" : a.templateId;
+    fs::path templ = Project::templatesRoot() / templateId;
+    if (!fs::exists(templ / "project.p64proj")) {
+      emitErr("unknown template '" + templateId +
+              "' (see project-templates; run from repo root)");
       return 1;
     }
     fs::copy(templ, target,
@@ -3629,6 +3632,13 @@ namespace
     fs::remove(target / "Makefile", ec);
     fs::remove_all(target / "build", ec);
     fs::remove_all(target / "filesystem", ec);
+    // Non-empty templates may ship a ROM under their own romName.
+    for (const auto &e : fs::directory_iterator(target, ec)) {
+      if (ec) break;
+      if (e.is_regular_file() && e.path().extension() == ".z64") {
+        std::error_code rmEc; fs::remove(e.path(), rmEc);
+      }
+    }
 
     auto cfgPath = target / "project.p64proj";
     auto cfg = Utils::JSON::loadFile(cfgPath);
@@ -3640,8 +3650,35 @@ namespace
     nlohmann::json out;
     out["created"] = cfgPath.string();
     out["name"] = a.name;
+    out["template"] = templateId;
     emitJSON(out);
     return 0;
+  }
+
+  // Lists available new-project templates (the shipped n64/examples). Like
+  // project-create this is project-less so agents can discover templates
+  // before any .p64proj exists.
+  int doProjectTemplates(const CLI::Commands::Args &/*a*/)
+  {
+    auto templates = Project::listProjectTemplates();
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto &t : templates) {
+      arr.push_back({
+        {"id", t.id},
+        {"label", t.label},
+        {"description", t.description},
+      });
+    }
+    nlohmann::json out;
+    out["root"] = Project::templatesRoot().string();
+    out["templates"] = arr;
+    emitJSON(out);
+    return 0;
+  }
+
+  int cmdProjectTemplates(const CLI::Commands::Args &a, Project::Project &/*project*/)
+  {
+    return doProjectTemplates(a);
   }
 
   // Registry wrapper — forwards to doProjectCreate so the standard
@@ -5302,6 +5339,7 @@ namespace CLI::Commands
     {"asset-find-unused",       cmdAssetFindUnused},
     // Bootstrap a fresh project from the empty template.
     {"project-create",          cmdProjectCreate},
+    {"project-templates",       cmdProjectTemplates},
     // Variant prefab inheritance — structured sparse overrides keyed by
     // stable Object/Component uuids (Blueprint-Actor style).
     {"prefab-override-prop",            cmdPrefabOverrideProp},
@@ -5390,6 +5428,7 @@ namespace CLI::Commands
     add("--to",      "New name (for *-rename-* commands).");
     add("--restype", "Resource type asset (uuid or name) for resource-create.");
     add("--element-kind", "Element scalar kind for ARRAY-typed prefab vars (int|float|bool). Required when --type=array.");
+    add("--template", "Template id for project-create (an n64/examples dir; default 'empty'). See project-templates.");
     // Boolean toggles. argparse's implicit_value/default_value duo makes
     // these `--flag`-only (no value needed); the readArgs side pulls them
     // straight as bools.
@@ -5422,6 +5461,7 @@ namespace CLI::Commands
     args.to      = get("--to");
     args.restype = get("--restype");
     args.elementKind = get("--element-kind");
+    args.templateId  = get("--template");
     args.noScaffold = prog.get<bool>("--no-scaffold");
     args.autofix    = prog.get<bool>("--autofix");
   }
@@ -5435,7 +5475,8 @@ namespace CLI::Commands
 
   int dispatchBootstrap(const Args &args)
   {
-    if (args.cmd == "project-create") return doProjectCreate(args);
+    if (args.cmd == "project-create")    return doProjectCreate(args);
+    if (args.cmd == "project-templates") return doProjectTemplates(args);
     emitErr("not a bootstrap command: " + args.cmd);
     return 1;
   }

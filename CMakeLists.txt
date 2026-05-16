@@ -138,6 +138,8 @@ add_executable(pyrite64 src/main.cpp
         src/renderer/texture.cpp
         src/renderer/texture.h
         src/project/project.cpp
+        src/project/projectTemplates.h
+        src/project/projectTemplates.cpp
         src/project/cacheDir.h
         src/project/cacheDir.cpp
         src/editor/recentProjects.h

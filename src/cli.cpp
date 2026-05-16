@@ -128,7 +128,7 @@ CLI::Result CLI::run(int argc, char** argv)
     // project-create bootstraps a project from the empty template. It must
     // run before any Project::Project ctor, otherwise opening a not-yet-
     // existent .p64proj throws. The handler does not need a Project ref.
-    if (cmd == "project-create") {
+    if (cmd == "project-create" || cmd == "project-templates") {
       int rc = CLI::Commands::dispatchBootstrap(cliArgs);
       res = (rc == 0);
       return res ? Result::SUCCESS : Result::ERROR;
