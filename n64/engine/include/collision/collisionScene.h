@@ -67,6 +67,16 @@ namespace P64::Coll {
     RigidBody *findRigidBodyByObjectId(uint16_t id) const;
     const std::vector<RigidBody *> &getRigidBodies() const { return rigidBodies_; }
 
+    static void enableRigidBody(RigidBody *rigidBody);
+
+    /// @brief Temporarily exclude the given RigidBody from the simulation.
+    ///
+    /// While disabled, the body will be immune to collision (allowing it to pass through objects) and will not receive
+    /// changes to force, velocity, or acceleration.
+    /// Manually moving the body (via RigidBody::setPosition()/RigidBody::setRotation()) is still allowed.
+    /// Call enableRigidBody() to re-enable the RigidBody.
+    void disableRigidBody(RigidBody *rigidBody);
+
     void addCollider(Collider *collider);
     void removeCollider(Collider *collider);
     const std::vector<Collider *> &getColliders() const { return colliders_; }

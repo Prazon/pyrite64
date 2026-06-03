@@ -54,6 +54,9 @@ namespace P64::Coll {
   }
 
   static bool collisionEventMasksOverlap(const CollEvent &event) {
+    if (event.selfRigidBody && !event.selfRigidBody->isEnabled()) return false;
+    if (event.hitRigidBody && !event.hitRigidBody->isEnabled()) return false;
+
     if(event.selfCollider) {
       if(event.hitCollider) return event.selfCollider->readsCollider(event.hitCollider);
       if(event.hitMeshCollider) return event.selfCollider->readsMeshCollider(event.hitMeshCollider);
@@ -96,7 +99,7 @@ namespace P64::Coll {
   }
 
   bool CollisionScene::shouldTrackSleepState(const RigidBody *rigidBody) {
-    return rigidBody && !rigidBody->isKinematic_;
+    return rigidBody && rigidBody->isEnabled_ && !rigidBody->isKinematic_;
   }
 
   bool CollisionScene::rigidBodyVelocitiesExceededSleepThreshold(const RigidBody *rigidBody) {
@@ -274,7 +277,7 @@ namespace P64::Coll {
   void CollisionScene::removeRigidBody(RigidBody *rigidBody) {
     if(!rigidBody) return;
 
-    std::vector<RigidBody *> wakeCandidates;
+    disableRigidBody(rigidBody);
 
     if(rigidBody->owner_) {
       auto ownerIt = ownerRigidBodies_.find(rigidBody->owner_);
@@ -283,13 +286,26 @@ namespace P64::Coll {
       }
     }
 
+    rigidBodies_.erase(std::remove(rigidBodies_.begin(), rigidBodies_.end(), rigidBody), rigidBodies_.end());
+  }
+
+  void CollisionScene::enableRigidBody(RigidBody *rigidBody) {
+    if(!rigidBody || rigidBody->isEnabled_) return;
+    rigidBody->enable();
+  }
+
+  void CollisionScene::disableRigidBody(RigidBody* rigidBody) {
+    if(!rigidBody || !rigidBody->isEnabled_) return;
+
+    std::vector<RigidBody *> wakeCandidates;
+
     removeCachedConstraints([rigidBody](const ContactConstraint &cc) {
       return cc.rigidBodyA == rigidBody || cc.rigidBodyB == rigidBody;
     }, wakeCandidates, rigidBody);
 
-    // Sleeping rigidBodies overlapping the removed body are likely support-dependent and should re-evaluate.
+    // Sleeping rigidBodies overlapping the disabled body are likely support-dependent and should re-evaluate.
     const AABB removedBounds = rigidBody->worldAabb_;
-    
+
     for(RigidBody *body : rigidBodies_) {
       if(!body || body == rigidBody) continue;
       if(aabbOverlap(body->worldAabb_, removedBounds)) {
@@ -298,8 +314,7 @@ namespace P64::Coll {
     }
 
     wakeCandidateIslands(wakeCandidates);
-
-    rigidBodies_.erase(std::remove(rigidBodies_.begin(), rigidBodies_.end(), rigidBody), rigidBodies_.end());
+    rigidBody->disable();
   }
 
   RigidBody *CollisionScene::findRigidBodyByObjectId(uint16_t id) const
@@ -667,7 +682,7 @@ namespace P64::Coll {
     std::vector<RigidBody *> wakeCandidates;
 
     for(RigidBody *body : rigidBodies_) {
-      if(!body || !body->isSleeping_) continue;
+      if(!body || !body->isEnabled_ || !body->isSleeping_) continue;
       if(!rigidBodyTransformExceededSleepThreshold(body)) continue;
       wakeCandidates.push_back(body);
     }
@@ -831,7 +846,7 @@ namespace P64::Coll {
     meshCandidates.resize(meshColliders_.size());
 
     for(RigidBody *body : rigidBodies_) {
-      if(!body || body->isSleeping_ || body->isKinematic_) continue;
+      if(!body || !body->isEnabled_ || body->isSleeping_ || body->isKinematic_) continue;
 
       const float dt = fixedDt_ * body->timeScale_;
       if(dt <= 0.0f) continue;
@@ -1251,7 +1266,7 @@ namespace P64::Coll {
 
           fm_vec3_t contactVelA = VEC3_ZERO;
           fm_vec3_t contactVelB = VEC3_ZERO;
-          if(a && !a->isKinematic_) {
+          if(a && a->isEnabled_ && !a->isKinematic_) {
             contactVelA = a->linearVelocity_;
             if(aHasMotionAngular) {
               fm_vec3_t aCross;
@@ -1259,7 +1274,7 @@ namespace P64::Coll {
               contactVelA += aCross;
             }
           }
-          if(b && !b->isKinematic_) {
+          if(b && b->isEnabled_ && !b->isKinematic_) {
             contactVelB = b->linearVelocity_;
             if(bHasMotionAngular) {
               fm_vec3_t bCross;
@@ -1426,7 +1441,7 @@ namespace P64::Coll {
         appliedCorrection = true;
 
         // Apply linear + angular corrections to A
-        if(a && !a->isKinematic_) {
+        if(a && a->isEnabled_ && !a->isKinematic_) {
           if(invMassA > 0.0f) {
             fm_vec3_t corrA = constrainLinearWorld(a, cc.normal * (correctionMag * invMassA));
             a->position_ += corrA;
@@ -1447,7 +1462,7 @@ namespace P64::Coll {
         }
 
         // Apply linear + angular corrections to B
-        if(b && !b->isKinematic_) {
+        if(b && b->isEnabled_ && !b->isKinematic_) {
           if(invMassB > 0.0f) {
             fm_vec3_t corrB = constrainLinearWorld(b, cc.normal * (correctionMag * invMassB));
             b->position_ -= corrB;
@@ -1710,7 +1725,7 @@ namespace P64::Coll {
     // Update compound CoM/inertia on demand and refresh world inertia tensors.
     for (RigidBody *body : rigidBodies_){
       syncCompoundProperties(body);
-      if(body->isSleeping_) continue;
+      if(!body->isEnabled_ || body->isSleeping_) continue;
       body->updateWorldInertia();
     }
     ticksWorldUpdate = get_ticks() - stageStart;
@@ -1718,6 +1733,7 @@ namespace P64::Coll {
     stageStart = get_ticks();
     // Integrate velocities (also resets sleeping bodies — see RigidBody::integrateVelocity)
     for(RigidBody *body : rigidBodies_) {
+      if (!body->isEnabled_) continue;
       body->integrateVelocity(fixedDt_, gravity_);
       body->integrateAngularVelocity(fixedDt_);
     }
@@ -1745,7 +1761,7 @@ namespace P64::Coll {
     stageStart = get_ticks();
     // Reset push velocities for split impulse (Bullet-style)
     for(RigidBody *body : rigidBodies_) {
-      if(!body->isSleeping_) body->resetPushVelocities();
+      if(body->isEnabled_ && !body->isSleeping_) body->resetPushVelocities();
     }
     warmStart();
     ticksWarmStart = get_ticks() - stageStart;
@@ -1759,7 +1775,7 @@ namespace P64::Coll {
     // Integrate positions and rotations (including split impulse push velocities)
     stageStart = get_ticks();
     for(RigidBody *body : rigidBodies_) {
-      if(body->isSleeping_) continue;
+      if(!body->isEnabled_ || body->isSleeping_) continue;
 
       body->integratePosition(fixedDt_);
       body->integrateRotation(fixedDt_);
