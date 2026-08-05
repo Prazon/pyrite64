@@ -105,9 +105,7 @@ namespace P64::Comp
     if (dstMidW < 0) dstMidW = 0;
     if (dstMidH < 0) dstMidH = 0;
 
-    rdpq_set_mode_standard();
-    rdpq_mode_filter(FILTER_BILINEAR);
-    if (data->alphaThreshold > 0) rdpq_mode_alphacompare(data->alphaThreshold);
+    DrawLayer::beginSprite2D(DrawLayer::Blend2D::Alpha, false, data->alphaThreshold);
     rdpq_set_prim_color({data->tintR, data->tintG, data->tintB, data->tintA});
 
     int xL = x;

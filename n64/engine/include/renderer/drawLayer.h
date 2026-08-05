@@ -64,4 +64,17 @@ namespace P64::DrawLayer
 
   void nextFrame();
   void reset();
+
+  // 2D primitive draw helpers (fork).
+
+  // Blend mode for textured 2D primitives. Alpha is the default to match
+  // Godot/GameMaker, where sprites alpha-blend against the framebuffer.
+  enum class Blend2D : uint8_t { Alpha = 0, None = 1, Additive = 2 };
+
+  // Configure rdpq for a textured 2D blit so the PRIM colour (set via
+  // rdpq_set_prim_color) modulates both the texture RGB and alpha, with the
+  // given filter and blender. Standard mode alone installs a TEX0-only
+  // combiner and no blender, so any tint or alpha would otherwise be silently
+  // discarded on device. Call this, then rdpq_set_prim_color(tint), then blit.
+  void beginSprite2D(Blend2D blend = Blend2D::Alpha, bool bilinear = false, uint8_t alphaCompare = 0);
 }

@@ -146,6 +146,21 @@ void P64::DrawLayer::draw2D()
   }
 }
 
+void P64::DrawLayer::beginSprite2D(Blend2D blend, bool bilinear, uint8_t alphaCompare)
+{
+  rdpq_set_mode_standard();
+  // out.rgb = TEX0.rgb * PRIM.rgb, out.a = TEX0.a * PRIM.a. Standard mode's
+  // default combiner is TEX0-only, so without this the PRIM tint never applies.
+  rdpq_mode_combiner(RDPQ_COMBINER1((TEX0, 0, PRIM, 0), (TEX0, 0, PRIM, 0)));
+  rdpq_mode_filter(bilinear ? FILTER_BILINEAR : FILTER_POINT);
+  switch(blend) {
+    case Blend2D::Alpha:    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY); break;
+    case Blend2D::Additive: rdpq_mode_blender(RDPQ_BLENDER_ADDITIVE); break;
+    case Blend2D::None:     rdpq_mode_blender(0); break;
+  }
+  if(alphaCompare > 0) rdpq_mode_alphacompare(alphaCompare);
+}
+
 void P64::DrawLayer::nextFrame()
 {
   frameIdx = (frameIdx + 1) % LAYER_BUFFER_COUNT;

@@ -85,9 +85,7 @@ namespace P64::Comp
     int drawX = (int)obj.pos.x;
     int drawY = (int)obj.pos.y;
 
-    rdpq_set_mode_standard();
-    rdpq_mode_filter(FILTER_BILINEAR);
-    rdpq_mode_alphacompare(data->alphaThreshold);
+    DrawLayer::beginSprite2D(DrawLayer::Blend2D::Alpha, false, data->alphaThreshold);
     rdpq_set_prim_color({data->tintR, data->tintG, data->tintB, data->tintA});
     rdpq_sprite_blit(data->sprite, drawX, drawY, &parms);
   }

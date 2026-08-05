@@ -72,9 +72,7 @@ namespace P64::Comp
       parms.scale_x = (data->sprite->width  > 0) ? ((float)w / (float)data->sprite->width)  : 1.0f;
       parms.scale_y = (data->sprite->height > 0) ? ((float)h / (float)data->sprite->height) : 1.0f;
 
-      rdpq_set_mode_standard();
-      rdpq_mode_filter(FILTER_BILINEAR);
-      if (data->alphaThreshold > 0) rdpq_mode_alphacompare(data->alphaThreshold);
+      DrawLayer::beginSprite2D(DrawLayer::Blend2D::Alpha, false, data->alphaThreshold);
       rdpq_set_prim_color({data->tintR, data->tintG, data->tintB, data->tintA});
       rdpq_sprite_blit(data->sprite, x, y, &parms);
       return;
