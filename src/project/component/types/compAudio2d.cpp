@@ -67,7 +67,7 @@ namespace Project::Component::Audio2D
     uint8_t flags = 0;
     if(data.loop.value)flags |= 1 << 0;
     if(data.autoPlay.value)flags |= 1 << 1;
-    if(asset->type == FileType::MUSIC_XM)flags |= 1 << 2;
+    if(asset && asset->type == FileType::MUSIC_XM)flags |= 1 << 2;
 
     ctx.fileObj.write<uint16_t>(id);
     ctx.fileObj.write<uint16_t>((uint16_t)(data.volume.value * 0xFFFF));
