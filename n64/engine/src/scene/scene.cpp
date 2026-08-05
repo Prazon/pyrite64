@@ -327,7 +327,12 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
   renderPipeline->preDraw();
   DrawLayer::draw(0);
 
-  // 3D Pass, for every active camera
+  // 3D Pass, for every active camera.
+  // Mode2D scenes skip it entirely (camera attach, lighting, depth, and the
+  // 3D object walk); only the screen-space 2D pass below runs. The framebuffer
+  // and a full-screen scissor are already set by rdpq_attach in the pipeline
+  // draw pass, so the 2D pass needs no camera projection.
+  if(conf.renderMode != (uint8_t)SceneConf::RenderMode::MODE_2D)
   for(auto &cam : cameras)
   {
     // Inactive split-screen ports collapse their viewport to (0,0,0,0)
