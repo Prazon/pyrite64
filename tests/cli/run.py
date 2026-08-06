@@ -407,6 +407,12 @@ TESTS: List[Test] = [
     Test("graph-add-node-by-idx",      "graph-add-node",      ["--asset", "TGraph", "--type", "5"]),  # Value node
     Test("graph-list-nodes",           "graph-list-nodes",    ["--asset", "TGraph"]),
     Test("graph-add-bad-type",         "graph-add-node",      ["--asset", "TGraph", "--type", "NotARealNode"], expect_fail=True),
+
+    # === graph: spec-driven nodes + stable typeId aliases =============
+    Test("graph-node-types",           "graph-node-types",    []),
+    Test("graph-add-node-by-alias",    "graph-add-node",      ["--asset", "TGraph", "--type", "p64.mathAdd"]),
+    Test("graph-add-node-spec",        "graph-add-node",      ["--asset", "TGraph", "--type", "core.varGet"]),
+    Test("graph-migrate",              "graph-migrate",       []),
     Test("graph-connect-missing-node", "graph-connect",       ["--asset", "TGraph", "--from", "999:0", "--to", "888:0"], expect_fail=True),
     Test("graph-disconnect-noop",      "graph-disconnect",    ["--asset", "TGraph", "--from", "1:0", "--to", "2:0"], expect_fail=True),
 
@@ -459,14 +465,14 @@ TESTS: List[Test] = [
     # === material-graph node-level ops (deferred follow-up landed) ====
     Test("material-graph-list-empty",  "material-graph-list-nodes", ["--asset", "TMat"]),
     Test("material-graph-add-output",  "material-graph-add-node", ["--asset", "TMat", "--type", "Material Output"]),
-    Test("material-graph-add-colors",  "material-graph-add-node", ["--asset", "TMat", "--type", "Colors", "--value", "[60,260]"]),
+    Test("material-graph-add-colors",  "material-graph-add-node", ["--asset", "TMat", "--type", "Values", "--value", "[60,260]"]),
     Test("material-graph-add-by-idx",  "material-graph-add-node", ["--asset", "TMat", "--type", "1"]),  # ColorCombiner
     Test("material-graph-list",        "material-graph-list-nodes", ["--asset", "TMat"]),
     Test("material-graph-add-bad",     "material-graph-add-node", ["--asset", "TMat", "--type", "NotANode"], expect_fail=True),
     Test("material-graph-disc-noop",   "material-graph-disconnect", ["--asset", "TMat", "--from", "1:0", "--to", "2:0"], expect_fail=True),
 
     # === material-graph: set-node-prop / duplicate-node / set-node-pos ===
-    Test("mg-anchor-colors-node",      "material-graph-add-node", ["--asset", "TMat", "--type", "Colors"],
+    Test("mg-anchor-colors-node",      "material-graph-add-node", ["--asset", "TMat", "--type", "Values"],
          captures={"MG_COLORS_UUID": "added"}),
     Test("mg-set-node-pos",            "material-graph-set-node-pos", ["--asset", "TMat", "--parent", "{MG_COLORS_UUID}", "--value", "[120,200]"]),
     Test("mg-set-node-prop",           "material-graph-set-node-prop",["--asset", "TMat", "--parent", "{MG_COLORS_UUID}", "--field", "setPrim", "--value", "true"]),

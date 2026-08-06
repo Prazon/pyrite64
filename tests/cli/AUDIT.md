@@ -209,6 +209,9 @@ Proposed CLI (all asset-keyed by node-graph .p64graph UUID/name):
 - `graph-set-node-pos --asset Foo --node <uuid> --pos x,y` (P2)
 - `graph-set-node-prop --asset Foo --node <uuid> --field <name> --value <json>` (P1) - for the inline property knobs on a node
 - `graph-compile --asset Foo` (P1) - mirrors the Compile button; runs Graph::validate and dumps diagnostics
+- `graph-node-types` (implemented) - lists every spawnable node type: table nodes (numeric `type` + stable `typeId` alias like `p64.mathAdd`) and spec-driven nodes (native + JS builtins + `<project>/nodes/*.js`), so agents can discover project-defined nodes
+- `graph-migrate` (implemented) - round-trips all node-graph assets and prefab event graphs through Graph (de)serialize so every node gains its stable `typeId` alias; reports migrated/unchanged
+- `graph-add-node --type` (extended) - also accepts stable aliases (`p64.wait`) and spec ids (`core.varGet`, project node ids); spec nodes persist as `typeId`-only entries
 
 ### PrefabEventGraphEditor - `src/editor/pages/parts/assets/prefabEventGraphEditor.cpp`
 

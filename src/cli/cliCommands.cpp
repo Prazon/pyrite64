@@ -28,6 +28,7 @@
 #include "../project/prefabFunctions.h"
 #include "../project/prefabScaffolder.h"
 #include "../project/graph/graph.h"
+#include "../project/graph/nodeRegistry.h"
 #include "../utils/proc.h"
 #include "../editor/preferences.h"
 #include "../project/projectTemplates.h"
@@ -4170,7 +4171,18 @@ namespace
     if (!e) { emitErr("graph not found: " + a.asset); return 1; }
     int typeId = graphTypeFromArg(a.type);
     const auto &names = Project::Graph::Graph::getNodeNames();
-    if (typeId < 0 || typeId >= (int)names.size()) {
+    // A stable string id may name a table node ("p64.mathAdd") or a spec-
+    // driven node (native/JS, e.g. "core.varGet" or a project node id).
+    const Project::Graph::Node::NodeSpec *spec = nullptr;
+    if (typeId < 0) {
+      uint32_t aliasType{};
+      if (Project::Graph::Graph::typeFromTypeId(a.type, aliasType)) {
+        typeId = (int)aliasType;
+      } else {
+        spec = Project::Graph::Node::findSpec(a.type);
+      }
+    }
+    if (!spec && (typeId < 0 || typeId >= (int)names.size())) {
       emitErr("unknown node type: " + a.type); return 1;
     }
     nlohmann::json doc;
@@ -4178,7 +4190,12 @@ namespace
     if (!loadGraphJSON(e->path, doc, err)) { emitErr(err); return 1; }
     nlohmann::json node;
     node["uuid"] = Utils::Hash::randomU64();
-    node["type"] = typeId;
+    if (spec) {
+      node["typeId"] = spec->id;
+    } else {
+      node["type"] = typeId;
+      node["typeId"] = Project::Graph::Graph::typeIdOf((uint32_t)typeId);
+    }
     // --value (optional) is a JSON array [x,y] for the on-canvas position.
     if (!a.value.empty()) {
       auto pos = parseValueJSON(a.value);
@@ -4192,8 +4209,82 @@ namespace
     project.getAssets().reload();
     nlohmann::json out;
     out["added"] = node["uuid"];
-    out["typeName"] = names[typeId];
+    out["typeName"] = spec ? spec->name : names[typeId];
+    out["typeId"] = node["typeId"];
     out["asset"] = e->name;
+    emitJSON(out);
+    return 0;
+  }
+
+  // Lists every node type a graph can contain: the table-based C++ nodes
+  // (numeric type + stable typeId alias) and the selectable spec-driven
+  // nodes (native + JS builtins + <project>/nodes/*.js).
+  int cmdGraphNodeTypes(const CLI::Commands::Args&, Project::Project&)
+  {
+    nlohmann::json out = nlohmann::json::array();
+    const auto &names = Project::Graph::Graph::getNodeNames();
+    for (size_t i = 0; i < names.size(); ++i) {
+      out.push_back({
+        {"type", i},
+        {"typeId", Project::Graph::Graph::typeIdOf((uint32_t)i)},
+        {"name", names[i]},
+        {"source", "table"},
+      });
+    }
+    for (const auto *spec : Project::Graph::Node::getNodeSpecs()) {
+      out.push_back({
+        {"typeId", spec->id},
+        {"name", spec->name},
+        {"category", spec->category},
+        {"source", "spec"},
+      });
+    }
+    emitJSON(out);
+    return 0;
+  }
+
+  // Round-trips graph JSON through Graph deserialize/serialize so every node
+  // gains its stable "typeId" alias (and future format upgrades apply).
+  int cmdGraphMigrate(const CLI::Commands::Args&, Project::Project &project)
+  {
+    nlohmann::json out;
+    out["migrated"] = nlohmann::json::array();
+    out["unchanged"] = 0;
+
+    auto roundTrip = [](const std::string &json) -> std::string {
+      Project::Graph::Graph g{};
+      g.deserialize(json);
+      return g.serialize();
+    };
+
+    for (auto &e : project.getAssets().getTypeEntries(Project::FileType::NODE_GRAPH)) {
+      auto text = Utils::FS::loadTextFile(e.path);
+      if (text.empty()) continue;
+      auto migrated = roundTrip(text);
+      if (migrated != text) {
+        Utils::FS::saveTextFile(e.path, migrated);
+        out["migrated"].push_back(e.name);
+      } else {
+        out["unchanged"] = out["unchanged"].get<int>() + 1;
+      }
+    }
+
+    // Prefab event graphs live embedded in the prefab file under "eventGraph".
+    for (auto &e : project.getAssets().getTypeEntries(Project::FileType::PREFAB)) {
+      if (!e.prefab || e.prefab->eventGraphJSON.empty()) continue;
+      auto migrated = roundTrip(e.prefab->eventGraphJSON);
+      auto normA = nlohmann::json::parse(e.prefab->eventGraphJSON, nullptr, false);
+      auto normB = nlohmann::json::parse(migrated, nullptr, false);
+      if (normA != normB) {
+        e.prefab->eventGraphJSON = migrated;
+        e.prefab->save(e.path);
+        out["migrated"].push_back(e.name + " (event graph)");
+      } else {
+        out["unchanged"] = out["unchanged"].get<int>() + 1;
+      }
+    }
+
+    project.getAssets().reload();
     emitJSON(out);
     return 0;
   }
@@ -5360,6 +5451,8 @@ namespace CLI::Commands
     {"scene-duplicate-component", cmdSceneDuplicateComponent},
     // Standalone NodeGraph (.p64graph) node-level ops.
     {"graph-list-nodes",        cmdGraphListNodes},
+    {"graph-node-types",        cmdGraphNodeTypes},
+    {"graph-migrate",           cmdGraphMigrate},
     {"graph-add-node",          cmdGraphAddNode},
     {"graph-remove-node",       cmdGraphRemoveNode},
     {"graph-connect",           cmdGraphConnect},
