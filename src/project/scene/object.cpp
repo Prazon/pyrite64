@@ -19,7 +19,6 @@ namespace
   nlohmann::json serializeObj(const Project::Object &obj)
   {
     Builder builder{};
-    builder.set("id", obj.id);
     builder.set("name", obj.name);
     builder.set("uuid", obj.uuid);
 
@@ -35,7 +34,8 @@ namespace
       .set(obj.uuidPrefab)
       .set(obj.pos)
       .set(obj.rot)
-      .set(obj.scale);
+      .set(obj.scale)
+      .set(obj.visMask);
 
     auto ovr = nlohmann::json::object();
     for(auto &[key, val] : obj.propOverrides) {
@@ -60,6 +60,7 @@ namespace
       c["id"] = comp.id;
       c["uuid"] = comp.uuid;
       c["name"] = comp.name;
+      c["enabled"] = comp.enabled.value;
       c["data"] = def.funcSerialize(comp);
       comps.push_back(c);
     }
@@ -77,6 +78,12 @@ namespace
 void Project::Object::addComponent(int compID) {
   if (compID < 0 || compID >= static_cast<int>(Component::TABLE.size()))return;
   auto &def = Component::TABLE[compID];
+
+  if (components.size() >= MAX_COMPONENTS) {
+    Utils::Logger::log("Object '" + name + "' reached the component limit (max. 255)", Utils::Logger::LEVEL_ERROR);
+    Editor::Noti::add(Editor::Noti::Type::ERROR, "Object '" + name + "' reached the component limit (max. 255)");
+    return;
+  }
 
   // if components already contains a rigidbody don't add another one and show an error message instead
   if (def.id == 11) // rigidbody
@@ -121,7 +128,8 @@ void Project::Object::deserialize(Scene *scene, nlohmann::json &doc)
 {
   if(!doc.is_object())return;
 
-  id   = doc["id"];
+  // Note: a legacy "id" field may be present in older scenes; it is intentionally
+  // ignored. Runtime ids are assigned during build, never loaded from disk.
   name = doc["name"];
   uuid = doc["uuid"];
 
@@ -137,6 +145,7 @@ void Project::Object::deserialize(Scene *scene, nlohmann::json &doc)
   Utils::JSON::readProp(doc, pos);
   Utils::JSON::readProp(doc, rot);
   Utils::JSON::readProp(doc, scale, {1,1,1});
+  Utils::JSON::readProp(doc, visMask, 1u);
 
   propOverrides.clear();
   if(doc.contains("propOverrides"))
@@ -178,6 +187,7 @@ void Project::Object::deserialize(Scene *scene, nlohmann::json &doc)
         .id = id,
         .uuid = compObj["uuid"],
         .name = compObj["name"],
+        .enabled = Property<bool>{"enabled", compObj.value("enabled", true)},
         .data = def.funcDeserialize(compObj["data"])
       });
 
@@ -192,13 +202,16 @@ void Project::Object::deserialize(Scene *scene, nlohmann::json &doc)
   for (size_t i=0; i<childCount; ++i) {
     auto childObj = std::make_shared<Object>(*this);
     childObj->deserialize(scene, chArray[i]);
-    if (scene) {
+    // Migration from the fork's earlier materialized-instance model: baked
+    // fromPrefab children under a prefab instance are re-derived live from
+    // the prefab definition now, so drop them on load. User-added children
+    // (fromPrefab=false) are kept.
+    if (isPrefabInstance() && childObj->fromPrefab) continue;
+    if(scene) {
+      // In a scene, register in the scene's object map.
       scene->addObject(*this, childObj);
     } else {
-      // No scene context (prefab asset subtree): attach the child directly
-      // under this object. The prefab carries its hierarchy as a free-
-      // floating subtree; Scene::addPrefabInstance walks it to materialize
-      // fresh runtime nodes when the prefab is dropped into a scene.
+      // In a prefab there is no scene, so keep the child tree on the object directly.
       children.push_back(childObj);
     }
   }

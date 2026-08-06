@@ -10,8 +10,6 @@ namespace P64::Comp
 {
   struct CharBody
   {
-    // Renumbered from upstream's 12 (which is SpriteBillboard in this fork)
-    // to the next free append-last slot, per the engine COMP_TABLE rule.
     static constexpr uint32_t ID = 32;
 
     private:

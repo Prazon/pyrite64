@@ -36,7 +36,8 @@ namespace P64
       uint16_t id{};
       uint16_t group{};
       uint16_t flags{};
-      uint16_t compCount{0};
+      uint8_t compCount{0};
+      uint8_t visMask{0xFF};
 
       // Prefab class-variable block. Lives at the very end of this object's
       // memory allocation, after compData. Zero on objects that aren't
@@ -253,6 +254,29 @@ namespace P64
        * @param isEnabled true to enable, false to disable
        */
       void setEnabled(bool isEnabled);
+
+      /**
+       * Check if the object itself is visible (not considering parent/group state).
+       * @return true if visible
+       */
+      [[nodiscard]] bool isSelfVisible() const {
+        return !(flags & ObjectFlags::SELF_HIDDEN);
+      }
+
+      /**
+       * Check if the object is visible, considering parent/group state.
+       * @return true if visible
+       */
+      [[nodiscard]] bool isVisible() const {
+        return !(flags & ObjectFlags::HIDDEN);
+      }
+
+      /**
+       * Changes the state of the object to be visible or hidden.
+       * Prefer this over changing flags directly, so that children properly inherit visibility from parents.
+       * @param isVisible true to show, false to hide
+       */
+      void setVisible(bool isVisible);
 
       [[nodiscard]] bool hasChildren() const {
         return (flags & ObjectFlags::HAS_CHILDREN);

@@ -13,7 +13,7 @@ export N64_INST={{N64_INST}}
 include $(N64_INST)/include/n64.mk
 include $(N64_INST)/include/t3d.mk
 
-N64_CXXFLAGS += -std=gnu++20 -fno-exceptions -Os -Isrc -Isrc/user \
+N64_CXXFLAGS += -std=gnu++20 -fno-exceptions -O3 -Isrc -Isrc/user \
 	-I$(ENGINE_DIR)/include
 
 # Allow custom attributes, otherwise GCC (rightfully) complains unknown ones
@@ -57,10 +57,8 @@ build/%.dfs:
 $(BUILD_DIR)/$(ROM_NAME).dfs: $(assets_conv)
 $(BUILD_DIR)/$(ROM_NAME).elf: $(src:%.cpp=$(BUILD_DIR)/%.o) $(ENGINE_DIR)/build/engine.a
 
-$(ROM_NAME).z64: N64_ROM_TITLE="{{ROM_TITLE}}"
-$(ROM_NAME).z64: N64_ROM_SAVETYPE={{ROM_SAVETYPE}}
-$(ROM_NAME).z64: N64_ROM_REGIONFREE={{ROM_REGIONFREE}}
-$(ROM_NAME).z64: N64_ROM_RTC={{ROM_RTC}}
+$(ROM_NAME).z64: N64_ROM_TITLE="{{PROJECT_NAME}}"
+{{ROM_HEADER_FLAGS}}
 $(ROM_NAME).z64: $(BUILD_DIR)/$(ROM_NAME).dfs
 
 clean:

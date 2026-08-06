@@ -123,6 +123,6 @@ namespace Project
       // uuid is 0 (legacy / never-saved data). Idempotent.
       void ensureStableUuids();
 
-      void save();
+      void save(const std::string &path);
   };
 }

@@ -17,6 +17,8 @@ namespace Renderer
     private:
 
     public:
+      static constexpr float DEFAULT_ORTHO_SIZE = 310.0f;
+
       glm::vec3 pos{};
       glm::vec3 pivot{};
       glm::quat rot{0,0,0,1};
@@ -31,6 +33,8 @@ namespace Renderer
       glm::vec3 pivotBase{};
       bool isMoving{false};
       bool isOrtho{false};
+      float fov{70.0f};
+      float orthoSize{DEFAULT_ORTHO_SIZE};
 
       Camera();
 

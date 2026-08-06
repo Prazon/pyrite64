@@ -7,12 +7,15 @@
 
 #include <filesystem>
 #include <thread>
+#include <algorithm>
 #include "../utils/fs.h"
 #include "../utils/logger.h"
 #include "../utils/proc.h"
 #include "../utils/string.h"
 #include "../utils/textureFormats.h"
 #include "../context.h"
+#include "romMetaBuilder.h"
+#include "../editor/imgui/notification.h"
 
 namespace fs = std::filesystem;
 using AT = Project::FileType;
@@ -251,7 +254,9 @@ bool Build::buildProject(const std::string &configPath, bool runMake)
       buildScene(project, scene, sceneCtx);
     } catch(const std::exception &e)
     {
-      Utils::Logger::log(std::string("Scene build failed: ") + e.what(), Utils::Logger::LEVEL_ERROR);
+      auto msg = std::string("Scene build failed:\n") + e.what();
+      Utils::Logger::log(msg, Utils::Logger::LEVEL_ERROR);
+      Editor::Noti::add(Editor::Noti::Type::ERROR, msg);
       return false;
     }
   }
@@ -307,8 +312,6 @@ bool Build::buildProject(const std::string &configPath, bool runMake)
   // Resolve ROM header title: explicit override or fall back to project name.
   // Libdragon's n64tool truncates to 20 chars, so do the same here so the
   // generated Makefile reflects what will actually land in the ROM header.
-  std::string romTitle = project.conf.romTitle.empty() ? project.conf.name : project.conf.romTitle;
-  if (romTitle.size() > 20) romTitle.resize(20);
 
   // Makefile
   auto makefile = Utils::replaceAll(
@@ -317,12 +320,9 @@ bool Build::buildProject(const std::string &configPath, bool runMake)
       {"{{N64_INST}}",          project.conf.pathN64Inst},
       {"{{ROM_NAME}}",          project.conf.romName},
       {"{{PROJECT_NAME}}",      project.conf.name},
-      {"{{ROM_TITLE}}",         romTitle},
-      {"{{ROM_SAVETYPE}}",      Project::saveTypeToMakefileString(project.conf.saveType)},
-      {"{{ROM_REGIONFREE}}",    project.conf.regionFree ? "true" : "false"},
-      {"{{ROM_RTC}}",           project.conf.rtcSupport ? "true" : "false"},
       {"{{ASSET_LIST}}",        Utils::join(filesSorted, " ")},
       {"{{USER_CODE_DIRS}}",    userCodeRules},
+      {"{{ROM_HEADER_FLAGS}}",  buildRomHeaderFlags(project)},
       {"{{P64_SELF_PATH}}",     Utils::Proc::getSelfPath().string()},
       {"{{PROJECT_SELF_PATH}}", fs::absolute(configPath).string()},
     }

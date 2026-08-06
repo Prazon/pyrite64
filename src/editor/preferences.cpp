@@ -17,7 +17,7 @@ namespace
     return Utils::Proc::getAppDataPath() / "preferences.json";
   }
 
-  constexpr Editor::Preferences DEF{};
+  const Editor::Preferences DEF{};
 }
 
 void Editor::Preferences::load()
@@ -28,6 +28,13 @@ void Editor::Preferences::load()
     if (doc.contains("keymap")) keymap.deserialize(doc["keymap"], keymapPreset);
     else applyKeymapPreset();
 
+    themeName = doc.value("themeName", DEF.themeName);
+    recentProjects.clear();
+    if (doc.contains("recentProjects") && doc["recentProjects"].is_array()) {
+      for (const auto &e : doc["recentProjects"]) {
+        recentProjects.push_back({e.value("path", ""), e.value("name", ""), e.value("cardImage", "")});
+      }
+    }
     zoomSpeed = doc.value("zoomSpeed", DEF.zoomSpeed);
     moveSpeed = doc.value("moveSpeed", DEF.moveSpeed);
     panSpeed = doc.value("panSpeed", DEF.panSpeed);
@@ -39,6 +46,21 @@ void Editor::Preferences::load()
     showRotAsEuler = doc.value("showRotAsEuler", DEF.showRotAsEuler);
     mouseWheelModifiesSpeed = doc.value("mouseWheelModifiesSpeed", DEF.mouseWheelModifiesSpeed);
     contentBrowserMode = (ContentBrowserMode)doc.value("contentBrowserMode", (int)DEF.contentBrowserMode);
+    viewportLockMode = doc.value("viewportLockMode", DEF.viewportLockMode);
+    colliderColor = DEF.colliderColor;
+    if (doc.contains("colliderColor")
+        && doc["colliderColor"].is_array()
+        && doc["colliderColor"].size() >= 3
+        && doc["colliderColor"][0].is_number()
+        && doc["colliderColor"][1].is_number()
+        && doc["colliderColor"][2].is_number()) {
+      // Read each channel explicitly because GLM vectors are not deserialised by nlohmann
+      colliderColor = {
+        doc["colliderColor"][0].get<float>(),
+        doc["colliderColor"][1].get<float>(),
+        doc["colliderColor"][2].get<float>()
+      };
+    }
   } else {
     applyKeymapPreset();
   }
@@ -46,9 +68,16 @@ void Editor::Preferences::load()
 
 std::string Editor::Preferences::toJson() const
 {
+  auto recents = nlohmann::json::array();
+  for (const auto &r : recentProjects) {
+    recents.push_back({{"path", r.path}, {"name", r.name}, {"cardImage", r.cardImage}});
+  }
+
   return Utils::JSON::Builder{}
     .set("keymapPreset", (uint32_t)keymapPreset)
     .set("keymap", keymap.serialize(keymapPreset))
+    .set("themeName", themeName)
+    .set("recentProjects", recents)
     .set("zoomSpeed", zoomSpeed)
     .set("moveSpeed", moveSpeed)
     .set("panSpeed", panSpeed)
@@ -60,6 +89,10 @@ std::string Editor::Preferences::toJson() const
     .set("showRotAsEuler", showRotAsEuler)
     .set("mouseWheelModifiesSpeed", mouseWheelModifiesSpeed)
     .set("contentBrowserMode", (int)contentBrowserMode)
+    .set("viewportLockMode", viewportLockMode)
+    .set("colliderColor", nlohmann::json::array({
+      colliderColor.r, colliderColor.g, colliderColor.b
+    }))
     .toString();
 }
 
@@ -68,6 +101,19 @@ void Editor::Preferences::save()
   auto prefPath = getPrefsPath();
   printf("Saving prefs to %s\n", prefPath.c_str());
   Utils::FS::saveTextFile(prefPath, toJson());
+}
+
+void Editor::Preferences::addRecentProject(const std::string &path, const std::string &name, const std::string &cardImage)
+{
+  constexpr size_t MAX_RECENTS = 12;
+  std::erase_if(recentProjects, [&](const RecentProject &r) { return r.path == path; });
+  recentProjects.insert(recentProjects.begin(), {path, name, cardImage});
+  if (recentProjects.size() > MAX_RECENTS) recentProjects.resize(MAX_RECENTS);
+}
+
+void Editor::Preferences::removeRecentProject(const std::string &path)
+{
+  std::erase_if(recentProjects, [&](const RecentProject &r) { return r.path == path; });
 }
 
 void Editor::Preferences::applyKeymapPreset()

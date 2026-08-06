@@ -49,7 +49,6 @@ int main()
   // asset_init_compression(3);
   dfs_init(DFS_DEFAULT_LOCATION);
 
-  kernel_init();
   rdpq_init();
   //rdpq_debug_start();
   //rdpq_debug_log(true);

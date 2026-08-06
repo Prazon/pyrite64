@@ -5,6 +5,7 @@
 #pragma once
 #include <memory>
 #include <string>
+#include "json.hpp"
 
 #include "../../../renderer/camera.h"
 #include "../../../renderer/vertBuffer.h"
@@ -44,6 +45,7 @@ namespace Editor
       Renderer::Framebuffer fb{};
       Renderer::Camera camera{};
       uint32_t passId{};
+      bool detached{false};
 
       // Picture-in-Picture preview of a selected Comp::Camera. Runs a second
       // render pass into `fbPreview` and is composited into the main viewport
@@ -77,6 +79,7 @@ namespace Editor
       // disable it on the same window even if ImGui's current viewport
       // changes (e.g. user releases the button after the viewport flickered).
       void* cameraDragWindow{nullptr};
+      bool cameraDragFlush{false};
 
       float moveSpeedModifier{1.0f};
       float vpOffsetY{};
@@ -117,9 +120,22 @@ namespace Editor
       bool showGrid{true};
       bool showCollMesh{false};
       bool showCollObj{true};
+      bool showIcons{true};
+      bool iconsVisible{true}; 
+      bool cleanPreview{false};
+
+      // Mirror the editor view onto a scene camera (0 = free fly).
+      uint64_t boundCameraUUID{0};
+      bool useCameraRes{false};
+      // Free-fly camera ortho toggle. Keep separate so a bound camera's projection doesn't overwrite.
+      bool freeFlyOrtho{false};
+      float fbScale{1.0f}; // framebuffer pixels per displayed pixel (used for object picking)
 
       int gizmoOp{0};
       bool gizmoTransformActive{false};
+      bool inputActive{false};    // this viewport captured the camera drag (started inside it)
+      bool viewGizmoOwned{false}; // this viewport owns the active orientation-cube drag
+      bool navLocked{false};      // viewport lock mode: cursor captured, right-click to toggle
 
       // SPBF64 fork: scene + selection this viewport drives. nullptr means
       // "use the project's currently-loaded scene + ctx.mainSelection" — that
@@ -162,10 +178,28 @@ namespace Editor
       // right of the viewport. No-op when showCameraPreview is false.
       void drawCameraPreviewOverlay(const ImVec2 &currPos, const ImVec2 &currSize);
 
+      // Toggles dragging which hides the cursor for infinite movement
+      void setCameraDrag(bool active);
+
     public:
+      uint32_t winId{0};
+
       Viewport3D();
       Viewport3D(Project::Scene& scene, Project::Selection& selection);
       ~Viewport3D();
+
+      void detach();
+
+      // Stable per-instance ImGui window title; the "###" id keeps docking state across renames.
+      std::string getWindowTitle() const {
+        if (winId == 0) return "3D-Viewport";
+        return "3D-Viewport " + std::to_string(winId + 1) + "###vp" + std::to_string(winId);
+      }
+
+      bool isViewHovered() const { return isMouseHover; }
+
+      nlohmann::json saveState() const;
+      void loadState(const nlohmann::json &j);
 
       std::shared_ptr<Renderer::Mesh> getLines() {
         return meshLines;

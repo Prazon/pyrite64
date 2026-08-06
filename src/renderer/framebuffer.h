@@ -7,6 +7,8 @@
 #include <vector>
 
 #include <SDL3/SDL.h>
+#include <cstdint>
+#include <vector>
 
 #include "glm/vec4.hpp"
 
@@ -60,5 +62,8 @@ namespace Renderer
       // releases its own transfer buffer; safe to call rarely (e.g. when
       // saving a thumbnail PNG).
       bool readPixels(std::vector<uint8_t> &out);
+      // Downloads the whole color target as tightly-packed RGBA8 (size = width*height*4).
+      // Does a blocking GPU sync, so use sparingly (e.g. thumbnail generation).
+      std::vector<uint8_t> readColorImage();
   };
 }

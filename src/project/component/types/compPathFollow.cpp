@@ -87,7 +87,7 @@ namespace Project::Component::PathFollow
     Data &data = *static_cast<Data*>(entry.data.get());
 
     auto objRef = ctx.scene ? ctx.scene->getObjectByUUID(data.objectUUID.value) : nullptr;
-    uint16_t refObjId = objRef ? (uint16_t)objRef->id : 0;
+    uint16_t refObjId = objRef ? (uint16_t)objRef->runtimeId : 0;
 
     uint8_t flags = 0;
     if (data.orient.resolve(obj))   flags |= 1 << 0;

@@ -16,6 +16,7 @@ namespace Editor
     private:
       uint64_t assetUUID{};
       std::string winName{};
+      bool placeholderOverflow{false};
 
       // SPBF64 fork: 3D preview of the asset rendered above the material UI.
       AssetPreviewViewport preview{};

@@ -29,6 +29,8 @@
 using FileType = Project::FileType;
 namespace fs = std::filesystem;
 
+uint64_t Editor::AssetsBrowser::pendingPrefabFocusUUID{0};
+
 namespace
 {
   using ChipKind = Editor::AssetsBrowser::ChipKind;
@@ -141,6 +143,26 @@ namespace
     return left + "/" + right;
   }
 
+  /**
+   * Adds a platform-specific menu item that reveals a path in the system file browser.
+   * @param path File or directory path to reveal.
+   */
+  void showInFileBrowserMenuItem(const std::string &path)
+  {
+#if defined(_WIN32)
+    const char* prompt = ICON_MDI_FOLDER_OPEN " Show in Explorer";
+#elif defined(__APPLE__)
+    const char* prompt = ICON_MDI_FOLDER_OPEN " Show in Finder";
+#else
+    const char* prompt = ICON_MDI_FOLDER_OPEN " Show in File Manager";
+#endif
+    if(ImGui::MenuItem(prompt) && !Utils::Proc::openInFileBrowser(path)) {
+      Editor::Noti::add(
+        Editor::Noti::Type::ERROR, "Failed to open File Explorer. This may be due to WSL path conversion failure."
+      );
+    }
+  }
+
   // Resolve the absolute physical path for one half of the virtual tree.
   fs::path physicalRoot(bool srcUser)
   {
@@ -160,6 +182,28 @@ void Editor::AssetsBrowser::setThumbScale(float s) {
 
 void Editor::AssetsBrowser::draw() {
   if (!ctx.project) return;
+
+  // Deferred focus request from focusPrefab() (e.g. the scene graph's
+  // "To Prefab" action). Navigate to the prefab's folder, select it, and
+  // surface the browser panel.
+  if (pendingPrefabFocusUUID) {
+    if (auto* entry = ctx.project->getAssets().getEntryByUUID(pendingPrefabFocusUUID)) {
+      std::error_code focusEc;
+      auto absDir = fs::absolute(fs::path(entry->path).parent_path(), focusEc);
+      auto rel = absDir.lexically_relative(physicalRoot(false)).generic_string();
+      if (rel == "." || rel.starts_with("..")) rel.clear();
+      currentDir = normalizeDir(rel);
+      activeTab = TAB_PREFABS;
+      tabDirs[TAB_PREFABS] = currentDir;
+      chips[CHIP_PREFABS] = true;
+      searchFilter.clear();
+      selectedFolder.clear();
+      selectedSceneId = 0;
+      ctx.selAssetUUID = pendingPrefabFocusUUID;
+    }
+    pendingPrefabFocusUUID = 0;
+    ImGui::makeTabVisible("Files");
+  }
 
   // Hover state for main.cpp's Ctrl+wheel chord. Queried while still scoped
   // to the "Files" root window, before any BeginChild, so RootAndChildWindows
@@ -275,6 +319,126 @@ void Editor::AssetsBrowser::draw() {
         dirHistory.resize(dirHistoryIdx + 1);
       dirHistory.push_back(norm);
       dirHistoryIdx = (int)dirHistory.size() - 1;
+    }
+  };
+
+  // ── Drag-drop move / drag-to-prefab helpers (ported from upstream) ───
+
+  // Moves a browser file or folder into a target directory after the current
+  // frame. Each entry moves within the physical root it already lives in.
+  auto moveBrowserEntry = [&](const fs::path &sourcePath, const fs::path &targetDir) {
+    fs::path source = fs::absolute(sourcePath).lexically_normal();
+    fs::path target = fs::absolute(targetDir).lexically_normal();
+    fs::path destination = target / source.filename();
+    bool isDirectory = fs::is_directory(source);
+
+    if (source.parent_path() == target) return;
+
+    if (isDirectory) {
+      fs::path relativeTarget = target.lexically_relative(source);
+      bool targetInsideSource = !relativeTarget.empty()
+        && relativeTarget.begin()->string() != "..";
+      if (targetInsideSource) return;
+    }
+
+    if (fs::exists(destination) || (!isDirectory && fs::exists(destination.string() + ".conf"))) {
+      Editor::Noti::add(
+        Editor::Noti::Type::ERROR,
+        "A file or folder with that name already exists in the target directory."
+      );
+      return;
+    }
+
+    ctx.deferAction([this, source, destination, isDirectory]() {
+      std::error_code ec;
+      fs::rename(source, destination, ec);
+      if (ec) {
+        Editor::Noti::add(Editor::Noti::Type::ERROR, "Move failed: " + ec.message());
+        return;
+      }
+
+      if (!isDirectory) {
+        fs::path sourceConf = source.string() + ".conf";
+        fs::path destinationConf = destination.string() + ".conf";
+        if (fs::exists(sourceConf)) {
+          fs::rename(sourceConf, destinationConf, ec);
+          if (ec) {
+            Editor::Noti::add(Editor::Noti::Type::ERROR, "Failed to move .conf: " + ec.message());
+          }
+        }
+      }
+
+      selectedFolder.clear();
+      ctx.project->getAssets().reload();
+    });
+  };
+
+  // Accepts files and folders dragged from the browser over a folder target.
+  // `virtTarget` is the virtual Content path of the drop target; payloads
+  // resolve against the physical root they live in (scripts vs assets).
+  auto acceptBrowserEntryPayload = [&](const std::string &virtTarget) {
+    const ImGuiPayload* activePayload = ImGui::GetDragDropPayload();
+    if (!activePayload) return;
+
+    if (activePayload->IsDataType("ASSET")) {
+      uint64_t assetUUID = *static_cast<const uint64_t*>(activePayload->Data);
+      auto *asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
+
+      // Node Graphs are shown virtually but always stored at the assets root
+      if (asset && asset->type != FileType::NODE_GRAPH) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+              "ASSET", ImGuiDragDropFlags_AcceptBeforeDelivery
+            ); payload && payload->Delivery) {
+          std::error_code absEc;
+          auto absPath = fs::absolute(fs::path(asset->path), absEc);
+          if (absEc) absPath = fs::path(asset->path);
+          auto relScripts = absPath.lexically_relative(scriptsRootAbs).generic_string();
+          bool underScripts = !relScripts.empty() && !relScripts.starts_with("..");
+          moveBrowserEntry(absPath,
+            (underScripts ? scriptsRootAbs : assetsRootAbs) / virtTarget);
+        }
+      }
+    } else if (activePayload->IsDataType("ASSET_FOLDER")) {
+      if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+            "ASSET_FOLDER", ImGuiDragDropFlags_AcceptBeforeDelivery
+          ); payload && payload->Delivery) {
+        // Payload carries the folder's virtual path; move whichever physical
+        // sides exist so the assets/scripts mirror stays in lockstep.
+        std::string virtSrc = static_cast<const char*>(payload->Data);
+        fs::path assetSide  = assetsRootAbs  / virtSrc;
+        fs::path scriptSide = scriptsRootAbs / virtSrc;
+        std::error_code exEc;
+        if (fs::exists(assetSide, exEc))  moveBrowserEntry(assetSide,  assetsRootAbs  / virtTarget);
+        if (fs::exists(scriptSide, exEc)) moveBrowserEntry(scriptSide, scriptsRootAbs / virtTarget);
+      }
+    }
+  };
+
+  // Converts a delivered Scene Graph object into a prefab inside the target
+  // (virtual) directory. Source is the scene graph's "OBJECT" drag payload.
+  auto acceptObjectAsPrefabPayload = [&](const std::string &targetDir) {
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+          "OBJECT", ImGuiDragDropFlags_AcceptBeforeDelivery
+        )) {
+      uint32_t objectUUID = *static_cast<const uint32_t*>(payload->Data);
+      auto *scene = ctx.project->getScenes().getLoadedScene();
+      auto object = scene ? scene->getObjectByUUID(objectUUID) : nullptr;
+      if (payload->Delivery && object && !object->isPrefabInstance()) {
+        std::string normalizedTargetDir = normalizeDir(targetDir);
+
+        // Make sure the new prefab is visible where it lands.
+        chips[CHIP_PREFABS] = true;
+        activeTab = TAB_PREFABS;
+        tabDirs[TAB_PREFABS] = normalizedTargetDir;
+        searchFilter.clear();
+
+        // Asset reloads are unsafe while the current frame still references
+        // textures, so defer the actual creation.
+        ctx.deferAction([scene, objectUUID, normalizedTargetDir]() {
+          uint64_t prefabUUID = scene->createPrefabFromObject(objectUUID, normalizedTargetDir);
+          if (prefabUUID) ctx.selAssetUUID = prefabUUID;
+        });
+      }
     }
   };
 
@@ -901,6 +1065,10 @@ void Editor::AssetsBrowser::draw() {
     if (ImGui::Button(ICON_MDI_FOLDER " Content")) {
       navigateTo("");
     }
+    if (ImGui::BeginDragDropTarget()) {
+      acceptBrowserEntryPayload("");
+      ImGui::EndDragDropTarget();
+    }
 
     std::vector<std::string> crumbParts{};
     if (!currentDir.empty()) {
@@ -920,6 +1088,10 @@ void Editor::AssetsBrowser::draw() {
       accum = joinDir(accum, part);
       if (ImGui::Button(part.c_str())) {
         navigateTo(accum);
+      }
+      if (ImGui::BeginDragDropTarget()) {
+        acceptBrowserEntryPayload(accum);
+        ImGui::EndDragDropTarget();
       }
     }
     ImGui::PopStyleVar(2);
@@ -1522,13 +1694,26 @@ void Editor::AssetsBrowser::draw() {
     bool clicked = drawFolderCard(folderAbsId, folder, filled, isFolderSel, &folderCardPos);
     bool isDblClick = ImGui::IsMouseDoubleClicked(0) && ImGui::IsItemHovered();
 
-    // Drag-drop target: a scene dropped here moves to this folder.
+    // Drag source: folders can be moved into other folders / breadcrumbs.
+    // Payload is the virtual Content path so the drop side can mirror the
+    // move across both physical roots.
+    if (ImGui::BeginDragDropSource()) {
+      ImGui::SetDragDropPayload("ASSET_FOLDER", virtChild.c_str(), virtChild.size() + 1);
+      ImGui::TextUnformatted(folder.c_str());
+      ImGui::EndDragDropSource();
+    }
+
+    // Drag-drop target: a scene dropped here moves to this folder, a scene
+    // graph object becomes a prefab inside it, and browser files / folders
+    // move into it.
     if (ImGui::BeginDragDropTarget()) {
       if (const auto *payload = ImGui::AcceptDragDropPayload("SCENE")) {
         int sid = *static_cast<const int*>(payload->Data);
         pendingSceneMoveId = sid;
         pendingSceneMoveTarget = virtChild;
       }
+      acceptObjectAsPrefabPayload(virtChild);
+      acceptBrowserEntryPayload(virtChild);
       ImGui::EndDragDropTarget();
     }
 
@@ -1902,6 +2087,20 @@ void Editor::AssetsBrowser::draw() {
     ctx.project->getScenes().setSceneRelPath(pendingSceneMoveId, pendingSceneMoveTarget);
   }
 
+  // The whole grid represents the currently open directory: dropping a scene
+  // graph object on empty space converts it into a prefab here.
+  {
+    bool prefabDropAllowed = !splitMode
+      || activeTab == TAB_ASSETS || activeTab == TAB_PREFABS;
+    ImRect directoryDropRect = ImGui::GetCurrentWindow()->InnerRect;
+    directoryDropRect.Max.y -= 1_px; // InnerRect otherwise overlaps the child edge by 1px
+    if (prefabDropAllowed && ImGui::BeginDragDropTargetCustom(
+          directoryDropRect, ImGui::GetID("AssetsDirectoryDropTarget"))) {
+      acceptObjectAsPrefabPayload(currentDir);
+      ImGui::EndDragDropTarget();
+    }
+  }
+
   // Delete-key shortcut — funnels into the existing right-click delete flow
   // for whichever item is currently selected. Suppressed while renaming, while
   // a confirm dialog is already up, or while another widget (search box,
@@ -2091,21 +2290,14 @@ void Editor::AssetsBrowser::draw() {
   if (splitMode) tabDirs[activeTab] = currentDir;
 }
 
-void Editor::AssetsBrowser::showContextMenu(const std::string& path) {
-#if defined(_WIN32)
-  std::string showPrompt = ICON_MDI_FOLDER_OPEN " Show in Explorer";
-#elif defined(__APPLE__)
-  std::string showPrompt = ICON_MDI_FOLDER_OPEN " Show in Finder";
-#else
-  std::string showPrompt = ICON_MDI_FOLDER_OPEN " Show in File Manager";
-#endif
-  if(ImGui::MenuItem(showPrompt.c_str())) {
-    if (!Utils::Proc::openInFileBrowser(path)) {
-      Editor::Noti::add(Editor::Noti::Type::ERROR, "Failed to open File Explorer. This may be due to WSL path conversion failure.");
-    }
-  }
+void Editor::AssetsBrowser::focusPrefab(uint64_t prefabUUID) {
+  pendingPrefabFocusUUID = prefabUUID;
+}
 
-  if(ImGui::MenuItem(ICON_MDI_OPEN_IN_NEW " Open")) {
+void Editor::AssetsBrowser::showContextMenu(const std::string& path, bool showOpenItem) {
+  showInFileBrowserMenuItem(path);
+
+  if(showOpenItem && ImGui::MenuItem(ICON_MDI_OPEN_IN_NEW " Open")) {
     if (!Utils::Proc::openFile(path)) {
       Editor::Noti::add(Editor::Noti::Type::ERROR, "Failed to open File. This may be due to WSL path conversion failure.");
     }

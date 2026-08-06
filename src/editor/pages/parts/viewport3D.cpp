@@ -5,6 +5,8 @@
 #include "viewport3D.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <memory>
 #include "imgui.h"
 #include "../../imgui/theme.h"
 #include "ImGuizmo.h"
@@ -22,7 +24,9 @@
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/matrix_decompose.hpp"
 #include "SDL3/SDL_gpu.h"
+#include "SDL3/SDL_mouse.h"
 #include "IconsMaterialDesignIcons.h"
+#include "../../transformUtils.h"
 #include "../../undoRedo.h"
 #include "../../selectionUtils.h"
 
@@ -177,47 +181,240 @@ namespace
   std::shared_ptr<Renderer::Texture> sprites{};
   uint32_t spritesRefCount{0};
 
-  void iterateObjects(
-    Project::Object& parent,
-    std::function<void(Project::Object&, Project::Component::Entry*)> callback
-  )
+  // World transform for expanded prefab-instance children. The engine has no runtime
+  // transform hierarchy, so the editor composes nested transforms here to preview them.
+  struct EditorWorldTrans {
+    glm::vec3 pos{0,0,0};
+    glm::quat rot{glm::vec3(0.0f)}; // {1,0,0,0} would set x=1, not identity
+    glm::vec3 scale{1,1,1};
+  };
+
+  // RAII used while drawing one nested prefab node. Component draws read obj.pos/rot/scale
+  // and obj.uuid directly, so we temporarily write the node's world transform and a pick id,
+  // then restore them on exit. fb() returns the actual transform slot we overwrite.
+  struct NestedRenderPlacement {
+    static glm::vec3& fb(Property<glm::vec3>& p, std::unordered_map<uint64_t, GenericValue>& ov) {
+      auto it = ov.find(p.id);
+      return it != ov.end() ? it->second.get<glm::vec3>() : p.value;
+    }
+    static glm::quat& fb(Property<glm::quat>& p, std::unordered_map<uint64_t, GenericValue>& ov) {
+      auto it = ov.find(p.id);
+      return it != ov.end() ? it->second.get<glm::quat>() : p.value;
+    }
+
+    Project::Object& node;
+    uint32_t savedUuid;
+    glm::vec3 &fPos, &fScale;
+    glm::quat &fRot;
+    glm::vec3 sPos, sScale;
+    glm::quat sRot;
+
+    NestedRenderPlacement(Project::Object& n, uint32_t pickId, const EditorWorldTrans& world)
+      : node{n}, savedUuid{n.uuid},
+        fPos{fb(n.pos, n.propOverrides)}, fScale{fb(n.scale, n.propOverrides)},
+        fRot{fb(n.rot, n.propOverrides)}, sPos{fPos}, sScale{fScale}, sRot{fRot}
+    {
+      node.uuid = pickId; // component draw writes this via setObjectID -> pickable
+      fPos = world.pos; fRot = world.rot; fScale = world.scale;
+    }
+    ~NestedRenderPlacement() {
+      fPos = sPos; fRot = sRot; fScale = sScale;
+      node.uuid = savedUuid;
+    }
+  };
+
+  using IterCallback = std::function<void(Project::Object&, Project::Component::Entry*)>;
+
+  // Maps a generated pick id -> (instance uuid, path) so nested objects can be picked
+  // in the viewport (they share definition uuids across instances). Rebuilt each render.
+  inline std::unordered_map<uint32_t, std::pair<uint32_t, std::vector<uint32_t>>> nestedPickReg{};
+
+  uint32_t nestedPickId(uint32_t rootUuid, const std::vector<uint32_t>& path)
+  {
+    uint64_t h = PropScope::combine(rootUuid, 0x9E3779B9u);
+    for(uint32_t u : path) h = PropScope::combine(h, u);
+    uint32_t id = static_cast<uint32_t>(h ^ (h >> 32));
+    return id ? id : 1u;
+  }
+
+  /**
+   * Renders the children of a prefab instance (the prefab definition tree) at their
+   * composed world transforms. Component draw reads obj.pos/rot/scale, so we briefly
+   * place the node at its world transform for the callbacks, then restore it.
+   * The node uuid is briefly swapped for a per-instance pick id so it's pickable.
+   */
+  void renderNestedPrefab(Project::Object& node, const EditorWorldTrans& parentWorld,
+                          const IterCallback& callback, int depth,
+                          uint32_t rootUuid, std::vector<uint32_t> path)
+  {
+    if(depth > (int)PropScope::MAX_DEPTH || !node.enabled)return; // self-referencing prefabs
+    path.push_back(node.uuid);
+
+    Project::Object* src = Editor::SelectionUtils::prefabDefOf(&node);
+
+    // Match the build's cascade. A prefab-instance node contributes its own override
+    // layer, so its component overrides resolve here too. Without it the preview would
+    // diverge from the built ROM.
+    std::optional<PropScope::PrefabLayer> nodeLayer;
+    if(node.isPrefabInstance()) nodeLayer.emplace(node.propOverrides);
+
+    // node's local (parent-relative) transform, resolved with the scene-instance
+    // cascade (so a nested transform override is picked up). Used to compose world.
+    glm::vec3 lpos   = node.pos.resolve(node.propOverrides);
+    glm::quat lrot   = node.rot.resolve(node.propOverrides);
+    glm::vec3 lscale = node.scale.resolve(node.propOverrides);
+
+    EditorWorldTrans world{
+      parentWorld.pos + parentWorld.rot * (parentWorld.scale * lpos),
+      parentWorld.rot * lrot,
+      parentWorld.scale * lscale
+    };
+
+    uint32_t pickId = nestedPickId(rootUuid, path);
+    nestedPickReg[pickId] = {rootUuid, path};
+
+    {
+      NestedRenderPlacement place{node, pickId, world};
+      for(auto &comp : src->components) {
+        PropScope::Path compPath(comp.uuid); // so scene-instance overrides on nested props resolve
+        if (!comp.enabled.resolve(node)) continue;
+        callback(node, &comp);
+      }
+      callback(node, nullptr);
+    } // node transform + uuid restored here
+
+    // nodeLayer stays active for the children. Its keys are path-precise, so an override only
+    // resolves for its exact target. Matches the build and lets nested-prefab overrides show.
+    for(auto &child : src->children) {
+      PropScope::Path childPath(child->uuid);
+      renderNestedPrefab(*child, world, callback, depth + 1, rootUuid, path);
+    }
+  }
+
+  void iterateObjects(Project::Object& parent, const IterCallback& callback)
   {
     for(auto& child : parent.children)
     {
       if(!child->enabled)continue;
 
       auto srcObj = child.get();
+      bool isInstance = false;
       if(child->isPrefabInstance()) {
         auto prefab = ctx.project->getAssets().getPrefabByUUID(child->uuidPrefab.value);
-        if(prefab)srcObj = &prefab->obj;
+        if(prefab) { srcObj = &prefab->obj; isInstance = true; }
       }
 
       for(auto &comp : srcObj->components) {
+        PropScope::Dispatch enabledScope(child->propOverrides, comp.uuid);
+        if (!comp.enabled.resolve(*child)) continue;
         callback(*child, &comp);
       }
       callback(*child, nullptr);
+
+      // Expand the prefab definition tree (composed onto the instance's world transform).
+      if(isInstance) {
+        EditorWorldTrans instWorld{
+          child->pos.resolve(child->propOverrides),
+          child->rot.resolve(child->propOverrides),
+          child->scale.resolve(child->propOverrides)
+        };
+        // Push the scene instance's overrides as the most-derived cascade layer, matching
+        // the build, so scene-level overrides on nested props (e.g. flame color) preview.
+        PropScope::PrefabLayer sceneLayer(child->propOverrides);
+        for(auto &defChild : srcObj->children) {
+          PropScope::Path nodePath(defChild->uuid);
+          renderNestedPrefab(*defChild, instWorld, callback, 0, child->uuid, {});
+        }
+      }
 
       iterateObjects(*child, callback);
     }
   }
 
-  void applyDeltaToChildren(
-    Project::Object &obj,
-    const std::unordered_map<uint64_t, glm::vec3> &relPosMap,
-    const glm::mat4 &mat
-  ) {
-    for(auto& child : obj.children)
+  // Builds the cascade scope for a known node path under a prefab instance. The instance's
+  // override map is the outermost authoring layer, then one Path per node uuid down the
+  // chain, pushed all at once. The build and inspector produce the same keys by pushing
+  // the same primitives incrementally. See PropScope's scope-logic note.
+  struct NestedPathScope {
+    PropScope::PrefabLayer layer;
+    std::vector<std::unique_ptr<PropScope::Path>> steps;
+    NestedPathScope(const std::unordered_map<uint64_t, GenericValue>& instanceOverrides,
+                    const std::vector<uint32_t>& path)
+      : layer{instanceOverrides}
     {
-      // if child itself is selected, skip (already transformed with it)
-      // SPBF64 fork: route through the active viewport's selection so that
-      // gizmo-drag of a selection in the prefab editor doesn't drag children
-      // by the main scene's selection.
-      if(Editor::activeViewportSelection().isSelected(child->uuid))continue;
-
-      auto it = relPosMap.find(child->uuid);
-      if(it == relPosMap.end())continue;
-      child->pos.resolve(child->propOverrides) = mat * glm::vec4(it->second, 1.0f);
+      for(uint32_t uid : path) steps.push_back(std::make_unique<PropScope::Path>(uid));
     }
+  };
+
+  // Resolves the currently selected nested object (ctx.selSubPath under a prefab instance)
+  // to the definition node, the instance overrides are authored on, the node's parent
+  // world transform, and the node's own world. This descends the path, reading each
+  // intermediate transform to compose world, so it pushes Path incrementally rather than
+  // via NestedPathScope.
+  struct NestedTarget {
+    Project::Object* node{};
+    Project::Object* rootInstance{};
+    EditorWorldTrans parentWorld{};
+    EditorWorldTrans world{};
+    std::vector<Project::Object*> nodes{}; // resolved def node for each selSubPath element
+    bool valid{false};
+  };
+
+  NestedTarget resolveNestedTarget(Project::Scene& scene)
+  {
+    NestedTarget out;
+    if(ctx.selSubPath.empty())return out;
+    // Nested selection (selSubPath) is a main-selection concept, so resolve
+    // against ctx.mainSelection here; bound-selection viewports never call this.
+    auto root = scene.getObjectByUUID(ctx.mainSelection.primary());
+    if(!root || !root->isPrefabInstance())return out;
+    auto pf = ctx.project->getAssets().getPrefabByUUID(root->uuidPrefab.value);
+    if(!pf)return out;
+
+    EditorWorldTrans world{
+      root->pos.resolve(root->propOverrides),
+      root->rot.resolve(root->propOverrides),
+      root->scale.resolve(root->propOverrides)
+    };
+
+    // Cascade context: every prefab-instance node along the path keeps its own layer active
+    // for the rest of the descent (matches the build). Keys are path-precise, so an override
+    // only resolves for its exact target, and a compound prefab can reach into the prefabs it
+    // contains. The layers accumulate rather than popping per step.
+    PropScope::PrefabLayer sceneLayer(root->propOverrides);
+    std::vector<std::unique_ptr<PropScope::Path>> pathScopes;
+    std::vector<std::unique_ptr<PropScope::PrefabLayer>> nodeLayers;
+
+    Project::Object* node = &pf->obj;
+    for(uint32_t uid : ctx.selSubPath) {
+      Project::Object* defParent = Editor::SelectionUtils::prefabDefOf(node);
+      Project::Object* next = nullptr;
+      for(auto &c : defParent->children) { if(c->uuid == uid) { next = c.get(); break; } }
+      if(!next)return out; // stale path
+
+      out.parentWorld = world;
+      out.nodes.push_back(next);
+      pathScopes.push_back(std::make_unique<PropScope::Path>(uid));
+
+      if(next->isPrefabInstance())
+        nodeLayers.push_back(std::make_unique<PropScope::PrefabLayer>(next->propOverrides));
+
+      glm::vec3 lpos = next->pos.resolve(next->propOverrides);
+      glm::quat lrot = next->rot.resolve(next->propOverrides);
+      glm::vec3 lscale = next->scale.resolve(next->propOverrides);
+      world = EditorWorldTrans{
+        world.pos + world.rot * (world.scale * lpos),
+        world.rot * lrot,
+        world.scale * lscale
+      };
+      node = next;
+    }
+
+    out.node = node;
+    out.rootInstance = root.get();
+    out.world = world;
+    out.valid = true;
+    return out;
   }
 
   /**
@@ -229,8 +426,26 @@ namespace
   template<typename T>
   void ensurePropertyOverride(Project::Object *obj, Property<T> &prop)
   {
-    if (obj->propOverrides.find(prop.id) == obj->propOverrides.end()) {
+    if (!obj->hasPropOverride(prop)) {
       obj->addPropOverride(prop);
+    }
+  }
+
+  struct CamRef { uint64_t uuid; std::string name; };
+
+  // Collect all scene objects (incl. prefab instances) carrying a Camera component.
+  void collectCameras(Project::Object &parent, std::vector<CamRef> &out)
+  {
+    for (auto &child : parent.children) {
+      auto srcObj = Editor::SelectionUtils::prefabDefOf(child.get());
+      for (auto &comp : srcObj->components) {
+        PropScope::Dispatch enabledScope(child->propOverrides, comp.uuid);
+        if (comp.enabled.resolve(*child) && comp.id == 3) { // Camera
+          out.push_back({child->uuid, child->name.empty() ? "Camera" : child->name});
+          break;
+        }
+      }
+      collectCameras(*child, out);
     }
   }
 }
@@ -352,16 +567,47 @@ void Editor::Viewport3D::addBillboardQuad(const glm::vec3 &worldPos, uint32_t ob
   });
 }
 
-Editor::Viewport3D::~Viewport3D() {
+void Editor::Viewport3D::detach() {
+  if(detached)return;
+  detached = true;
   if (ctx.scene) {
     ctx.scene->removeRenderPass(passId);
     ctx.scene->removeCopyPass(passId);
     ctx.scene->removePostRenderCallback(passId);
   }
+}
+
+Editor::Viewport3D::~Viewport3D() {
+  detach();
 
   if(--spritesRefCount == 0) {
     sprites = nullptr;
   }
+}
+
+nlohmann::json Editor::Viewport3D::saveState() const
+{
+  // Note: the camera transform is intentionally not persisted, each viewport opens
+  // with the default view so a stale orientation can't carry over between sessions.
+  return {
+    {"winId", winId},
+    {"showGrid", showGrid},
+    {"showCollMesh", showCollMesh},
+    {"showCollObj", showCollObj},
+    {"showIcons", showIcons},
+    {"boundCam", boundCameraUUID},
+    {"camRes", useCameraRes},
+  };
+}
+
+void Editor::Viewport3D::loadState(const nlohmann::json &j)
+{
+  showGrid = j.value("showGrid", showGrid);
+  showCollMesh = j.value("showCollMesh", showCollMesh);
+  showCollObj = j.value("showCollObj", showCollObj);
+  showIcons = j.value("showIcons", showIcons);
+  boundCameraUUID = j.value("boundCam", (uint64_t)0);
+  useCameraRes = j.value("camRes", false);
 }
 
 bool Editor::Viewport3D::alignFocusedObjectToCamera()
@@ -375,7 +621,7 @@ bool Editor::Viewport3D::alignFocusedObjectToCamera()
   if (!obj)return false;
 
   // Prefab instances store transform edits in overrides, so create them before writing position or rotation
-  if (obj->isPrefabInstance() && !obj->isPrefabEdit) {
+  if (obj->isPrefabInstance() && !ctx.isPrefabEditing(obj->uuid)) {
     ensurePropertyOverride(obj.get(), obj->pos);
     ensurePropertyOverride(obj.get(), obj->rot);
   }
@@ -383,21 +629,8 @@ bool Editor::Viewport3D::alignFocusedObjectToCamera()
   // Read current transform to preserve child offsets after moving the parent to the editor camera
   glm::vec3 skew{0.0f};
   glm::vec4 persp{0.0f, 0.0f, 0.0f, 1.0f};
-  glm::vec3 objScale = obj->scale.resolve(obj->propOverrides);
-  glm::quat objRot = obj->rot.resolve(obj->propOverrides);
-  glm::vec3 objPos = obj->pos.resolve(obj->propOverrides);
-
-  // Rebuild current object matrix so child transforms can be converted into the old local space
-  auto oldObjMatrix = glm::recompose(objScale, objRot, objPos, skew, persp);
-
-  // Cache each child in the local space of the old transform so they can be rebuilt relative to the new one
-  std::unordered_map<uint64_t, glm::vec3> relPosMap{};
-  for (auto& child : obj->children)
-  {
-    relPosMap[child->uuid] = glm::inverse(oldObjMatrix) * glm::vec4(
-      child->pos.resolve(child->propOverrides), 1.0f
-    );
-  }
+  auto oldObjMatrix = Editor::TransformUtils::composeResolvedObjectMatrix(*obj);
+  auto relPosMap = Editor::TransformUtils::captureChildLocalOffsets(*obj, oldObjMatrix);
 
   // Copy editor camera transform to focused object
   obj->pos.resolve(obj->propOverrides) = camera.pos;
@@ -413,11 +646,11 @@ bool Editor::Viewport3D::alignFocusedObjectToCamera()
   );
 
   // Re-apply cached child offsets relative to new parent transform
-  applyDeltaToChildren(*obj, relPosMap, newObjMatrix);
+  Editor::TransformUtils::applyChildWorldPositions(*obj, relPosMap, newObjMatrix);
 
   // Add to history
   UndoRedo::getHistory().markChanged("Align object to camera");
-  
+
   return true;
 }
 
@@ -442,6 +675,8 @@ void Editor::Viewport3D::renderScenePass(
 
   bool hadDraw = false;
   iterateObjects(rootObj, [&](Project::Object &obj, Project::Component::Entry *comp) {
+    // Don't draw the camera we are looking through: its icon/frustum sits on the lens.
+    if(boundCameraUUID && obj.uuid == boundCameraUUID) { hadDraw = false; return; }
     if(!comp)
     {
       if(drawEditorHelpers && !hadDraw) {
@@ -464,6 +699,7 @@ void Editor::Viewport3D::renderScenePass(
     if(!drawEditorHelpers && comp->id != COMPONENT_ID_MODEL_STATIC && comp->id != COMPONENT_ID_MODEL_ANIMATED) return;
 
     if(def.funcDraw3D) {
+      PropScope::Dispatch dispatchScope(obj.propOverrides, comp->uuid);
       def.funcDraw3D(obj, *comp, *this, cmdBuff, pass);
       hadDraw = true;
     }
@@ -472,6 +708,7 @@ void Editor::Viewport3D::renderScenePass(
   if (drawEditorHelpers) {
     iterateObjects(rootObj, [&](Project::Object &obj, Project::Component::Entry *comp) {
       if(!comp)return;
+      if(boundCameraUUID && obj.uuid == boundCameraUUID)return;
       auto &def = Project::Component::TABLE[comp->id];
 
       // @TODO: use flag in component
@@ -479,6 +716,7 @@ void Editor::Viewport3D::renderScenePass(
       if(!showCollObj && comp->id == 5)return;
 
       if(def.funcDrawPost3D) {
+        PropScope::Dispatch dispatchScope(obj.propOverrides, comp->uuid);
         def.funcDrawPost3D(obj, *comp, *this, cmdBuff, pass);
       }
     });
@@ -502,7 +740,7 @@ void Editor::Viewport3D::renderScenePass(
     if(ctx.debugMode)SDL_PopGPUDebugGroup(cmdBuff);
   }
 
-  if (drawEditorHelpers) {
+  if (drawEditorHelpers && !cleanPreview) {
     if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "3D Lines");
     renderScene.getPipeline("lines").bind(pass);
 
@@ -511,19 +749,25 @@ void Editor::Viewport3D::renderScenePass(
 
     // hack to get thicker lines with AA, just draw again with a 1px offset in screen-space
     if(ctx.prefs.renderFactorAA > 1.0f) {
-      auto oldMat = targetUni.projMat[2];
-      targetUni.projMat[2][0] += 1.0f / targetUni.screenSize.x;
-      targetUni.projMat[2][1] -= 1.0f / targetUni.screenSize.y;
+      // the depth column only yields a constant offset under perspective, where 'w' is -viewZ.
+      // in ortho 'w' is 1, which would scale the offset by depth, so shift the position column.
+      int col = camera.isOrtho ? 3 : 2;
+      float dir = camera.isOrtho ? -1.0f : 1.0f;
+      auto oldMat = targetUni.projMat[col];
+      targetUni.projMat[col][0] += dir / targetUni.screenSize.x;
+      targetUni.projMat[col][1] -= dir / targetUni.screenSize.y;
       SDL_PushGPUVertexUniformData(cmdBuff, 0, &targetUni, sizeof(targetUni));
 
       if(showGrid)objGrid.draw(pass, cmdBuff);
       objLines.draw(pass, cmdBuff);
 
-      targetUni.projMat[2] = oldMat;
+      targetUni.projMat[col] = oldMat;
       SDL_PushGPUVertexUniformData(cmdBuff, 0, &targetUni, sizeof(targetUni));
     }
     if(ctx.debugMode)SDL_PopGPUDebugGroup(cmdBuff);
+  }
 
+  if (drawEditorHelpers && iconsVisible) {
     if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "3D Sprites");
     renderScene.getPipeline("sprites").bind(pass);
     sprites->bind(pass);
@@ -531,7 +775,7 @@ void Editor::Viewport3D::renderScenePass(
     if(ctx.debugMode)SDL_PopGPUDebugGroup(cmdBuff);
   }
 
-  // Textured billboard quads — drawn one-at-a-time so each can bind its own
+  // Textured billboard quads, drawn one-at-a-time so each can bind its own
   // texture. Uses the buffers populated during the main pass.
   if (!submittedBillboards.empty()) {
     if(ctx.debugMode)SDL_PushGPUDebugGroup(cmdBuff, "3D Billboards");
@@ -583,7 +827,7 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   auto* scene = getScene();
   if (!scene)return;
 
-  // Skip when the host window didn't draw this frame — fb is either
+  // Skip when the host window didn't draw this frame; fb is either
   // unsized (Viewport3D just constructed; draw() hasn't run yet) or
   // about-to-be-destroyed (host editor closed; defer-erase next frame).
   // Either way, running this pass would write to invalid GPU textures.
@@ -594,7 +838,13 @@ void Editor::Viewport3D::onRenderPass(SDL_GPUCommandBuffer* cmdBuff, Renderer::S
   // selection (e.g. compModel's selection-tint highlight).
   ViewportSelectionScope vpSelScope(getSelection());
 
-  getSelection().sanitize(scene);
+  if (&getSelection() == &ctx.mainSelection) {
+    // The main selection also carries selSubPath / prefabEditUUID; the ctx
+    // helper sanitizes all of them together.
+    ctx.sanitizeObjectSelection(scene);
+  } else {
+    getSelection().sanitize(scene);
+  }
 
   camera.apply(uniGlobal);
   uniGlobal.screenSize = glm::vec2{(float)fb.getWidth(), (float)fb.getHeight()};
@@ -796,6 +1046,7 @@ void Editor::Viewport3D::onCopyPass(SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPa
     if(!comp)return;
     auto &def = Project::Component::TABLE[comp->id];
     if(def.funcDrawCopyPass) {
+      PropScope::Dispatch dispatchScope(obj.propOverrides, comp->uuid);
       def.funcDrawCopyPass(obj, *comp, *this, cmdBuff, copyPass);
     }
   });
@@ -809,15 +1060,49 @@ void Editor::Viewport3D::onPostRender(Renderer::Scene &renderScene) {
 
   if (fb.getWidth() != 0 && fb.getHeight() != 0 && pickedObjID.isRequested()) {
     pickedObjID.setResult(fb.readObjectID(
-      mousePosClick.x * ctx.prefs.renderFactorAA,
-      mousePosClick.y * ctx.prefs.renderFactorAA
+      mousePosClick.x * fbScale,
+      mousePosClick.y * fbScale
     ));
   }
 
-  // Last callback of the frame for this viewport — consume the flag so
+  // Last callback of the frame for this viewport: consume the flag so
   // next frame's pre-draw callbacks see it as false unless draw() is
   // called again to set it true.
   drewThisFrame = false;
+}
+
+void Editor::Viewport3D::setCameraDrag(bool active)
+{
+  if (active == cameraDragActive) return;
+  cameraDragActive = active;
+
+  if (active) {
+    ImVec2 p = ImGui::GetMousePos();
+    cursorLockPos = {p.x, p.y};
+    // Drain SDL's accumulated relative motion so the first per-frame read
+    // doesn't include any cursor movement from before the drag started.
+    SDL_GetRelativeMouseState(nullptr, nullptr);
+    // Multi-viewport-safe drag: enable SDL relative mouse mode on the
+    // SDL window the cursor is currently over (which may be a child
+    // platform viewport when this Viewport3D belongs to an asset editor
+    // floating in its own OS window). SDL hides the cursor and gives us
+    // raw motion deltas; no OS-cursor warp needed.
+    SDL_Window* dragWin = nullptr;
+    if (auto *vp = ImGui::GetWindowViewport()) {
+      dragWin = (SDL_Window*)vp->PlatformHandle;
+    }
+    if (!dragWin) dragWin = ctx.window;
+    SDL_SetWindowRelativeMouseMode(dragWin, true);
+    cameraDragWindow = dragWin;
+    cameraDragFlush = true;
+  } else {
+    // Restore the normal cursor on the same window we captured it on, even
+    // if ImGui's current viewport changed since the drag started. Leaving
+    // relative mode puts the cursor back at its pre-drag screen position.
+    SDL_Window* dragWin = cameraDragWindow ? (SDL_Window*)cameraDragWindow : ctx.window;
+    SDL_SetWindowRelativeMouseMode(dragWin, false);
+    cameraDragWindow = nullptr;
+  }
 }
 
 void Editor::Viewport3D::draw()
@@ -838,13 +1123,25 @@ void Editor::Viewport3D::draw()
   // bound Selection rather than ctx.mainSelection.
   ViewportSelectionScope vpSelScope(getSelection());
 
+  // When this viewport drives the main selection, route writes through the
+  // ctx delegates so selSubPath (nested-prefab selection) stays consistent.
+  // Bound-selection viewports (prefab editor) write their Selection directly.
+  const bool isMainSel = &getSelection() == &ctx.mainSelection;
+  auto selClear  = [&]() { if (isMainSel) ctx.clearObjectSelection(); else getSelection().clear(); };
+  auto selSet    = [&](uint32_t uuid) { if (isMainSel) ctx.setObjectSelection(uuid); else getSelection().set(uuid); };
+  auto selAdd    = [&](uint32_t uuid) { if (isMainSel) ctx.addObjectSelection(uuid); else getSelection().add(uuid); };
+  auto selToggle = [&](uint32_t uuid) { if (isMainSel) ctx.toggleObjectSelection(uuid); else getSelection().toggle(uuid); };
+
   ctx.scene->clearLights();
   auto &rootObj = scene->getRootObject();
 
   iterateObjects(rootObj, [&](Project::Object &obj, Project::Component::Entry *comp) {
     if(!comp)return;
     auto &def = Project::Component::TABLE[comp->id];
-    if(def.funcUpdate)def.funcUpdate(obj, *comp);
+    if(def.funcUpdate) {
+      PropScope::Dispatch dispatchScope(obj.propOverrides, comp->uuid);
+      def.funcUpdate(obj, *comp);
+    }
   });
 
   fb.setClearColor(scene->conf.clearColor.value);
@@ -852,20 +1149,36 @@ void Editor::Viewport3D::draw()
   if(pickedObjID.hasResult())
   {
     uint32_t newUUID = pickedObjID.consume();
-    auto newObj = scene->getObjectByUUID(newUUID);
-    if(newObj && !newObj->selectable) {
-      newUUID = 0;
-    }
 
-    if (newUUID == 0) {
-      if (!pickAdditive) {
-        getSelection().clear();
+    auto regIt = nestedPickReg.find(newUUID);
+    if (newUUID != 0 && regIt != nestedPickReg.end()) {
+      // Picked a nested prefab object: select it as a nested override target, unless edit
+      // mode restricts it (only the edited prefab's own definition is selectable).
+      // Nested selection lives on ctx (mainSelection + selSubPath), so only route it
+      // from the viewport that drives the main selection.
+      if (isMainSel
+          && Editor::SelectionUtils::isSelectionAllowed(*scene, regIt->second.first, regIt->second.second)) {
+        ctx.setNestedSelection(regIt->second.first, regIt->second.second);
       }
     } else {
-      if (pickAdditive) {
-        getSelection().toggle(newUUID);
+      auto newObj = scene->getObjectByUUID(newUUID);
+      if(newObj && !newObj->selectable) {
+        newUUID = 0;
+      }
+      // In prefab-edit mode only the edited instance is pickable. Ignore other picks
+      // instead of clearing, so the edit selection is kept.
+      if(newUUID != 0 && !Editor::SelectionUtils::isSelectionAllowed(*scene, newUUID, {})) {
+        // disallowed pick, leave selection unchanged
+      } else if (newUUID == 0) {
+        if (!pickAdditive) {
+          selClear();
+        }
       } else {
-        getSelection().set(newUUID);
+        if (pickAdditive) {
+          selToggle(newUUID);
+        } else {
+          selSet(newUUID);
+        }
       }
     }
   }
@@ -873,18 +1186,70 @@ void Editor::Viewport3D::draw()
 
   float BAR_HEIGHT = 26_px;
 
-  auto currSize = ImGui::GetContentRegionAvail();
+  auto availSize = ImGui::GetContentRegionAvail();
 
   auto currPos = ImGui::GetWindowPos();
-  if (currSize.x < 64_px)currSize.x = 64_px;
-  if (currSize.y < 64_px)currSize.y = 64_px;
-  currSize.y -= BAR_HEIGHT;
+  if (availSize.x < 64_px)availSize.x = 64_px;
+  if (availSize.y < 64_px)availSize.y = 64_px;
+  availSize.y -= BAR_HEIGHT;
 
-  currSize.x = floorf(currSize.x);
-  currSize.y = floorf(currSize.y);
+  availSize.x = floorf(availSize.x);
+  availSize.y = floorf(availSize.y);
 
-  // Since we can't use MSAA directly, just render at higher res here
-  auto renderSize = currSize * ctx.prefs.renderFactorAA;
+  // Resolve the bound scene camera (if any): mirror its transform + aspect onto the editor view.
+  bool camLocked = false;
+  Project::Component::Camera::View camView{};
+  if (boundCameraUUID) {
+    if (auto camObj = scene->getObjectByUUID(boundCameraUUID)) {
+      auto srcObj = Editor::SelectionUtils::prefabDefOf(camObj.get());
+      for (auto &comp : srcObj->components) {
+        PropScope::Dispatch enabledScope(camObj->propOverrides, comp.uuid);
+        if (comp.enabled.resolve(*camObj) && comp.id == 3) {
+          camView = Project::Component::Camera::getView(*camObj, comp);
+          camera.pos = camObj->pos.resolve(camObj->propOverrides);
+          camera.rot = glm::normalize(camObj->rot.resolve(camObj->propOverrides));
+          camera.fov = camView.fov;
+          camera.isOrtho = camView.isOrtho;
+          camera.orthoSize = camView.orthoSize;
+          camera.velocity = {0,0,0};
+          camera.zoomSpeed = 0.0f;
+          camLocked = true;
+          break;
+        }
+      }
+      if (!camLocked) boundCameraUUID = 0; // object lost its camera component
+    } else {
+      boundCameraUUID = 0; // bound object no longer exists
+    }
+  }
+  if(!camLocked) { // restore the editor defaults when free-flying
+    camera.fov = 70.0f;
+    camera.orthoSize = Renderer::Camera::DEFAULT_ORTHO_SIZE;
+    camera.isOrtho = freeFlyOrtho;
+  }
+
+  // Displayed image size; letterboxed to the camera aspect when locked, otherwise fills the area.
+  ImVec2 viewSize = availSize;
+  float offX = 0.0f, offY = 0.0f;
+  if (camLocked) {
+    float aspect = camView.aspect > 0.0f ? camView.aspect : 4.0f/3.0f;
+    if (availSize.x / availSize.y > aspect) viewSize.x = floorf(availSize.y * aspect);
+    else                                    viewSize.y = floorf(availSize.x / aspect);
+    offX = floorf((availSize.x - viewSize.x) * 0.5f);
+    offY = floorf((availSize.y - viewSize.y) * 0.5f);
+  }
+  auto currSize = viewSize;
+
+  // Free-res renders at the displayed pixel density; camera-res renders at the cart resolution.
+  float aa = ctx.prefs.renderFactorAA;
+  ImVec2 renderSize = (camLocked && useCameraRes)
+    ? ImVec2(camView.resX * aa, camView.resY * aa)
+    : viewSize * aa;
+  fbScale = renderSize.x / viewSize.x;
+
+  // Camera-resolution mode is a clean preview: only the rendered image, no editor overlays.
+  cleanPreview = camLocked && useCameraRes;
+  iconsVisible = showIcons && !cleanPreview;
 
   fb.resize((int)renderSize.x, (int)renderSize.y);
   camera.screenSize = {renderSize.x, renderSize.y};
@@ -895,23 +1260,28 @@ void Editor::Viewport3D::draw()
   auto &io = ImGui::GetIO();
   float deltaTime = io.DeltaTime;
 
+  // avoid ghost-interactions from imgui's own mouse sampling
+  if (cameraDragActive) io.MousePos = ImVec2(cursorLockPos.x, cursorLockPos.y);
+
   ImVec2 gizPos{currPos.x + currSize.x - 50_px, currPos.y + 104_px};
 
   // mouse pos
   ImVec2 screenPos = ImGui::GetCursorScreenPos();
   if (cameraDragActive) {
-    // SDL relative mode is on (enabled below at drag start). SDL hides the
-    // cursor and reports raw motion deltas via GetRelativeMouseState. We
-    // skip the io.WantSetMousePos warp dance — that fights multi-viewport
-    // because the warp coords/window-target ambiguity makes the cursor
-    // jitter and the camera barely move.
+    // SDL relative mode is on (enabled in setCameraDrag). SDL hides the
+    // cursor and reports raw motion deltas via GetRelativeMouseState; no
+    // io.WantSetMousePos warp dance, which fights multi-viewport.
     float dx = 0, dy = 0;
     SDL_GetRelativeMouseState(&dx, &dy);
-    mousePos.x += dx;
-    mousePos.y += dy;
+    if (cameraDragFlush) { // skip first sample to not make the camera jump around
+      cameraDragFlush = false;
+    } else {
+      mousePos.x += dx;
+      mousePos.y += dy;
+    }
   } else {
     mousePos = {ImGui::GetMousePos().x, ImGui::GetMousePos().y};
-    mousePos.x -= screenPos.x;
+    mousePos.x -= (screenPos.x + offX);
     mousePos.y -= vpOffsetY;
   }
 
@@ -922,19 +1292,34 @@ void Editor::Viewport3D::draw()
   bool mouseHeldRight = ImGui::IsMouseDown(ImGuiMouseButton_Right);
   bool mouseHeldMiddle = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
   bool newMouseDown = mouseHeldLeft || mouseHeldMiddle || mouseHeldRight;
+
+  // Capture camera control in the viewport where the drag started, so a second open
+  // viewport doesn't move in lockstep from the same global mouse/keyboard state.
+  bool anyMouseClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+    || ImGui::IsMouseClicked(ImGuiMouseButton_Right)
+    || ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+  if (!newMouseDown && !navLocked) inputActive = false;
+  else if (anyMouseClicked && isMouseHover) inputActive = true;
+  if (navLocked) inputActive = true;
+  if (navLocked && !ctx.prefs.viewportLockMode) { navLocked = false; setCameraDrag(false); }
+
   bool isCameraFlying = false;
   bool isAltDown = ImGui::GetIO().KeyAlt;
   bool isShiftDown = ImGui::GetIO().KeyShift;
   if(isShiftDown)moveSpeed *= 4.0f;
 
   bool hasSelection = !getSelection().all().empty();
+  // Query under this viewport's gizmo id, else IsUsing()/IsOver() read the wrong id
+  ImGuizmo::PushID((int)winId);
   bool overGizmo = hasSelection && ImGuizmo::IsOver();
+  ImGuizmo::PopID();
 
   bool leftClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
   bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
   bool leftReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+  bool rightClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
 
-  if (!overGizmo && isMouseHover && leftClicked && !isAltDown && !overRotGizmo) {
+  if (!navLocked && !overGizmo && isMouseHover && leftClicked && !isAltDown && !overRotGizmo) {
     selectionPending = true;
     selectionDragging = false;
     selectionStart = mousePos;
@@ -962,7 +1347,7 @@ void Editor::Viewport3D::draw()
       rectMax = glm::clamp(rectMax, glm::vec2{0,0}, viewportSize);
 
       if (!additiveSelect) {
-        getSelection().clear();
+        selClear();
       }
 
       auto &rootObj = scene->getRootObject();
@@ -978,7 +1363,7 @@ void Editor::Viewport3D::draw()
         glm::vec2 screenPos{proj.x, currSize.y - proj.y};
         if (screenPos.x >= rectMin.x && screenPos.x <= rectMax.x
             && screenPos.y >= rectMin.y && screenPos.y <= rectMax.y) {
-          getSelection().add(objIter.uuid);
+          selAdd(objIter.uuid);
         }
       });
     } else {
@@ -1001,7 +1386,9 @@ void Editor::Viewport3D::draw()
   {
     if(ImGui::IsKeyPressed(ctx.prefs.keymap.toggleOrtho))
     {
-      camera.isOrtho = !camera.isOrtho;
+      freeFlyOrtho = !freeFlyOrtho;
+      // while bound to a camera the projection is mirrored from it, in that case don't fight it
+      if(!camLocked)camera.isOrtho = freeFlyOrtho;
     }
 
     // Handle object deletion when Delete is pressed while the viewport is focused and an object is selected
@@ -1014,18 +1401,22 @@ void Editor::Viewport3D::draw()
       obj = nullptr;
     }
 
-    // Right-click only counts as "flying" for THIS viewport when the cursor
-    // is actually over it (or a drag is already active from this one). Without
-    // this gate, right-clicking a panel elsewhere (e.g. a function row in the
-    // PrefabEditor) makes every Viewport3D in the frame enter the wheel-input
-    // block below and steal scroll/keyboard input intended for the row.
-    isCameraFlying = mouseHeldRight && (isMouseHover || cameraDragActive);
+    isCameraFlying = (mouseHeldRight && inputActive) || navLocked;
+
+    if (ctx.prefs.viewportLockMode && !camLocked) {
+      if (rightClicked && isMouseHover && !navLocked) {
+        navLocked = true;
+      } else if (navLocked && rightClicked) {
+        navLocked = false;
+        inputActive = false;
+      }
+    }
 
     if (deletedSelection) {
       hasSelection = false;
     }
 
-    if (newMouseDown) {
+    if ((newMouseDown || navLocked) && !camLocked && inputActive) {
       glm::vec3 moveDir = {0,0,0};
       if (ImGui::IsKeyDown(ctx.prefs.keymap.moveForward))moveDir.z = -moveSpeed;
       if (ImGui::IsKeyDown(ctx.prefs.keymap.moveBack))moveDir.z = moveSpeed;
@@ -1043,21 +1434,21 @@ void Editor::Viewport3D::draw()
         if (ImGui::IsKeyDown(ctx.prefs.keymap.gizmoTranslate))gizmoOp = 0;
         if (ImGui::IsKeyDown(ctx.prefs.keymap.gizmoRotate))gizmoOp = 1;
         if (ImGui::IsKeyDown(ctx.prefs.keymap.gizmoScale))gizmoOp = 2;
-        if (ImGui::IsKeyPressed(ctx.prefs.keymap.focusObject))camera.focusSelection(*scene, getSelection());
+        if (!camLocked && ImGui::IsKeyPressed(ctx.prefs.keymap.focusObject))camera.focusSelection(*scene, getSelection());
       }
     }
   }
 
-  if ((isMouseHover || isCameraFlying) && !overRotGizmo) {
+  if ((isMouseHover || isCameraFlying) && !overRotGizmo && !camLocked) {
     //multitouch trackpads don't generate touch or pinch events on windows
     //instead, we have to rely on the fact that trackpads move in fractional amounts
     glm::vec2 wheel = glm::vec2(io.MouseWheelH, io.MouseWheel);
     bool usesWheel = wheel != glm::vec2{0,0};
-    
+
     if(usesWheel)
     {
       // We override the normal mouse wheel functionality if the preference is set + mouse is held
-      // (...a more robust handling of editor state would probably also help with controlling parts of the 
+      // (...a more robust handling of editor state would probably also help with controlling parts of the
       // viewport while the mouse is moving out of the window's focus)
       if(ctx.prefs.mouseWheelModifiesSpeed && mouseHeldRight) {
         moveSpeedModifier = std::clamp(moveSpeedModifier + (wheel.y * 0.125f), 0.125f, 4.0f);
@@ -1078,38 +1469,8 @@ void Editor::Viewport3D::draw()
       }
     }
 
-    // Drag-start MUST require this viewport to actually be hovered. mouseHeld*
-    // is global state, so without this gate every Viewport3D in the frame
-    // (main 3D-Viewport + prefab editor's nested viewport) would race to
-    // claim SDL_GetRelativeMouseState — the first one to drain wins, the
-    // others see zero delta and stay still. That's why right-click rotation
-    // worked in scene viewport but not prefab: scene drew first and stole
-    // the deltas. Middle-click bypassed this because isCameraFlying gated
-    // only on right; the inactive viewport entered the block via
-    // isCameraFlying for right-click but had isMouseHover==false here.
-    if(!isMouseDown && newMouseDown && isMouseHover) {
+    if(!isMouseDown && newMouseDown) {
       mousePosStart = mousePos;
-      bool wantCapture = (isAltDown && mouseHeldLeft) || mouseHeldMiddle || mouseHeldRight;
-      if (wantCapture && !cameraDragActive) {
-        ImVec2 absPos = ImGui::GetMousePos();
-        cursorLockPos = {absPos.x, absPos.y};
-        // Drain SDL's accumulated relative motion so the first per-frame read
-        // doesn't include any cursor movement from before the drag started.
-        SDL_GetRelativeMouseState(nullptr, nullptr);
-        // Multi-viewport-safe drag: enable SDL relative mouse mode on the
-        // SDL window the cursor is currently over (which may be a child
-        // platform viewport when this Viewport3D belongs to an asset editor
-        // floating in its own OS window). SDL hides the cursor and gives us
-        // raw motion deltas — no OS-cursor warp needed.
-        SDL_Window* dragWin = nullptr;
-        if (auto *vp = ImGui::GetWindowViewport()) {
-          dragWin = (SDL_Window*)vp->PlatformHandle;
-        }
-        if (!dragWin) dragWin = ctx.window;
-        SDL_SetWindowRelativeMouseMode(dragWin, true);
-        cameraDragWindow = dragWin;
-        cameraDragActive = true;
-      }
     }
     isMouseDown = newMouseDown;
   }
@@ -1142,24 +1503,69 @@ void Editor::Viewport3D::draw()
   ImGui::SameLine();
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12_px);
 
-  if(ConnectedToggleButton(ICON_MDI_GRID, showGrid, true, true, ImVec2(32_px, 24_px))) {
+  // Overlay toggles (grid / collision / icons) are all forced off in clean-preview mode.
+  ImGui::BeginDisabled(cleanPreview);
+
+  if(ConnectedToggleButton(ICON_MDI_GRID, showGrid && !cleanPreview, true, true, ImVec2(32_px, 24_px))) {
     showGrid = !showGrid;
   }
   ImGui::SetItemTooltip("%s Grid", showGrid ? "Hide" : "Show");
 
   ImGui::SameLine();
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() - 4_px);
-  if(ConnectedToggleButton(ICON_MDI_LANDSLIDE_OUTLINE, showCollMesh, true, true, ImVec2(32_px, 24_px))) {
+  if(ConnectedToggleButton(ICON_MDI_LANDSLIDE_OUTLINE, showCollMesh && !cleanPreview, true, true, ImVec2(32_px, 24_px))) {
     showCollMesh = !showCollMesh;
   }
   ImGui::SetItemTooltip("%s Collision Mesh", showCollMesh ? "Hide" : "Show");
 
   ImGui::SameLine();
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() - 4_px);
-  if(ConnectedToggleButton(ICON_MDI_CYLINDER, showCollObj, true, true, ImVec2(32_px,24_px))) {
+  if(ConnectedToggleButton(ICON_MDI_CYLINDER, showCollObj && !cleanPreview, true, true, ImVec2(32_px,24_px))) {
     showCollObj = !showCollObj;
   }
   ImGui::SetItemTooltip("%s Collision Bodies", showCollObj ? "Hide" : "Show");
+
+  ImGui::SameLine();
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() - 4_px);
+  if(ConnectedToggleButton(ICON_MDI_IMAGE_OUTLINE, showIcons && !cleanPreview, true, true, ImVec2(32_px, 24_px))) {
+    showIcons = !showIcons;
+  }
+  ImGui::SetItemTooltip(cleanPreview ? "Overlays hidden (camera resolution)" : (showIcons ? "Hide Icons" : "Show Icons"));
+
+  ImGui::EndDisabled();
+
+  // Camera select + resolution toggle: mirror the editor view onto a scene camera.
+  ImGui::SameLine();
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12_px);
+  {
+    std::vector<CamRef> cams;
+    collectCameras(scene->getRootObject(), cams);
+
+    std::string preview = "Free Camera";
+    for (auto &c : cams) if (c.uuid == boundCameraUUID) preview = c.name;
+    if (boundCameraUUID && preview == "Free Camera") preview = "Camera";
+
+    ImGui::SetNextItemWidth(150_px);
+    if (ImGui::BeginCombo("##camsel", preview.c_str())) {
+      if (ImGui::Selectable("Free Camera", boundCameraUUID == 0)) boundCameraUUID = 0;
+      for (auto &c : cams) {
+        ImGui::PushID((int)(c.uuid & 0xFFFFFFFF));
+        if (ImGui::Selectable(c.name.c_str(), c.uuid == boundCameraUUID)) boundCameraUUID = c.uuid;
+        ImGui::PopID();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("Mirror the editor view onto a scene camera");
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6_px);
+    ImGui::BeginDisabled(boundCameraUUID == 0);
+    if (ConnectedToggleButton(ICON_MDI_ASPECT_RATIO, useCameraRes && boundCameraUUID, true, true, ImVec2(32_px, 24_px))) {
+      useCameraRes = !useCameraRes;
+    }
+    ImGui::SetItemTooltip("Resolution: %s", useCameraRes ? "Camera" : "Free (editor)");
+    ImGui::EndDisabled();
+  }
 
   ImGui::SameLine();
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12_px);
@@ -1169,68 +1575,87 @@ void Editor::Viewport3D::draw()
   ImGui::SetCursorPosY(currPos.y + BAR_HEIGHT);
 
   auto dragDelta = mousePos - mousePosStart;
-  if (isMouseDown) {
+
+  // Orbit / pan / look all move the view freely, so lock the cursor for them
+  bool wantCameraDrag = !camLocked && (navLocked ||
+    (isMouseDown && inputActive &&
+     ((isAltDown && mouseHeldLeft) || mouseHeldMiddle ||
+      (!ctx.prefs.viewportLockMode && mouseHeldRight))));
+  setCameraDrag(wantCameraDrag);
+
+  if (navLocked || (isMouseDown && inputActive)) {
     ImGui::ClearActiveID();
-    if (isAltDown && mouseHeldLeft) {
-      camera.stopMoveDelta();
-      camera.orbitDelta(dragDelta);
-    } else if (mouseHeldMiddle) {
-      camera.stopRotateDelta();
-      camera.moveDelta(-dragDelta * 3.0f);
-    } else if (mouseHeldRight) {
-      camera.stopMoveDelta();
-      camera.lookDelta(dragDelta);
+    if (!camLocked) {
+      if (navLocked) {
+        camera.stopMoveDelta();
+        camera.lookDelta(dragDelta);
+        mousePosStart = mousePos = {0,0};
+        camera.stopRotateDelta();
+      } else if (isAltDown && mouseHeldLeft) {
+        camera.stopMoveDelta();
+        camera.orbitDelta(dragDelta);
+      } else if (mouseHeldMiddle) {
+        camera.stopRotateDelta();
+        camera.moveDelta(-dragDelta * 3.0f);
+      } else if (mouseHeldRight) {
+        camera.stopMoveDelta();
+        camera.lookDelta(dragDelta);
+      }
     }
   } else {
     camera.stopRotateDelta();
     camera.stopMoveDelta();
-    if (cameraDragActive && cameraDragWindow) {
-      // Restore normal cursor; cursor reappears at its pre-drag screen pos.
-      SDL_SetWindowRelativeMouseMode((SDL_Window*)cameraDragWindow, false);
-      cameraDragWindow = nullptr;
-    }
-    cameraDragActive = false;
     mousePosStart = mousePos = {0,0};
   }
   if (!newMouseDown)isMouseDown = false;
 
+  // The 3D scene is rendered later this frame using the camera as updated above,
+  // but the gizmo overlay below is positioned now.
+  // refresh transform here to not be out of sync
+  camera.apply(uniGlobal);
+
   currPos = ImGui::GetCursorScreenPos();
-  currPos.x = floorf(currPos.x);
-  currPos.y = floorf(currPos.y);
+  currPos.x = floorf(currPos.x + offX);
+  currPos.y = floorf(currPos.y + offY);
   ImGui::SetCursorScreenPos(currPos);
 
   vpOffsetY = currPos.y;
 
   auto tex = fb.getTexture();
-  ImGui::Image(ImTextureID(tex), {
-    (float)fb.getWidth() / ctx.prefs.renderFactorAA,
-    (float)fb.getHeight() / ctx.prefs.renderFactorAA
-  });
+  ImGui::Image(ImTextureID(tex), viewSize);
 
-  // Capture hover + drag-drop target against the viewport image NOW, before
-  // any per-component overlay submits its own ImGui items (e.g. Path's
-  // per-control-point InvisibleButtons). IsItemHovered / BeginDragDropTarget
-  // both reference the last-submitted item, so deferring this until after
-  // overlays would steal hover/drop from the viewport and break right-click
-  // camera fly while a Path is selected for authoring.
+  // Capture hover against the viewport image NOW, before any per-component
+  // overlay submits its own ImGui items (e.g. Path's per-control-point
+  // InvisibleButtons). IsItemHovered references the last-submitted item, so
+  // deferring this until after overlays would steal hover from the viewport
+  // and break right-click camera fly while a Path is selected for authoring.
   isMouseHover = ImGui::IsItemHovered();
 
   if (ImGui::BeginDragDropTarget())
   {
     if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET"))
     {
-      uint64_t prefabUUID = *((uint64_t*)payload->Data);
-      auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID);
-      if(prefab) {
-        UndoRedo::getHistory().markChanged("Add Prefab");
-        auto newObj = scene->addPrefabInstance(prefabUUID);
+      // Resolve the dragged asset from the UUID stored in the browser payload
+      uint64_t assetUUID = *static_cast<const uint64_t*>(payload->Data);
+      auto asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
+
+      // Only prefabs and 3D models can create objects in the viewport
+      if(asset && (asset->type == Project::FileType::PREFAB
+          || asset->type == Project::FileType::MODEL_3D)) {
+        // Create the appropriate scene object and keep the drop as one undoable action
+        bool isPrefab = asset->type == Project::FileType::PREFAB;
+        UndoRedo::getHistory().markChanged(isPrefab ? "Add Prefab" : "Add Model");
+        auto newObj = isPrefab
+          ? scene->addPrefabInstance(assetUUID)
+          : scene->addModelObject(assetUUID);
         if (newObj) {
-          // place in front of camera view
+          // Place the new object in front of the current camera view
           glm::vec3 camForward = camera.rot * glm::vec3{0,0,-1};
           glm::vec3 camPos = camera.pos;
           newObj->pos.resolve(newObj->propOverrides) = camPos + camForward * 150.0f;
 
-          getSelection().set(newObj->uuid);
+          // Focus the newly created object in the editor
+          selSet(newObj->uuid);
         }
       }
     }
@@ -1277,10 +1702,75 @@ void Editor::Viewport3D::draw()
 
   ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
+  // Per-viewport gizmo id so multiple open viewports keep independent gizmo state.
+  ImGuizmo::PushID((int)winId);
   ImGuizmo::SetDrawlist(draw_list);
   ImGuizmo::SetRect(currPos.x, currPos.y, currSize.x, currSize.y);
 
-  if (hasSelection) {
+  // Snap settings (per gizmo mode, Ctrl to enable) plus the Manipulate call, shared by both
+  // selection paths below. Returns true while the gizmo is being dragged.
+  auto manipulateGizmo = [&](glm::mat4 &mat) -> bool {
+    glm::vec3 snap(10.0f);
+    if (gizmoOp == 1) snap = glm::vec3(90.0f / 4.0f);
+    else if (gizmoOp == 2) snap = glm::vec3(0.125f);
+    bool isSnap = ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl);
+    return ImGuizmo::Manipulate(
+      glm::value_ptr(uniGlobal.cameraMat), glm::value_ptr(uniGlobal.projMat),
+      GIZMO_OPS[gizmoOp], isTransWorld ? ImGuizmo::MODE::WORLD : ImGuizmo::MODE::LOCAL,
+      glm::value_ptr(mat), nullptr, isSnap ? glm::value_ptr(snap) : nullptr);
+  };
+
+  // Nested prefab object selected: dedicated gizmo that writes a transform override on
+  // the instance, keyed by the path (composing/decomposing against the parent's world).
+  // Main-selection viewports only: selSubPath belongs to ctx.mainSelection.
+  if (hasSelection && isMainSel && !ctx.selSubPath.empty())
+  {
+    auto target = resolveNestedTarget(*scene);
+    if (target.valid)
+    {
+      glm::vec3 skewN{0,0,0}; glm::vec4 perspN{0,0,0,1};
+      glm::vec3 gscale = target.world.scale;
+      for (int i = 0; i < 3; i++) if (glm::abs(gscale[i]) < 0.0001f) gscale[i] = 0.0001f;
+      glm::mat4 gizmoMat = glm::recompose(gscale, target.world.rot, target.world.pos, skewN, perspN);
+
+      if (manipulateGizmo(gizmoMat))
+      {
+        gizmoTransformActive = true;
+
+        glm::vec3 nwScale, nwPos; glm::quat nwRot;
+        glm::decompose(gizmoMat, nwScale, nwRot, nwPos, skewN, perspN);
+
+        // world -> parent-relative local
+        glm::quat pInv = glm::inverse(target.parentWorld.rot);
+        glm::vec3 newLpos = (pInv * (nwPos - target.parentWorld.pos)) / target.parentWorld.scale;
+        glm::quat newLrot = pInv * nwRot;
+        glm::vec3 newLscale = nwScale / target.parentWorld.scale;
+
+        auto auth = Editor::SelectionUtils::pickAuthNode(target.rootInstance, target.nodes);
+
+        if (auth.directDefEdit) {
+          // Direct edit of this prefab's definition (empty scope -> the node's own slot).
+          target.node->pos.resolve(target.node->propOverrides) = newLpos;
+          target.node->rot.resolve(target.node->propOverrides) = newLrot;
+          target.node->scale.resolve(target.node->propOverrides) = newLscale;
+        } else {
+          NestedPathScope authorScope(auth.authNode->propOverrides, auth.relPath);
+          ensurePropertyOverride(target.node, target.node->pos);
+          ensurePropertyOverride(target.node, target.node->rot);
+          ensurePropertyOverride(target.node, target.node->scale);
+          target.node->pos.resolve(target.node->propOverrides) = newLpos;
+          target.node->rot.resolve(target.node->propOverrides) = newLrot;
+          target.node->scale.resolve(target.node->propOverrides) = newLscale;
+        }
+
+        if (ctx.isPrefabEditing(target.rootInstance->uuid)) {
+          ctx.project->getAssets().markPrefabDirty(target.rootInstance->uuidPrefab.value);
+        }
+      }
+    }
+  }
+
+  if (hasSelection && (!isMainSel || ctx.selSubPath.empty())) {
     auto selectedObjects = Editor::SelectionUtils::collectSelectedObjects(*scene, getSelection());
     if (!selectedObjects.empty()) {
       obj = scene->getObjectByUUID(selectedObjects.back()->uuid);
@@ -1317,13 +1807,17 @@ void Editor::Viewport3D::draw()
 
       glm::mat4 oldGizmoMat = gizmoMat;
 
+      // Skip children the gizmo already transformed: route through the active
+      // viewport's selection so a drag in the prefab editor doesn't consult
+      // the main scene's selection.
+      auto childAlreadyTransformed = [&](const Project::Object &child) {
+        return getSelection().isSelected(child.uuid);
+      };
+
+      // Grid snap for the absolute-snap shortcut below (the gizmo's own snap is in the helper).
       glm::vec3 snap(10.0f);
-      if (gizmoOp == 1) { // rotate
-        snap = glm::vec3(90.0f / 4.0f);
-      } else if (gizmoOp == 2) { // scale
-        snap = glm::vec3(0.125f);
-      }
-      bool isSnap = ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl);
+      if (gizmoOp == 1) snap = glm::vec3(90.0f / 4.0f);
+      else if (gizmoOp == 2) snap = glm::vec3(0.125f);
       bool isOnlySelf = ImGui::IsKeyDown(ImGuiKey_LeftShift);
 
       // snap object to absolute grid
@@ -1336,15 +1830,7 @@ void Editor::Viewport3D::draw()
         obj->pos.resolve(obj->propOverrides) = pos;
       }
 
-      if(ImGuizmo::Manipulate(
-        glm::value_ptr(uniGlobal.cameraMat),
-        glm::value_ptr(uniGlobal.projMat),
-        GIZMO_OPS[gizmoOp],
-        isTransWorld ? ImGuizmo::MODE::WORLD : ImGuizmo::MODE::LOCAL,
-        glm::value_ptr(gizmoMat),
-        nullptr,
-        isSnap ? glm::value_ptr(snap) : nullptr
-      )) {
+      if(manipulateGizmo(gizmoMat)) {
         gizmoTransformActive = true;
 
         if (!isMultiSelect) {
@@ -1358,13 +1844,7 @@ void Editor::Viewport3D::draw()
                 obj->rot.resolve(obj->propOverrides),
                 obj->pos.resolve(obj->propOverrides),
                 skew, persp);
-
-              for(auto& child : obj->children)
-              {
-                relPosMap[child->uuid] = glm::inverse(oldObjMat) * glm::vec4(
-                  child->pos.resolve(child->propOverrides), 1.0f
-                );
-              }
+              relPosMap = Editor::TransformUtils::captureChildLocalOffsets(*obj, oldObjMat);
             }
 
             glm::decompose(
@@ -1377,7 +1857,12 @@ void Editor::Viewport3D::draw()
 
             if(!isOnlySelf)
             {
-              applyDeltaToChildren(*obj, relPosMap, gizmoMat);
+              Editor::TransformUtils::applyChildWorldPositions(
+                *obj,
+                relPosMap,
+                gizmoMat,
+                childAlreadyTransformed
+              );
             }
           }
         } else {
@@ -1406,7 +1891,7 @@ void Editor::Viewport3D::draw()
             };
 
             for (auto *selObj : selectedObjects) {
-              if (selObj->isPrefabInstance() && !selObj->isPrefabEdit) {
+              if (selObj->isPrefabInstance() && !ctx.isPrefabEditing(selObj->uuid)) {
                 ensurePropertyOverride(selObj, selObj->pos);
                 ensurePropertyOverride(selObj, selObj->rot);
                 ensurePropertyOverride(selObj, selObj->scale);
@@ -1424,13 +1909,7 @@ void Editor::Viewport3D::draw()
               if(!isOnlySelf)
               {
                 auto oldObjMat = glm::recompose(oldScale, oldRot, oldPos, skew, persp);
-
-                for(auto& child : selObj->children)
-                {
-                  relPosMap[child->uuid] = glm::inverse(oldObjMat) * glm::vec4(
-                    child->pos.resolve(child->propOverrides), 1.0f
-                  );
-                }
+                relPosMap = Editor::TransformUtils::captureChildLocalOffsets(*selObj, oldObjMat);
               }
 
               objPos = center + ((oldPos - center) * scaleDelta);
@@ -1439,12 +1918,17 @@ void Editor::Viewport3D::draw()
               if(!isOnlySelf)
               {
                 auto newObjMat = glm::recompose(objScale, objRot, objPos, skew, persp);
-                applyDeltaToChildren(*selObj, relPosMap, newObjMat);
+                Editor::TransformUtils::applyChildWorldPositions(
+                  *selObj,
+                  relPosMap,
+                  newObjMat,
+                  childAlreadyTransformed
+                );
               }
             }
           } else {
             for (auto *selObj : selectedObjects) {
-              if (selObj->isPrefabInstance() && !selObj->isPrefabEdit) {
+              if (selObj->isPrefabInstance() && !ctx.isPrefabEditing(selObj->uuid)) {
                 ensurePropertyOverride(selObj, selObj->pos);
                 ensurePropertyOverride(selObj, selObj->rot);
                 ensurePropertyOverride(selObj, selObj->scale);
@@ -1458,13 +1942,7 @@ void Editor::Viewport3D::draw()
                   selObj->rot.resolve(selObj->propOverrides),
                   selObj->pos.resolve(selObj->propOverrides),
                   skew, persp);
-
-                for(auto& child : selObj->children)
-                {
-                  relPosMap[child->uuid] = glm::inverse(oldObjMat) * glm::vec4(
-                    child->pos.resolve(child->propOverrides), 1.0f
-                  );
-                }
+                relPosMap = Editor::TransformUtils::captureChildLocalOffsets(*selObj, oldObjMat);
               }
 
               auto oldObjMat = glm::recompose(
@@ -1483,7 +1961,12 @@ void Editor::Viewport3D::draw()
               );
 
               if(!isOnlySelf) {
-                applyDeltaToChildren(*selObj, relPosMap, newObjMat);
+                Editor::TransformUtils::applyChildWorldPositions(
+                  *selObj,
+                  relPosMap,
+                  newObjMat,
+                  childAlreadyTransformed
+                );
               }
             }
           }
@@ -1498,12 +1981,35 @@ void Editor::Viewport3D::draw()
     gizmoTransformActive = false;
   }
 
-  glm::vec3 posOffset = camera.pos - camera.pivot;
-  float camDist = glm::length(posOffset);
-  if (ImViewGuizmo::Rotate(posOffset, camera.rot, gizPos, camDist)) {
-    camera.pos = camera.pivot + posOffset;
+  // The over-gizmo check at the top lags a frame (ImGuizmo computes hover during Manipulate),
+  // so grabbing a handle can still cause a box-select. Cancel it the moment the gizmo grabs.
+  if (ImGuizmo::IsUsing()) {
+    selectionPending = false;
+    selectionDragging = false;
   }
-  overRotGizmo = ImViewGuizmo::IsOver();
+  ImGuizmo::PopID();
+
+  if (camLocked) {
+    overRotGizmo = false;
+  } else {
+    gizPos = {currPos.x + viewSize.x - 50_px, currPos.y + 54_px};
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) viewGizmoOwned = false;
+    bool eligible = isMouseHover || viewGizmoOwned;
+
+    glm::vec3 posOffset = camera.pos - camera.pivot;
+    float camDist = glm::length(posOffset);
+    if (eligible) {
+      if (ImViewGuizmo::Rotate(posOffset, camera.rot, gizPos, camDist)) {
+        camera.pos = camera.pivot + posOffset;
+      }
+      if (ImViewGuizmo::IsUsing()) viewGizmoOwned = true;
+    } else {
+      glm::vec3 dummyPos = posOffset;
+      glm::quat dummyRot = camera.rot;
+      ImViewGuizmo::Rotate(dummyPos, dummyRot, gizPos, camDist);
+    }
+    overRotGizmo = eligible && ImViewGuizmo::IsOver();
+  }
 
   // Tell the deferred render-pass / copy-pass / post-render callbacks they
   // should run this frame. Reset by onPostRender after the frame's GPU

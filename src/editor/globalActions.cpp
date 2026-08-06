@@ -4,6 +4,7 @@
 */
 #include "actions.h"
 
+#include <cstdlib>
 #include <unordered_set>
 #include "../project/project.h"
 #include "../editor/imgui/notification.h"
@@ -17,6 +18,24 @@
 #include "recentProjects.h"
 #include "pages/editorScene.h"
 //#include <stacktrace>
+
+namespace
+{
+  std::string getProcessPath()
+  {
+    const char *path = std::getenv("PATH");
+    return path ? std::string{path} : std::string{};
+  }
+
+  void restoreProcessPath(const std::string &path)
+  {
+    #if defined(_WIN32)
+      _putenv_s("PATH", path.c_str());
+    #else
+      setenv("PATH", path.c_str(), 1);
+    #endif
+  }
+}
 
 namespace Editor::Actions
 {
@@ -37,6 +56,11 @@ namespace Editor::Actions
          Editor::RecentProjects::setMostRecentPath(path);
          if(ctx.project && !ctx.project->getScenes().getEntries().empty()) {
            ctx.project->getScenes().loadScene(ctx.project->conf.sceneIdLastOpened);
+         }
+         if(ctx.project && ctx.project->wasSavedWithNewerVersion()) {
+           Editor::Noti::add(Editor::Noti::Type::ERROR,
+             "This project was saved with a newer editor version (" + ctx.project->conf.editorVersion +
+             ", current is v" PYRITE_VERSION ").\nIt was opened anyway, but things may break.");
          }
          if (ctx.project && ctx.editorScene) {
            ctx.editorScene->onProjectOpened();
@@ -140,17 +164,27 @@ namespace Editor::Actions
 
       std::string runCmd{};
       if (arg == "run") {
-        runCmd = ctx.project->conf.pathEmu + " " + z64Path;
+        // Quote both paths so spaces (e.g. "E:\Ares Emulator\ares.exe") don't
+        // split into separate tokens. runSyncLogged() runs this via popen(),
+        // which on Windows invokes `cmd.exe /c`; cmd strips the outermost pair
+        // of quotes, so the whole command is wrapped in an extra pair to keep
+        // the per-path quotes intact.
+#ifdef _WIN32
+        runCmd = "\"\"" + ctx.project->conf.pathEmu + "\" \"" + z64Path + "\"\"";
+#else
+        runCmd = "\"" + ctx.project->conf.pathEmu + "\" \"" + z64Path + "\"";
+#endif
       }
 
       ctx.futureBuildRun = std::async(std::launch::async, [] (std::string configPath, std::string runCmd)
       {
-        auto oldPATH = std::getenv("PATH");
+        auto oldPATH = getProcessPath();
         bool result = false;
         try {
           result = Build::buildProject(configPath);
         } catch (const std::exception &e)
         {
+          restoreProcessPath(oldPATH);
           auto error = "Build failed with exception:\n" + std::string(e.what());
           //error += "\n" + std::to_string(std::stacktrace::current());
           Utils::Logger::log(error, Utils::Logger::LEVEL_ERROR);
@@ -158,11 +192,7 @@ namespace Editor::Actions
           return;
         }
 
-        #if defined(_WIN32)
-          _putenv_s("PATH", oldPATH);
-        #else 
-          setenv("PATH", oldPATH, 1);
-        #endif
+        restoreProcessPath(oldPATH);
         
         if(!result) {
           Editor::Noti::add(Editor::Noti::Type::ERROR, "Build failed!");

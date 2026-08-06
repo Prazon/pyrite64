@@ -18,6 +18,7 @@
 #include "glm/vec3.hpp"
 #include "glm/vec2.hpp"
 #include "glm/gtc/quaternion.hpp"
+#include "../../utils/prop.h"
 
 namespace Editor
 {
@@ -40,6 +41,7 @@ namespace Project::Component
     int id{};
     uint64_t uuid{};
     std::string name{};
+    Property<bool> enabled{"enabled", true};
     std::shared_ptr<void> data{};
   };
 
@@ -113,6 +115,7 @@ namespace Project::Component
     int prio{};
     const char* icon{};
     const char* name{};
+    const char* docSlug{}; // docs page path relative to PYRITE_DOCS_URL
     FuncCompInit funcInit{};
     FuncCompDraw funcUpdate{};
     FuncCompDraw funcDraw{};
@@ -232,12 +235,55 @@ namespace Project::Component
   MAKE_COMP(ParticleEmitter)
   MAKE_COMP(PathFollow)
   MAKE_COMP(CharBody)
+  MAKE_COMP(Surface)
+
+  namespace Camera
+  {
+    // Resolved view parameters of a camera component, used by the editor viewport to mirror it.
+    struct View {
+      int resX{320}; int resY{240}; float aspect{4.0f/3.0f}; float fov{65.0f};
+      bool isOrtho{false}; float orthoSize{300.0f};
+    };
+    View getView(Object &obj, Entry &entry);
+  }
+
+  namespace Code
+  {
+    /**
+     * Assigns a Script to a Code component.
+     * @param entry Code component entry to assign the Script to.
+     * @param scriptUUID UUID of the Script.
+     * @param openScriptComboBox true to auto-open the combo box.
+     */
+    void setScript(Entry &entry, uint64_t scriptUUID, bool openScriptComboBox);
+  }
+
+  namespace Model
+  {
+    /**
+     * Assigns a 3D model asset to a static Model component.
+     * @param entry Static Model component entry to update.
+     * @param modelUUID UUID of the 3D model asset.
+     */
+    void setModel(Entry &entry, uint64_t modelUUID);
+  }
+
+  namespace AnimModel
+  {
+    /**
+     * Assigns a 3D model asset to an animated Model component.
+     * @param entry Animated Model component entry to update.
+     * @param modelUUID UUID of the 3D model asset.
+     */
+    void setModel(Entry &entry, uint64_t modelUUID);
+  }
 
   constexpr std::array TABLE{
     CompInfo{
       .id = 0,
       .icon = ICON_MDI_SCRIPT " ",
       .name = "Code",
+      .docSlug = "/manual/editor/components/code",
       .funcInit = Code::init,
       .funcDraw = Code::draw,
       .funcSerialize = Code::serialize,
@@ -249,6 +295,7 @@ namespace Project::Component
       .id = 1,
       .icon = ICON_MDI_CUBE_OUTLINE " ",
       .name = "Model (Static)",
+      .docSlug = "/manual/editor/components/model",
       .funcInit = Model::init,
       .funcDraw = Model::draw,
       .funcDraw3D = Model::draw3D,
@@ -262,6 +309,7 @@ namespace Project::Component
       .id = 2,
       .icon = ICON_MDI_LIGHTBULB_ON_OUTLINE " ",
       .name = "Light",
+      .docSlug = "/manual/editor/components/light",
       .funcInit = Light::init,
       .funcUpdate = Light::update,
       .funcDraw = Light::draw,
@@ -275,6 +323,7 @@ namespace Project::Component
       .id = 3,
       .icon = ICON_MDI_VIDEO_VINTAGE " ",
       .name = "Camera",
+      .docSlug = "/manual/editor/components/camera",
       .funcInit = Camera::init,
       .funcUpdate = Camera::update,
       .funcDraw = Camera::draw,
@@ -288,6 +337,7 @@ namespace Project::Component
       .id = 4,
       .icon = ICON_MDI_LANDSLIDE_OUTLINE " ",
       .name = "Collision-Mesh",
+      .docSlug = "/manual/editor/components/collMesh",
       .funcInit = CollMesh::init,
       .funcDraw = CollMesh::draw,
       .funcDrawPost3D = CollMesh::draw3D,
@@ -300,6 +350,7 @@ namespace Project::Component
       .id = 5,
       .icon = ICON_MDI_CYLINDER " ",
       .name = "Collider",
+      .docSlug = "/manual/editor/components/collBody",
       .funcInit = CollBody::init,
       .funcDraw = CollBody::draw,
       .funcDrawPost3D = CollBody::draw3D,
@@ -312,6 +363,7 @@ namespace Project::Component
       .id = 6,
       .icon = ICON_MDI_MUSIC " ",
       .name = "Audio (2D)",
+      .docSlug = "/manual/editor/components/audio2d",
       .funcInit = Audio2D::init,
       .funcDraw = Audio2D::draw,
       .funcDrawPost3D = Audio2D::draw3D,
@@ -325,6 +377,7 @@ namespace Project::Component
       .prio = -2, // constraint must come before culling and any drawing
       .icon = ICON_MDI_LINK " ",
       .name = "Constraint",
+      .docSlug = "/manual/editor/components/constraint",
       .funcInit = Constraint::init,
       .funcDraw = Constraint::draw,
       .funcDrawPost3D = Constraint::draw3D,
@@ -338,6 +391,7 @@ namespace Project::Component
       .prio = -1, // culling must come before any models
       .icon = ICON_MDI_EYE_OFF_OUTLINE " ",
       .name = "Culling",
+      .docSlug = "/manual/editor/components/culling",
       .funcInit = Culling::init,
       .funcDraw = Culling::draw,
       .funcDrawPost3D = Culling::draw3D,
@@ -350,6 +404,7 @@ namespace Project::Component
       .id = 9,
       .icon = ICON_MDI_GRAPH_OUTLINE " ",
       .name = "Node Graph",
+      .docSlug = "/manual/editor/components/nodeGraph",
       .funcInit = NodeGraph::init,
       .funcDraw = NodeGraph::draw,
       .funcDraw3D = NodeGraph::draw3D,
@@ -362,6 +417,7 @@ namespace Project::Component
       .id = 10,
       .icon = ICON_MDI_HUMAN " ",
       .name = "Model (Animated)",
+      .docSlug = "/manual/editor/components/animModel",
       .funcInit = AnimModel::init,
       .funcDraw = AnimModel::draw,
       .funcDraw3D = AnimModel::draw3D,
@@ -376,6 +432,7 @@ namespace Project::Component
       .id = 11,
       .icon = ICON_MDI_CYLINDER " ",
       .name = "Rigid-Body",
+      .docSlug = "/manual/editor/components/rigidBody",
       .funcInit = RigidBody::init,
       .funcDraw = RigidBody::draw,
       .funcDrawPost3D = RigidBody::draw3D,
@@ -641,20 +698,35 @@ namespace Project::Component
       .funcBuild = PathFollow::build,
       .funcGetAABB = nullptr,
     },
-    // id 32 is the last slot of the engine COMP_TABLE_SIZE (33). Any
-    // further component needs that size bumped on the engine side.
-    // CharBody is renumbered from upstream char_ctrl's id 12 (which is
-    // SpriteBillboard in this fork) to keep the append-last invariant.
+    // CharBody is renumbered from upstream's id 12 (which is SpriteBillboard
+    // in this fork) to keep the append-last invariant.
     CompInfo{
       .id = 32,
       .icon = ICON_MDI_RUN " ",
       .name = "Character-Body",
+      .docSlug = "/manual/editor/components/charBody",
       .funcInit = CharBody::init,
       .funcDraw = CharBody::draw,
       .funcDrawPost3D = CharBody::draw3D,
       .funcSerialize = CharBody::serialize,
       .funcDeserialize = CharBody::deserialize,
       .funcBuild = CharBody::build,
+      .funcGetAABB = nullptr
+    },
+    // Surface is renumbered from upstream's id 13 (Primitive in this fork).
+    // id 33 is the last slot of the engine COMP_TABLE_SIZE (34); any further
+    // component needs that size bumped on the engine side.
+    CompInfo{
+      .id = 33,
+      .prio = -1, // surfaces must exist before scripts/components that may fetch them in init
+      .icon = ICON_MDI_TEXTURE " ",
+      .name = "Surface",
+      .docSlug = "/manual/editor/components/surface",
+      .funcInit = Surface::init,
+      .funcDraw = Surface::draw,
+      .funcSerialize = Surface::serialize,
+      .funcDeserialize = Surface::deserialize,
+      .funcBuild = Surface::build,
       .funcGetAABB = nullptr
     },
   };

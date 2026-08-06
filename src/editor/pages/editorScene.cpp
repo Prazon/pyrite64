@@ -9,6 +9,7 @@
 #include "imgui_internal.h"
 #include "../actions.h"
 #include "../undoRedo.h"
+#include "../selectionUtils.h"
 #include "../../context.h"
 #include "../../project/cacheDir.h"
 #include "../../project/project.h"
@@ -1240,8 +1241,10 @@ void Editor::Scene::draw()
 
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5_px);
   ImGui::PushFont(ImGui::Theme::getFontMono(), 16_px);
-  ImVec4 perfColor{1.0f,1.0f,1.0f,0.4f};
-  if (io.Framerate < 45) perfColor = {1.0f, 0.5f, 0.5f, 1.0f};
+  
+  ImVec4 textCol = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+  ImVec4 perfColor{textCol.x, textCol.y, textCol.z, 0.55f};
+  if (io.Framerate < 45) perfColor = {0.85f, 0.30f, 0.30f, 1.0f};
   ImGui::TextColored(perfColor, "%d FPS | History: %d/%d %s | CPU: %.2fms",
     (int)roundf(io.Framerate),
     UndoRedo::getHistory().getUndoCount(),
@@ -1279,10 +1282,10 @@ void Editor::Scene::draw()
     posX -= 8_px;
   }
 
-  perfColor = {1.0f,1.0f,1.0f,0.4f};
+  perfColor = {textCol.x, textCol.y, textCol.z, 0.45f};
   std::string txtInfo = "v" PYRITE_VERSION;
   #ifndef NDEBUG
-    perfColor = {1.0f,1.0f,1.0f,0.6f};
+    perfColor = {textCol.x, textCol.y, textCol.z, 0.65f};
     txtInfo += " [DEBUG]";
   #endif
 

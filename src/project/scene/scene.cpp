@@ -5,6 +5,8 @@
 #include "scene.h"
 #include "object.h"
 #include "../assetManager.h"
+#include <filesystem>
+#include <functional>
 #include "../../utils/json.h"
 #include "../../context.h"
 #include "../../utils/hash.h"
@@ -13,13 +15,15 @@
 
 #define __LIBDRAGON_N64SYS_H 1
 #define PhysicalAddr(a) (uint64_t)(a)
-#include "../graph/nodes/nodeObjDel.h"
+#include "../graph/nodes/baseNode.h"
 #include "include/rdpq_macros.h"
 #include "include/rdpq_mode.h"
 
 namespace
 {
   constexpr float DEF_MODEL_SCALE = 1.0f;
+  constexpr int COMP_ID_MODEL_STATIC = 1;
+  constexpr int COMP_ID_MODEL_ANIMATED = 10;
 
   /**
    * Checks whether a target object belongs to the subtree of a given ancestor.
@@ -94,7 +98,7 @@ Project::Scene::Scene(int id_, const std::string &projectPath)
 
   deserialize(Utils::FS::loadTextFile(scenePath + "/scene.json"));
 
-  root.id = 0;
+  root.runtimeId = 0;
   root.name = "Scene";
   root.uuid = Utils::Hash::sha256_64bit(root.name);
 }
@@ -104,7 +108,7 @@ Project::Scene::Scene()
   : id{-1}
 {
   resetLayers();
-  root.id = 0;
+  root.runtimeId = 0;
   root.name = "Scene";
   root.uuid = Utils::Hash::sha256_64bit(root.name);
 }
@@ -114,7 +118,7 @@ void Project::Scene::loadFromObjectJSON(const std::string &objJson)
   removeAllObjects();
   // Re-establish the root (removeAllObjects clears children, not root metadata,
   // but be explicit so the prefab editor can be re-loaded safely).
-  root.id = 0;
+  root.runtimeId = 0;
   root.name = "Scene";
   root.uuid = Utils::Hash::sha256_64bit(root.name);
 
@@ -153,14 +157,13 @@ std::shared_ptr<Project::Object> Project::Scene::addObject(Object &parent) {
   return addObject(parent, child, true);
 }
 
-std::shared_ptr<Project::Object> Project::Scene::addObject(Object&parent, std::shared_ptr<Object> obj, bool generateIDs) {
+std::shared_ptr<Project::Object> Project::Scene::addObject(Object&parent, std::shared_ptr<Object> obj, bool generateUUID) {
   parent.children.push_back(obj);
 
-  auto setChildUUIDs = [this, generateIDs](const std::shared_ptr<Object> &objChild, auto& setChildUIDsRef) -> void
+  auto setChildUUIDs = [this, generateUUID](const std::shared_ptr<Object> &objChild, auto& setChildUIDsRef) -> void
   {
-    if(generateIDs)
+    if(generateUUID)
     {
-      objChild->id = getFreeObjectId();
       objChild->uuid = Utils::Hash::randomU64();
     }
 
@@ -189,6 +192,8 @@ std::shared_ptr<Project::Object> Project::Scene::addPrefabInstance(uint64_t pref
 
   Object &targetParent = parent ? *parent : root;
   auto obj = std::make_shared<Object>(targetParent);
+  obj->name += prefab->obj.name;
+  obj->uuid = Utils::Hash::randomU32();
   obj->pos = prefab->obj.pos;
   obj->rot = prefab->obj.rot;
   obj->scale = prefab->obj.scale;
@@ -198,81 +203,38 @@ std::shared_ptr<Project::Object> Project::Scene::addPrefabInstance(uint64_t pref
   obj->addPropOverride(obj->rot);
   obj->addPropOverride(obj->scale);
 
-  // Materialize the prefab's child subtree as independent scene nodes.
-  // Deep-copy via JSON so we don't alias prefab->obj's children. Component
-  // uuids are rewritten so undo/redo identifiers stay unique across multiple
-  // instances of the same prefab; addObject(..., generateIDs=true) below then
-  // assigns fresh object ids/uuids to the whole subtree. fromPrefab=true
-  // tags the materialized lineage so isPrefabLocked locks them and so
-  // refreshPrefabInstances knows which children are safe to discard on
-  // re-materialization.
-  auto markSubtree = [](Object &o, auto &self) -> void {
-    for (auto &comp : o.components) {
-      comp.uuid = Utils::Hash::sha256_64bit(
-        std::to_string(rand()) + std::to_string(comp.id)
-      );
-    }
-    o.fromPrefab = true;
-    for (auto &gc : o.children) self(*gc, self);
-  };
-  for (const auto &srcChild : prefab->obj.children) {
-    auto childJson = srcChild->serialize();
-    auto child = std::make_shared<Object>(*obj);
-    child->deserialize(nullptr, childJson);
-    markSubtree(*child, markSubtree);
-    obj->children.push_back(child);
-  }
-
-  auto added = addObject(targetParent, obj, true);
-  obj->name = prefab->obj.name + " ("+std::to_string(obj->id)+")";
-  return added;
+  // Prefab instances are thin (upstream nested-prefab model): the scene keeps
+  // only the instance root and its content resolves live from the prefab
+  // definition, so nothing is materialized here.
+  return addObject(targetParent, obj, true);
 }
 
-void Project::Scene::refreshPrefabInstances(uint64_t prefabUUID)
+void Project::Scene::refreshPrefabInstances(uint64_t)
 {
-  auto prefab = ctx.project->getAssets().getPrefabByUUID(prefabUUID);
-  if (!prefab) return;
+  // Thin instances always resolve live from the prefab definition; there is
+  // nothing to re-materialize after a prefab edit. Call sites are kept so
+  // editors can keep signalling "prefab changed".
+}
 
-  auto markSubtree = [](Object &o, auto &self) -> void {
-    for (auto &comp : o.components) {
-      comp.uuid = Utils::Hash::sha256_64bit(
-        std::to_string(rand()) + std::to_string(comp.id)
-      );
-    }
-    o.fromPrefab = true;
-    for (auto &gc : o.children) self(*gc, self);
-  };
+std::shared_ptr<Project::Object> Project::Scene::addModelObject(uint64_t modelUUID)
+{
+  AssetManagerEntry* asset = ctx.project->getAssets().getEntryByUUID(modelUUID);
+  if (!asset || asset->type != FileType::MODEL_3D) return nullptr;
 
-  auto eraseFromMap = [this](Object &o, auto &self) -> void {
-    objectsMap.erase(o.uuid);
-    for (auto &gc : o.children) self(*gc, self);
-  };
+  std::shared_ptr<Object> obj = addObject(root);
+  obj->name = std::filesystem::path{asset->name}.stem().string();
 
-  // Snapshot instance roots before mutating: addObject below inserts into
-  // objectsMap and would invalidate iterators / cause a rehash.
-  std::vector<std::shared_ptr<Object>> instances;
-  for (auto &[_uuid, obj] : objectsMap) {
-    if (obj->uuidPrefab.value == prefabUUID) instances.push_back(obj);
-  }
+  // Models containing animation clips use the animated component automatically
+  bool isAnimated = !asset->model.t3dm.animations.empty();
+  obj->addComponent(isAnimated ? COMP_ID_MODEL_ANIMATED : COMP_ID_MODEL_STATIC);
 
-  for (auto &inst : instances) {
-    auto &kids = inst->children;
-    for (auto it = kids.begin(); it != kids.end(); ) {
-      if ((*it)->fromPrefab) {
-        eraseFromMap(**it, eraseFromMap);
-        it = kids.erase(it);
-      } else {
-        ++it;
-      }
-    }
-    for (const auto &srcChild : prefab->obj.children) {
-      auto childJson = srcChild->serialize();
-      auto child = std::make_shared<Object>(*inst);
-      child->deserialize(nullptr, childJson);
-      markSubtree(*child, markSubtree);
-      addObject(*inst, child, true);
-    }
-  }
+  Component::Entry &component = obj->components.back();
+  if (isAnimated)
+    Component::AnimModel::setModel(component, modelUUID);
+  else
+    Component::Model::setModel(component, modelUUID);
+
+  return obj;
 }
 
 void Project::Scene::removeObject(Object &obj) {
@@ -404,13 +366,38 @@ void Project::Scene::save()
   Utils::FS::saveTextFile(scenePath + "/scene.json", serialize());
 }
 
-uint32_t Project::Scene::createPrefabFromObject(uint32_t uuid)
+uint64_t Project::Scene::createPrefabFromObject(uint32_t uuid, const std::string &subDir)
 {
   auto obj = getObjectByUUID(uuid);
   if(!obj)return 0;
 
   Prefab prefab{};
   prefab.uuid.value = Utils::Hash::randomU64();
+
+  // Scene objects are world-positioned, the engine has no transform hierarchy. Re-base
+  // the subtree so each descendant's transform is relative to its parent. Otherwise
+  // expanding the prefab at an instance's transform would double-count world positions
+  // and place nested objects far away.
+  std::function<void(Object&, glm::vec3, glm::quat, glm::vec3)> rebase =
+    [&](Object &node, glm::vec3 pPos, glm::quat pRot, glm::vec3 pScale) {
+      glm::quat pRotInv = glm::inverse(pRot);
+      for(auto &child : node.children) {
+        glm::vec3 &cp = child->pos.resolve(child->propOverrides);
+        glm::quat &cr = child->rot.resolve(child->propOverrides);
+        glm::vec3 &cs = child->scale.resolve(child->propOverrides);
+        glm::vec3 cwPos = cp, cwScale = cs;
+        glm::quat cwRot = cr;
+        cp = (pRotInv * (cwPos - pPos)) / pScale;
+        cr = pRotInv * cwRot;
+        cs = cwScale / pScale;
+        rebase(*child, cwPos, cwRot, cwScale);
+      }
+    };
+  rebase(*obj,
+    obj->pos.resolve(obj->propOverrides),
+    obj->rot.resolve(obj->propOverrides),
+    obj->scale.resolve(obj->propOverrides));
+
   auto prefabJson = prefab.serialize(*obj);
 
   std::string name = obj->name;
@@ -420,32 +407,109 @@ uint32_t Project::Scene::createPrefabFromObject(uint32_t uuid)
   ), name.end());
   if(name.empty())name = "prefab " + std::to_string(prefab.uuid.value);
 
-  Utils::FS::saveTextFile(
-    ctx.project->getPath() + "/assets/" + name + ".prefab",
-    prefabJson
-  );
+  auto prefabPath = std::filesystem::path(ctx.project->getPath()) / "assets";
+  if(!subDir.empty())
+    prefabPath /= subDir;
+  prefabPath /= name + ".prefab";
+  Utils::FS::saveTextFile(prefabPath, prefabJson);
 
   ctx.project->getAssets().reload();
 
-  // Convert the source object into an instance of the prefab we just saved,
-  // matching Unity / Unreal "create prefab from selection" behavior. The
-  // root gets the uuidPrefab link (so the inspector shows the prefab badge
-  // and edit-mode toggle), default transform overrides so the user can move
-  // the instance freely, and the existing children are tagged fromPrefab so
-  // they render with the prefab badge in the hierarchy and stay locked.
+  // Convert the source object into a thin instance of the new prefab, so its content
+  // now comes from the prefab definition (single source of truth) and the inspector
+  // shows it as a prefab instance. Its placement is kept via transform overrides.
+  std::function<void(Object&)> unregister = [&](Object &o) {
+    for(auto &child : o.children) unregister(*child);
+    ctx.removeObjectSelection(o.uuid);
+    objectsMap.erase(o.uuid);
+  };
+  for(auto &child : obj->children) unregister(*child);
+
+  obj->children.clear();
+  obj->components.clear();
+  obj->propOverrides.clear();
   obj->uuidPrefab.value = prefab.uuid.value;
   obj->addPropOverride(obj->pos);
   obj->addPropOverride(obj->rot);
   obj->addPropOverride(obj->scale);
+  return prefab.uuid.value;
+}
 
-  auto markFromPrefab = [](Object &o, auto &self) -> void {
-    o.fromPrefab = true;
-    for (auto &gc : o.children) self(*gc, self);
+void Project::Scene::unpackPrefabInstance(uint32_t uuid)
+{
+  auto inst = getObjectByUUID(uuid);
+  if(!inst || !inst->isPrefabInstance())return;
+  auto prefab = ctx.project->getAssets().getPrefabByUUID(inst->uuidPrefab.value);
+  if(!prefab)return;
+  auto &def = prefab->obj;
+
+  // The instance keeps its uuid, placement and root-level component overrides (same
+  // component uuids resolve), so it just gains the prefab root's components.
+  glm::vec3 wPos = inst->pos.resolve(inst->propOverrides);
+  glm::quat wRot = inst->rot.resolve(inst->propOverrides);
+  glm::vec3 wScale = inst->scale.resolve(inst->propOverrides);
+
+  auto cloneComponents = [](Object &dst, const Object &src) {
+    for(const auto &comp : src.components) {
+      auto &cdef = Component::TABLE[comp.id];
+      auto data = cdef.funcSerialize(comp);
+      dst.components.push_back(Component::Entry{
+        .id = comp.id, .uuid = comp.uuid, .name = comp.name,
+        .enabled = comp.enabled,
+        .data = cdef.funcDeserialize(data)
+      });
+    }
   };
-  for (auto &child : obj->children) {
-    markFromPrefab(*child, markFromPrefab);
+  cloneComponents(*inst, def);
+
+  // Materialize the prefab's child tree with composed world transforms. Scene objects
+  // are world-positioned, so each node bakes its world transform. Nested prefab
+  // instances stay thin (keep uuidPrefab + their prefab-authored overrides).
+  std::function<void(Object&, std::shared_ptr<Object>, glm::vec3, glm::quat, glm::vec3)> build =
+    [&](Object &defNode, const std::shared_ptr<Object> &parent,
+        glm::vec3 pPos, glm::quat pRot, glm::vec3 pScale)
+  {
+    auto child = std::make_shared<Object>(*parent);
+    child->name = defNode.name;
+    child->uuid = Utils::Hash::randomU64();
+    child->enabled = defNode.enabled;
+    child->selectable = defNode.selectable;
+
+    glm::vec3 lpos = defNode.pos.resolve(defNode.propOverrides);
+    glm::quat lrot = defNode.rot.resolve(defNode.propOverrides);
+    glm::vec3 lscale = defNode.scale.resolve(defNode.propOverrides);
+    glm::vec3 cwPos = pPos + pRot * (pScale * lpos);
+    glm::quat cwRot = pRot * lrot;
+    glm::vec3 cwScale = pScale * lscale;
+    child->pos.value = cwPos;
+    child->rot.value = cwRot;
+    child->scale.value = cwScale;
+
+    if(defNode.isPrefabInstance()) {
+      // Stays a prefab instance, now placed in world space.
+      child->uuidPrefab.value = defNode.uuidPrefab.value;
+      child->propOverrides = defNode.propOverrides; // prefab-authored overrides
+      child->addPropOverride(child->pos);
+      child->addPropOverride(child->rot);
+      child->addPropOverride(child->scale);
+    } else {
+      cloneComponents(*child, defNode);
+    }
+
+    addObject(*parent, child);
+
+    if(!defNode.isPrefabInstance()) {
+      for(const auto &gc : defNode.children) {
+        build(*gc, child, cwPos, cwRot, cwScale);
+      }
+    }
+  };
+
+  for(const auto &defChild : def.children) {
+    build(*defChild, inst, wPos, wRot, wScale);
   }
-  return 0;
+
+  inst->uuidPrefab.value = 0;
 }
 
 std::string Project::Scene::serialize(bool minify) {
@@ -557,20 +621,26 @@ void Project::Scene::deserialize(const std::string &data)
   root.deserialize(this, docGraph);
 }
 
-uint16_t Project::Scene::getFreeObjectId()
+uint32_t Project::Scene::assignRuntimeIds()
 {
-  uint16_t objId = 1;
-
-  for(int i=0; i<0xFFFF; ++i) {
-    bool found = false;
-    for (auto &[uuid, obj] : objectsMap) {
-      if (obj->id == objId) {
-        found = true;
-        break;
-      }
+  // Pre-order traversal: parents get a lower id than their children, root stays 0.
+  // Ids are unique per scene and only valid for this build.
+  uint32_t nextId = 1;
+  auto assign = [&nextId](const std::shared_ptr<Object> &obj, auto &assignRef) -> void
+  {
+    if(nextId > 0xFFFF) {
+      Utils::Logger::log("Scene has more than 65535 objects, runtime ids overflow", Utils::Logger::LEVEL_ERROR);
+      return;
     }
-    if (!found)break;
-    ++objId;
+    obj->runtimeId = static_cast<uint16_t>(nextId++);
+    for(const auto &child : obj->children) {
+      assignRef(child, assignRef);
+    }
+  };
+
+  root.runtimeId = 0;
+  for(const auto &child : root.children) {
+    assign(child, assign);
   }
-  return objId;
+  return nextId; // first free id, used as the base for expanded prefab-instance children
 }

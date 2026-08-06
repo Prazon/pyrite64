@@ -11,10 +11,12 @@
 #include "scene/scene.h"
 
 #include <malloc.h>
+#include <cstring>
 
 #include "scene/globalState.h"
 #include "scene/widgetFocus.h"
 #include "collision/meshCollider.h"
+#include "collision/gfxScale.h"
 #include "vi/swapChain.h"
 #include "lib/memory.h"
 #include "lib/logger.h"
@@ -32,6 +34,7 @@
 #include "debug/debugDraw.h"
 #include "renderer/drawLayer.h"
 #include "scene/componentTable.h"
+#include "scene/components/surface.h"
 #include "script/globalScript.h"
 
 namespace
@@ -177,11 +180,6 @@ void P64::Scene::update(float deltaTime)
 {
   accumulator_ticks += TICKS_FROM_US((uint32_t)(deltaTime * 1000000.0f));
   joypad_poll();
-  auto pressed = joypad_get_buttons_pressed(JOYPAD_PORT_1);
-  auto held = joypad_get_buttons_held(JOYPAD_PORT_1);
-  if(held.l && pressed.d_up) {
-    Debug::Overlay::toggle();
-  }
 
   // Reset the focusable registry at the start of each frame so widgets
   // can re-announce themselves cleanly during the per-component update
@@ -208,15 +206,37 @@ void P64::Scene::update(float deltaTime)
   ticksGlobalUpdate = get_user_ticks() - ticksGlobalUpdate;
 
   for(auto data : objectsToAdd) {
-    loadObject((uint8_t*&)data.prefabData, [&](Object &obj)
-    {
-      obj.id = data.objectId;
-      obj.group = data.groupId;
-      obj.pos = data.pos;
-      obj.scale = data.scale;
-      obj.rot = data.rot;
-      obj.flags = ObjectFlags::ACTIVE;
-    }, true);
+    auto *objPtr = (uint8_t*)data.prefabData;
+    for(uint16_t i = 0; i < data.count; ++i) {
+      loadObject(objPtr, [&, i](Object &obj)
+      {
+        uint16_t storedParent = obj.group; // parent's index within the prefab
+        obj.id = data.objectId + i;
+        obj.flags = ObjectFlags::ACTIVE | (obj.flags & ObjectFlags::HAS_CHILDREN);
+        if(i == 0) {
+          // The root is placed directly at the spawn transform, parented if requested.
+          obj.group = data.parentId;
+          obj.pos = data.pos;
+          obj.scale = data.scale;
+          obj.rot = data.rot;
+
+          if(data.parentId) {
+            if(auto* parent = getObjectById(data.parentId)) {
+              parent->setFlag(ObjectFlags::HAS_CHILDREN, true);
+              needsObjStateUpdate = true;
+            } else {
+              obj.group = 0;
+            }
+          }
+        } else {
+          // Children are baked relative to the root, so compose the spawn transform onto them.
+          obj.group = data.objectId + storedParent;
+          obj.pos = data.pos + data.rot * (data.scale * obj.pos);
+          obj.rot = data.rot * obj.rot;
+          obj.scale = data.scale * obj.scale;
+        }
+      }, true);
+    }
   }
 
   runPendingComponentInit();
@@ -268,7 +288,7 @@ void P64::Scene::update(float deltaTime)
   // Extrapolate rigid body transforms for visual smoothness
   if(conf.interpolatePhysicsTransforms){
     float remainderSec = static_cast<float>(accumulator_ticks) / static_cast<float>(TICKS_FROM_US(SEC_TO_USEC));
-    applyRenderInterpolation(remainderSec);
+    applyRigidBodyRenderInterpolation(remainderSec);
   }
 
   ticksActorUpdate = get_ticks();
@@ -306,7 +326,7 @@ void P64::Scene::update(float deltaTime)
     if(obj->id < idLookup.size()) {
       idLookup[obj->id] = nullptr;
     }
-    std::erase_if(savedTransforms_, [&](const SavedTransform &st) { return st.obj == obj; });
+    std::erase_if(savedTransforms_, [&](const SavedTransform &st) { return st.body->ownerObject() == obj; });
     std::erase(objects, obj);
     obj->~Object();
 
@@ -339,14 +359,18 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
     // (see CameraRig360). Skip them — t3d_viewport_attach divides by
     // viewport size.
     if(!cam->hasArea()) continue;
+    // cameras targeting a surface render into it instead of the framebuffer,
+    // with no target set (or its owner deleted) the camera renders nothing
+    if(!cam->attach())continue;
     camMain = cam;
-    cam->attach();
 
     lighting.apply();
     t3d_matrix_push_pos(1);
 
-    for(int i=1; i<conf.layerSetup.layerCount3D; ++i) {
+    for(int i=1; i<conf.layerSetup.layerCount3D; ++i) 
+    {
       DrawLayer::use3D(i);
+        cam->applyTargetImages();
         cam->reApplyScissor();
         t3d_matrix_push_pos(1);
       DrawLayer::useDefault();
@@ -362,11 +386,12 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
       // Skip 2D-flagged objects in the 3D pass — they're drawn in the
       // screen-space 2D block below.
       if(obj->flags & ObjectFlags::RENDER_LAYER_2D) continue;
+      if(!(obj->visMask & cam->visMask))continue;
       auto compRefs = obj->getCompRefs();
 
       for (uint32_t i=0; i<obj->compCount; ++i)
       {
-        if(obj->flags & ObjectFlags::IS_CULLED)break;
+        if(obj->flags & (ObjectFlags::IS_CULLED | ObjectFlags::HIDDEN))break;
         const auto &compDef = COMP_TABLE[compRefs[i].type];
         if(compDef.draw)
         {
@@ -388,8 +413,11 @@ void P64::Scene::draw([[maybe_unused]] float deltaTime)
     for(int i=1; i<conf.layerSetup.layerCount3D; ++i) {
       DrawLayer::use3D(i);
         t3d_matrix_pop(1);
+        cam->restoreTargetImages();
       DrawLayer::useDefault();
     }
+
+    cam->detach();
   }
 
   auto t = get_user_ticks();
@@ -474,10 +502,10 @@ void P64::Scene::runPendingEvents()
   evQueue.clear();
 }
 
-void P64::Scene::applyRenderInterpolation(float dt)
+void P64::Scene::applyRigidBodyRenderInterpolation(float dt)
 {
   auto &rigidBodies = Coll::collisionSceneGetInstance()->getRigidBodies();
-  savedTransforms_.clear();
+  restoreInterpolatedTransforms();
 
   for(auto *body : rigidBodies) {
     if(!body || body->isSleeping() || body->isKinematic()) continue;
@@ -485,25 +513,43 @@ void P64::Scene::applyRenderInterpolation(float dt)
     Object *obj = body->ownerObject();
     if(!obj) continue;
 
-    savedTransforms_.push_back({obj, obj->pos, obj->rot});
+    // A transform that doesn't match the last physics writeback holds a manual change that physics hasn't adopted yet
+    if(obj->pos != body->syncedOwnerPos() ||
+       obj->rot != body->syncedOwnerRot()) continue;
 
-    // Extrapolate position forward by remaining time
+    // Extrapolate forward by the remaining time (velocity is in physics units, obj->pos in gfx units)
     const fm_vec3_t &vel = body->linearVelocity();
-    obj->pos = obj->pos + vel * dt;
+    obj->pos = obj->pos + vel * dt * Coll::getGfxScale();
 
-    // Extrapolate rotation forward by remaining time
     const fm_vec3_t &angVel = body->angularVelocity();
     if(!Coll::vec3IsZero(angVel)) {
       obj->rot = Coll::quatApplyAngularVelocity(obj->rot, angVel, dt);
     }
+
+    savedTransforms_.push_back({body, obj->pos, obj->rot});
   }
 }
 
 void P64::Scene::restoreInterpolatedTransforms()
 {
   for(auto &saved : savedTransforms_) {
-    saved.obj->pos = saved.pos;
-    saved.obj->rot = saved.rot;
+    Object *obj = saved.body->ownerObject();
+    const fm_vec3_t &basePos = saved.body->syncedOwnerPos();
+    const fm_quat_t &baseRot = saved.body->syncedOwnerRot();
+
+    // If a script/update changed the transform after extrapolation, re-base its change onto the real physics transform 
+    //so the extrapolation offset doesn't leak into it
+    if(obj->pos == saved.shownPos) {
+      obj->pos = basePos;
+    } else {
+      obj->pos = basePos + (obj->pos - saved.shownPos);
+    }
+    if(obj->rot == saved.shownRot) {
+      obj->rot = baseRot;
+    } else {
+      obj->rot = (obj->rot * Coll::quatConjugate(saved.shownRot)) * baseRot;
+      fm_quat_norm(&obj->rot, &obj->rot);
+    }
   }
   savedTransforms_.clear();
 }
@@ -518,23 +564,41 @@ void P64::Scene::onObjectCollision(const Coll::CollEvent &event)
   dispatchObjectCollisionEvent(*selfObject, event);
 }
 
+bool P64::Scene::objectHasCollisionHandler(const Object &obj)
+{
+  auto compRefs = obj.getCompRefs();
+  for(uint32_t i = 0; i < obj.compCount; ++i)
+  {
+    if(COMP_TABLE[compRefs[i].type].onColl) return true;
+  }
+  return false;
+}
+
 uint16_t P64::Scene::addObject(
   uint32_t prefabIdx,
   const fm_vec3_t &pos,
   const fm_vec3_t &scale,
   const fm_quat_t &rot,
-  uint16_t desiredGroupId
+  uint16_t parentId
 ) {
-  auto *prefabData = AssetManager::getByIndex(prefabIdx);
+  auto *prefabData = (uint8_t*)AssetManager::getByIndex(prefabIdx);
+
+  // The prefab file is prefixed with its object count (root + all nested objects). Reserve a
+  // contiguous block of ids for them so children can reference their parent by id at spawn.
+  uint32_t count = *(uint32_t*)prefabData;
+  uint16_t rootId = nextId + 1;
+  nextId += count;
+
   objectsToAdd.push_back({
-    .prefabData = prefabData,
+    .prefabData = prefabData + sizeof(uint32_t),
     .pos = pos,
     .scale = scale,
     .rot = rot,
-    .groupId = desiredGroupId,
-    .objectId = ++nextId,
+    .objectId = rootId,
+    .count = (uint16_t)count,
+    .parentId = parentId,
   });
-  return nextId;
+  return rootId;
 }
 
 void P64::Scene::removeObject(Object &obj)
@@ -566,16 +630,23 @@ void P64::Scene::updateChildObjectStates(const Object* parent, Object& obj)
   }
 
   const auto wasEnabledBefore = obj.isEnabled();
-  obj.setFlag(ObjectFlags::PARENTS_ACTIVE, parent ? parent->isEnabled() : true);
-  if(!obj.performStateChange() && !parent) {
-    return; // without a parent, no cascading change can happen if the own state didn't change
-  }
+  const auto wasVisibleBefore = obj.isVisible();
 
-  if(wasEnabledBefore == obj.isEnabled()) {
+  obj.setFlag(ObjectFlags::PARENTS_ACTIVE, parent ? parent->isEnabled() : true);
+  obj.setFlag(ObjectFlags::PARENTS_HIDDEN, parent ? !parent->isVisible() : false);
+  obj.performStateChange();
+
+  const bool enabledChanged = wasEnabledBefore != obj.isEnabled();
+  const bool visibleChanged = wasVisibleBefore != obj.isVisible();
+
+  if(!enabledChanged && !visibleChanged) {
     return;
   }
 
-  sendEvent(obj.id, 0, obj.isEnabled() ? EVENT_TYPE_ENABLE : EVENT_TYPE_DISABLE, 0);
+  if (enabledChanged) {
+    sendEvent(obj.id, 0, obj.isEnabled() ? EVENT_TYPE_ENABLE : EVENT_TYPE_DISABLE, 0);
+  }
+
   iterObjectChildren(obj.id, [&](Object* child) {
     updateChildObjectStates(&obj, *child);
   });

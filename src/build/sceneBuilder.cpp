@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 
 #include "../utils/binaryFile.h"
 #include "../utils/fs.h"
@@ -28,15 +29,29 @@ namespace
   constexpr uint32_t FLAG_SCR_32BIT = 1 << 2;
 }
 
-uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool savePrefabItself)
+uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool savePrefabItself,
+                            uint16_t runtimeId, uint16_t parentRuntimeId, bool expanding,
+                            const Build::WorldTransform &parentTransform, bool isPrefabRoot)
 {
+  if(PropScope::stack.size() > PropScope::MAX_DEPTH) {
+    Utils::Logger::log("Prefab nesting too deep (possible self-reference); aborting expansion",
+                       Utils::Logger::LEVEL_ERROR);
+    return 0;
+  }
+
   auto srcObj = &obj;
   std::shared_ptr<Project::Prefab> prefab{};
-  if(!savePrefabItself && obj.isPrefabInstance())
+  bool isInstance = !savePrefabItself && obj.isPrefabInstance();
+  if(isInstance)
   {
     prefab = ctx.project->getAssets().getPrefabByUUID(srcObj->uuidPrefab.value);
     if(prefab)srcObj = &prefab->obj;
   }
+
+  // This node's override layer stays active for its whole subtree. Keys are path-precise
+  // (combine(pathToTarget, propId)), so an override only resolves for its exact target. This
+  // lets a compound prefab carry overrides into the prefabs it contains.
+  PropScope::PrefabLayer objLayer{obj.propOverrides};
 
   // Prefab-instance roots get a trailing block written after the component
   // terminator carrying the prefab UUID and any class-variable values.
@@ -46,9 +61,9 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
   const bool hasPrefabData = !savePrefabItself && prefab;
 
   // 2D pass routing: a Canvas-marked Object and every descendant render in
-  // the screen-space pass. Since writeObject recurses into obj.children, we
-  // walk back up the parent chain at write time to detect "any ancestor is
-  // a Canvas" — this stays correct regardless of save order.
+  // the screen-space pass. Since writeObject recurses into children, we walk
+  // back up the parent chain at write time to detect "any ancestor is a
+  // Canvas". This stays correct regardless of save order.
   bool inCanvas2D = obj.isCanvas2D;
   for(auto *p = obj.parent; p && !inCanvas2D; p = p->parent) {
     if(p->isCanvas2D) inCanvas2D = true;
@@ -56,35 +71,56 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
 
   uint16_t objFlags = 0;
   if(obj.enabled)objFlags |= P64::ObjectFlags::ACTIVE;
-  if(!obj.children.empty())objFlags |= P64::ObjectFlags::HAS_CHILDREN;
+  if(!srcObj->children.empty() || !obj.children.empty())objFlags |= P64::ObjectFlags::HAS_CHILDREN;
   if(hasPrefabData)objFlags |= P64::ObjectFlags::HAS_PREFAB_VARS;
   if(inCanvas2D)objFlags |= P64::ObjectFlags::RENDER_LAYER_2D;
 
+  ctx.fileObj.write<uint16_t>(objFlags); // @TODO type
+  ctx.fileObj.write<uint16_t>(runtimeId);
+  ctx.fileObj.write<uint16_t>(parentRuntimeId);
+  ctx.fileObj.write<uint8_t>(srcObj->visMask.resolve(obj.propOverrides));
+  ctx.fileObj.write<uint8_t>(obj.layerIndex2D); // fork: 2D draw-queue index
+
+  glm::vec3 lpos   = srcObj->pos.resolve(obj.propOverrides);
+  glm::vec3 lscale = srcObj->scale.resolve(obj.propOverrides);
+  glm::quat lrot   = srcObj->rot.resolve(obj.propOverrides);
+
+  if(isPrefabRoot) {
+    lpos = {0,0,0};
+    lscale = {1,1,1};
+    lrot = glm::quat(glm::vec3(0.0f));
+  }
+
+  // World transform of this node. Used for what we write when expanding and as the
+  // parent transform handed to children. At depth 0 parentTransform is identity, so
+  // top-level and regular scene objects are written exactly as before.
+  WorldTransform world{
+    .pos   = parentTransform.pos + parentTransform.rot * (parentTransform.scale * lpos),
+    .rot   = parentTransform.rot * lrot,
+    .scale = parentTransform.scale * lscale
+  };
+
+  glm::vec3 wpos          = expanding ? world.pos   : lpos;
+  const glm::vec3 &wscale = expanding ? world.scale : lscale;
+  const glm::quat &wrot   = expanding ? world.rot   : lrot;
+
   // Anchor-resolved pos: 2D nodes anchor to one of nine framebuffer corners.
-  // We bake the anchor offset into pos at build time so the runtime draws at
+  // The anchor offset is baked into pos at build time so the runtime draws at
   // (pos.x + anchorOffsetX, pos.y + anchorOffsetY) without consulting any
   // scene config. Framebuffer dimensions come from the scene conf; default
-  // fallback is the libdragon 320×240 if the conf hasn't loaded yet.
-  glm::vec3 finalPos = srcObj->pos.resolve(obj.propOverrides);
+  // fallback is the libdragon 320x240 if the conf hasn't loaded yet.
   if(inCanvas2D && obj.anchor2D != 0) {
     int fbW = ctx.scene ? ctx.scene->conf.fbWidth  : 320;
     int fbH = ctx.scene ? ctx.scene->conf.fbHeight : 240;
     int col = obj.anchor2D % 3;       // 0=L, 1=C, 2=R
     int row = obj.anchor2D / 3;       // 0=T, 1=M, 2=B
-    finalPos.x += (col == 1 ? fbW * 0.5f : (col == 2 ? (float)fbW : 0.0f));
-    finalPos.y += (row == 1 ? fbH * 0.5f : (row == 2 ? (float)fbH : 0.0f));
+    wpos.x += (col == 1 ? fbW * 0.5f : (col == 2 ? (float)fbW : 0.0f));
+    wpos.y += (row == 1 ? fbH * 0.5f : (row == 2 ? (float)fbH : 0.0f));
   }
 
-  ctx.fileObj.write<uint16_t>(objFlags); // @TODO type
-  ctx.fileObj.write<uint16_t>(obj.id);
-  ctx.fileObj.write<uint16_t>(obj.parent ? obj.parent->id : 0);
-  ctx.fileObj.write<uint8_t>(obj.layerIndex2D);
-  ctx.fileObj.write<uint8_t>(0); // padding
-  ctx.fileObj.write(finalPos);
-  ctx.fileObj.write(srcObj->scale.resolve(obj.propOverrides));
-
-  auto &rot = srcObj->rot.resolve(obj.propOverrides);
-  uint32_t quatQuant = T3D::Quantizer::quatTo32Bit({rot.x, rot.y, rot.z, rot.w});
+  ctx.fileObj.write(wpos);
+  ctx.fileObj.write(wscale);
+  uint32_t quatQuant = T3D::Quantizer::quatTo32Bit({wrot.x, wrot.y, wrot.z, wrot.w});
   ctx.fileObj.write(quatQuant);
 
   // DATA
@@ -93,7 +129,8 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
     ctx.fileObj.skip(2);
     ctx.fileObj.skip(2); // flags (@TODO)
 
-    if (comp.id >= 0 && comp.id < Project::Component::TABLE.size()) {
+    if (comp.id >= 0 && comp.id < (int)Project::Component::TABLE.size()) {
+      PropScope::Path compPath(comp.uuid); // resolve comp props relative to this object
       Project::Component::TABLE[comp.id].funcBuild(obj, comp, ctx);
     } else {
       Utils::Logger::log("Component ID not found: " + std::to_string(comp.id), Utils::Logger::LEVEL_ERROR);
@@ -114,11 +151,15 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
 
   std::vector<Project::Component::Entry*> compList{};
   for (auto &comp : srcObj->components) {
+    PropScope::Path compPath(comp.uuid);
+    if (!comp.enabled.resolve(obj)) continue;
     compList.push_back(&comp);
   }
 
   if(srcObj != &obj) {
     for (auto &comp : obj.components) {
+      PropScope::Path compPath(comp.uuid);
+      if (!comp.enabled.resolve(obj)) continue;
       compList.push_back(&comp);
     }
   }
@@ -220,8 +261,26 @@ uint32_t Build::writeObject(Build::SceneCtx &ctx, Project::Object &obj, bool sav
   }
 
   uint32_t count = 1;
-  for (const auto &child : obj.children) {
-    count += writeObject(ctx, *child, savePrefabItself);
+  bool childExpanding = expanding || isInstance;
+  for (const auto &child : srcObj->children) {
+    PropScope::Path childPath(child->uuid); // this/outer layers address slots inside the child
+    uint16_t childRuntimeId = childExpanding ? static_cast<uint16_t>(ctx.nextRuntimeId++)
+                                             : child->runtimeId;
+    count += writeObject(ctx, *child, savePrefabItself, childRuntimeId, runtimeId, childExpanding, world);
+  }
+
+  // For a prefab instance, also write children added directly to the instance in the
+  // scene. These are real, world-positioned scene objects, not part of the prefab.
+  // They resolve against their own overrides only, so the instance's cascade layer is
+  // cleared first, otherwise their transform would resolve the instance's placement.
+  if(isInstance && !obj.children.empty()) {
+    PropScope::ResetScope freshScope; // resolve these against their own overrides only
+    for (const auto &child : obj.children) {
+      uint16_t childRuntimeId = expanding ? static_cast<uint16_t>(ctx.nextRuntimeId++)
+                                          : child->runtimeId;
+      count += writeObject(ctx, *child, savePrefabItself, childRuntimeId, runtimeId, expanding,
+                           expanding ? world : WorldTransform{});
+    }
   }
   return count;
 }
@@ -234,10 +293,14 @@ void Build::buildScene(Project::Project &project, const Project::SceneEntry &sce
   std::unique_ptr<Project::Scene> sc{new Project::Scene(scene.id, project.getPath())};
   ctx.scene = sc.get();
 
+  // Object ids only exist at runtime; assign them now so writeObject and component
+  // builds (which resolve object UUID -> runtime id) see a consistent id space.
+  // Expanded prefab-instance children get ids continuing past the scene objects.
+  ctx.nextRuntimeId = sc->assignRuntimeIds();
+
   auto fsDataPath = fs::absolute(fs::path{project.getPath()} / "filesystem" / "p64");
 
   uint32_t sceneFlags = 0;
-  uint32_t objCountExpected = sc->objectsMap.size();
   uint32_t objCount = 0;
 
   if (sc->conf.doClearDepth.value)sceneFlags |= FLAG_CLR_DEPTH;
@@ -247,7 +310,7 @@ void Build::buildScene(Project::Project &project, const Project::SceneEntry &sce
   ctx.fileObj = {};
   auto &rootObj = sc->getRootObject();
   for (const auto &child : rootObj.children) {
-    objCount += writeObject(ctx, *child, false);
+    objCount += writeObject(ctx, *child, false, child->runtimeId, 0, false);
   }
 
   ctx.fileObj.writeToFile(fsDataPath / fileNameObj);

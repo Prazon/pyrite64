@@ -10,8 +10,13 @@ namespace P64::Script::__UUID__
     // Types that can be set in the editor:
     // - uint8_t, int8_t, uint16_t, int16_t, uint32_t, int32_t
     // - float
+    // - fm_vec3_t, fm_quat_t
     // - AssetRef<sprite_t>
     // - ObjectRef
+    //
+    // For unsigned integers (uint8_t/uint16_t/uint32_t) you can add a
+    // [[P64::Bitmask("0=Fire, 1=Water, 2=Earth")]] attribute to edit them as a
+    // named multi-select of bits instead of a plain number.
     //
     // Other types can be used but are not exposed in the editor.
   );

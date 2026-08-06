@@ -7,6 +7,7 @@
 #include <iostream>
 #include <fstream>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,8 @@ namespace
     if (str == "int32_t") return Utils::DataType::s32;
     if (str == "float") return Utils::DataType::f32;
     if (str == "char") return Utils::DataType::string;
+    if (str == "fm_vec3_t") return Utils::DataType::VEC3;
+    if (str == "fm_quat_t") return Utils::DataType::QUAT;
     if (str == "AssetRef<sprite_t>") return Utils::DataType::ASSET_SPRITE;
     // Any other AssetRef<…> is treated as a user resource type reference.
     // The inner type name is recovered later from the raw type string and
@@ -42,6 +45,10 @@ namespace
       case Utils::DataType::u16:
       case Utils::DataType::s16:
         return 2;
+      case Utils::DataType::VEC3:
+        return 12;
+      case Utils::DataType::QUAT:
+        return 16;
       case Utils::DataType::u32:
       case Utils::DataType::s32:
       case Utils::DataType::f32:
@@ -59,6 +66,21 @@ namespace
     size_t end = s.find_last_not_of(" \t\n\r\"");
     if (start == std::string::npos) return "";
     return s.substr(start, end - start + 1);
+  }
+
+  // Parses a "bit=name" comma separated list (e.g. "0=Fire, 1=Water") into (bit, name) pairs.
+  std::vector<std::pair<int, std::string>> parseBitmask(const std::string& meta) {
+    std::vector<std::pair<int, std::string>> result;
+    std::stringstream ss(meta);
+    std::string part;
+    while (std::getline(ss, part, ',')) {
+      auto eq = part.find('=');
+      if (eq == std::string::npos) continue;
+      try {
+        result.push_back({std::stoi(trim(part.substr(0, eq))), trim(part.substr(eq + 1))});
+      } catch (...) {}
+    }
+    return result;
   }
 
   std::unordered_map<std::string, std::string> parseAttributes(const std::string& attrText) {
@@ -146,6 +168,22 @@ Utils::CPP::Struct Utils::CPP::parseDataStruct(const std::string &sourceCode, co
         if (lt != std::string::npos && gt != std::string::npos && gt > lt) {
           field.attr["resourceTypeName"] = trim(raw.substr(lt + 1, gt - lt - 1));
         }
+      }
+
+      // Pre-parse the bitmask attribute for unsigned int fields, so the editor doesn't re-parse each frame.
+      if (field.type == DataType::u8 || field.type == DataType::u16 || field.type == DataType::u32) {
+        auto bitmaskAttr = field.attr.find("P64::Bitmask");
+        if (bitmaskAttr != field.attr.end()) {
+          field.bitmask = parseBitmask(bitmaskAttr->second);
+        }
+      }
+
+      // Normalize vector defaults (e.g. "{{1, 2, 3}}" or empty) into the "x,y,z" form stored by the editor.
+      if (field.type == DataType::VEC3 || field.type == DataType::QUAT) {
+        auto values = Utils::parseFloatList(field.defaultValue);
+        if (field.type == DataType::QUAT && values.empty()) values = {0,0,0,1};
+        values.resize(field.type == DataType::VEC3 ? 3 : 4, 0.0f);
+        field.defaultValue = Utils::floatListToString(values.data(), values.size());
       }
 
       if(field.type == DataType::string) {

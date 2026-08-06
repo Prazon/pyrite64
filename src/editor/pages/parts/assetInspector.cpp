@@ -8,6 +8,8 @@
 #include "../../../context.h"
 #include "../../imgui/helper.h"
 #include "../../../utils/textureFormats.h"
+#include "../../audioPreview.h"
+#include "../../thumbnailCache.h"
 
 using FileType = Project::FileType;
 
@@ -19,6 +21,83 @@ namespace
       count += countChildBones(*child);
     }
     return count;
+  };
+
+  void formatTime(char *out, size_t outSize, float seconds) {
+    int total = (int)seconds;
+    snprintf(out, outSize, "%d:%02d", total / 60, total % 60);
+  }
+
+  // Estimated size of the converted wav64 in ROM, mirroring what audioconv64
+  // produces for each compression type at the current asset settings.
+  double estimateAudioRomSize(const Editor::AudioPreview::Info &info, const Project::AssetConf &conf)
+  {
+    double rate = conf.wavResampleRate.value != 0 ? conf.wavResampleRate.value : info.sampleRate;
+    double channels = conf.wavForceMono.value ? 1 : info.channels;
+
+    double bytesPerSec;
+    switch (conf.wavCompression.value)
+    {
+      case 1: // VADPCM: 16 samples -> 9 bytes per channel
+        bytesPerSec = rate * channels * (9.0 / 16.0);
+        break;
+      case 3: // Opus: audioconv64's automatic "good quality" bitrate
+        bytesPerSec = (60.0 * 50.0 + rate * channels) / 8.0;
+        break;
+      default: // uncompressed 16-bit PCM
+        bytesPerSec = rate * channels * 2.0;
+        break;
+    }
+    return bytesPerSec * info.duration;
+  }
+
+  void drawAudioPreview(const Project::AssetManagerEntry *asset)
+  {
+    bool isPlaying = Editor::AudioPreview::isPlaying(asset->path);
+
+    if (ImGui::Button(isPlaying ? ICON_MDI_STOP " Stop" : ICON_MDI_PLAY " Play")) {
+      if (isPlaying) {
+        Editor::AudioPreview::stop();
+      } else {
+        Editor::AudioPreview::play(asset->path);
+      }
+      isPlaying = !isPlaying;
+    }
+
+    Editor::AudioPreview::Info info{};
+    bool hasInfo = Editor::AudioPreview::getInfo(asset->path, info);
+
+    ImGui::SameLine();
+    float progress = isPlaying ? Editor::AudioPreview::getProgress() : 0.0f;
+
+    char timeText[64]{};
+    if (hasInfo) {
+      char posStr[16], durStr[16];
+      formatTime(posStr, sizeof(posStr), progress * info.duration);
+      formatTime(durStr, sizeof(durStr), info.duration);
+      snprintf(timeText, sizeof(timeText), "%s / %s", posStr, durStr);
+    }
+    ImGui::ProgressBar(progress, {-FLT_MIN, 0}, timeText);
+
+    // click into the bar to seek
+    if (isPlaying && ImGui::IsItemClicked()) {
+      ImVec2 rMin = ImGui::GetItemRectMin();
+      ImVec2 rMax = ImGui::GetItemRectMax();
+      Editor::AudioPreview::seek((ImGui::GetMousePos().x - rMin.x) / (rMax.x - rMin.x));
+    }
+
+    if (hasInfo) {
+      ImGui::Text("%u Hz, %s", info.sampleRate, info.channels == 1 ? "Mono" : "Stereo");
+
+      double romSize = estimateAudioRomSize(info, asset->conf);
+      if (romSize >= 1024.0 * 1024.0) {
+        ImGui::Text("Est. size in ROM: %.1f MB", romSize / (1024.0 * 1024.0));
+      } else {
+        ImGui::Text("Est. size in ROM: %.0f KB", romSize / 1024.0);
+      }
+    } else {
+      ImGui::TextDisabled("Failed to read audio file");
+    }
   }
 }
 
@@ -96,12 +175,15 @@ void Editor::AssetInspector::draw(uint64_t assetUUID)
 
     if (asset->type != FileType::AUDIO && asset->type != FileType::MUSIC_XM)
     {
-      ImTable::addComboBox("Compression", (int&)asset->conf.compression, {
+      int compression = (int)asset->conf.compression;
+      if(ImTable::addComboBox("Compression", compression, {
         "Project Default", "None",
         "Level 1 - Fast",
         "Level 2 - Good",
         "Level 3 - High",
-      });
+      })) {
+        asset->conf.compression = (Project::ComprTypes)compression;
+      }
     }
 
     ImTable::addCheckBox("Exclude", asset->conf.exclude);
@@ -127,6 +209,18 @@ void Editor::AssetInspector::draw(uint64_t assetUUID)
       ImGui::Text("%dx%dpx", asset->texture->getWidth(), asset->texture->getHeight());
     }
     if (asset->type == FileType::MODEL_3D) {
+      if (ctx.thumbnails) {
+        if (auto thumb = ctx.thumbnails->getModelTexture(asset->getUUID())) {
+          float w = ImGui::GetContentRegionAvail().x - 8_px;
+          if (w > 256_px)w = 256_px;
+          ImVec2 size{w, w};
+          ImVec2 rmin = ImGui::GetCursorScreenPos();
+          ImVec2 uv0, uv1;
+          ctx.thumbnails->getScrubUV(rmin, {rmin.x + size.x, rmin.y + size.y}, uv0, uv1);
+          ImGui::Image(ImTextureRef(thumb), size, uv0, uv1);
+        }
+      }
+
       uint32_t triCount = 0;
       for (auto &model : asset->model.t3dm.models) {
         triCount += model.triangles.size();
@@ -167,6 +261,12 @@ void Editor::AssetInspector::draw(uint64_t assetUUID)
         ImGui::Text("%d", static_cast<int>(asset->model.t3dm.animations.size()));
 
       ImGui::EndTable();
+    }
+    if (asset->type == FileType::AUDIO) {
+      drawAudioPreview(asset);
+    }
+    if (asset->type == FileType::MUSIC_XM) {
+      ImGui::TextDisabled("No preview available for XM modules");
     }
   }
 }

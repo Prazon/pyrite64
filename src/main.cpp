@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <SDL3/SDL.h>
 #include <future>
+#include <thread>
 
 #include <argparse/argparse.hpp>
 
@@ -19,6 +20,7 @@
 #include "editor/imgui/theme.h"
 #include "editor/pages/launcher.h"
 #include "editor/pages/editorScene.h"
+#include "editor/thumbnailCache.h"
 #include "editor/imgui/notification.h"
 #include "renderer/scene.h"
 #include "renderer/shader.h"
@@ -281,10 +283,13 @@ int main(int argc, char** argv)
 
     Renderer::Scene scene{};
     ctx.scene = &scene;
+    Editor::ThumbnailCache thumbnailCache{};
+    ctx.thumbnails = &thumbnailCache;
     Editor::Launcher editorMain{ctx.gpu};
     ctx.editorScene = std::make_unique<Editor::Scene>();
 
     ctx.prefs.load();
+    ImGui::Theme::setTheme(ctx.prefs.themeName);
     if(!CLI::getProjectPath().empty())
     {
       if(!Editor::Actions::call(Editor::Actions::Type::PROJECT_OPEN, CLI::getProjectPath())) {
@@ -294,10 +299,16 @@ int main(int argc, char** argv)
 
     // Main loop
     bool done = false;
-    float lastPinch;
+    float lastPinch = 1.0f;
     while(!done) {
 
       auto frameStart = SDL_GetTicksNS();
+
+      // force default theme for the launcher (i'm lazy)
+      std::string desiredTheme = ctx.project ? ctx.prefs.themeName : std::string("dark");
+      if(desiredTheme != ImGui::Theme::getCurrentTheme()) {
+        ImGui::Theme::setTheme(desiredTheme);
+      }
 
       ImGui::Theme::update();
 
@@ -477,6 +488,8 @@ int main(int argc, char** argv)
 
       ImGui::Render();
       scene.draw();
+
+      ctx.runDeferredActions();
 
       if (closeRequested) {
         done = confirmCloseWithUnsavedChanges();

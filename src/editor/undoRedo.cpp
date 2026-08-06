@@ -79,9 +79,9 @@ namespace Editor::UndoRedo
         savedState = initialState;
       }
       auto ids = boundSelection->all();
-      undoStack.push_back(std::make_unique<Entry>(
+      undoStack.push_back(std::unique_ptr<Entry>(new Entry{
         std::move(initialState), "Initial State", ids
-      ));
+      }));
     }
 
     snapshotScene = boundScene;
@@ -104,11 +104,11 @@ namespace Editor::UndoRedo
 
     auto ids = boundSelection->all();
 
-    auto newEntry = std::make_unique<Entry>(
+    auto newEntry = std::unique_ptr<Entry>(new Entry{
       scene->serialize(true),
       nextChangedReason,
       ids
-    );
+    });
 
     nextChangedReason.clear();
 

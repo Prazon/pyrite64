@@ -25,6 +25,7 @@ namespace Project::Assets
     constexpr static int DYN_TYPE_NONE = 0;
     constexpr static int DYN_TYPE_TILE = 1;
     constexpr static int DYN_TYPE_FULL = 2;
+    constexpr static int MAX_PLACEHOLDERS = 8;
 
     PROP_BOOL(set);
     PROP_U64(texUUID);
@@ -40,7 +41,9 @@ namespace Project::Assets
 
     [[nodiscard]] nlohmann::json serialize() const;
     void deserialize(const nlohmann::json &doc);
-    void build(Utils::BinaryFile &file, Build::SceneCtx &sceneCtx) const;
+    // disablePlaceholder writes the texture as static even if it is marked dynamic, used as a
+    // safety net when a model exceeds MAX_PLACEHOLDERS so the runtime never sees a bad slot.
+    void build(Utils::BinaryFile &file, Build::SceneCtx &sceneCtx, bool disablePlaceholder = false) const;
 
     bool operator==(const MaterialTex & tex) const = default;
   };
@@ -65,6 +68,9 @@ namespace Project::Assets
 
     PROP_S32(zprim); PROP_BOOL(zprimSet);
     PROP_S32(zdelta);
+
+    // fixed offset added to the final screen-space depth (t3d_state_set_depth_offset)
+    PROP_S32(depthOffset); PROP_BOOL(depthOffsetSet);
 
     PROP_BOOL(persp);    PROP_BOOL(perspSet);
     PROP_S32(alphaComp); PROP_BOOL(alphaCompSet);

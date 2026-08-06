@@ -7,6 +7,7 @@
 #include "vecMath.h"
 #include "raycast.h"
 #include "collisionScene.h"
+#include "attach.h"
 
 namespace P64
 {
@@ -42,11 +43,22 @@ namespace P64::Coll
       RaycastColliderTypeFlags collTypes{RaycastColliderTypeFlags::MESH_COLLIDERS};
       uint8_t maxSlides{4};            // Slide iterations per move
       uint8_t readMask{0xFF};
+      /// When true, position is carried along with the mesh collider currently
+      /// stood on (translation + rotation of the contact point). The character's
+      /// own facing is not changed.
+      bool followFloor{true};
     };
 
     CharacterBody(Object* owner_);
 
-    Settings settings{};
+    /**
+     * Applies settings in bulk (e.g. from editor init data).
+     * Refreshes all internal caches derived from settings.
+     */
+    void configure(const Settings& s);
+
+    /// Read-only access to current settings.
+    const Settings& getSettings() const { return settings; }
 
     /// velocity to be applied during the next 'moveAndSlide' call.
     fm_vec3_t inputVelocity{};
@@ -77,6 +89,29 @@ namespace P64::Coll
     const fm_vec3_t& floorNormal() const { return contactNormal; }
 
     /**
+     * World-space position of the bottom of the capsule.
+     * @return foot position in world space
+     */
+    fm_vec3_t getFootPos() const;
+
+    /**
+     * Object id of the surface the body is currently grounded on (0 when airborne).
+     * Lets other objects react to the character standing on them (e.g. platforms,
+     * pressure plates) now that the body produces no collision events itself.
+     * @return id of the floor object, or 0
+     */
+    uint16_t floorObjectId() const { return floorObjId; }
+
+    /**
+     * Whether the floor moved (carried) the body this frame via followFloor — i.e.
+     * the surface it stands on translated or rotated and dragged the body along.
+     * Useful e.g. to avoid banking a respawn point while on a moving platform.
+     * Note: only reflects followFloor carry (mesh-collider floors).
+     * @return true if a moving floor carried the body this frame
+     */
+    bool wasMovedByFloor() const { return movedByFloor; }
+
+    /**
      * True when the body is on an upward-facing surface steeper than the limit.
      * If this is the case, isOnFloor() will also return true.
      * This function here can be used to determine on which of the two you are standing
@@ -85,11 +120,17 @@ namespace P64::Coll
     bool isOnSteepSurface() const { return onSteepSurface; }
 
     /**
-     * Returns true if the body was snapped upwards to a floor (e.g. stairs) after the last 'moveAndSlide' call.
-     * It will reset automatically at the beginning of 'moveAndSlide'.
-     * @return true if snapped
+     * Sets the body's up vector and refreshes internal caches.
+     * The input does not need to be pre-normalized.
+     * @param newUp new up direction
      */
-    bool didSnapToFloor() const { return snappedFloor; }
+    void setUp(const fm_vec3_t& newUp);
+
+    /**
+     * Sets the center offset and refreshes the cached rotated offset.
+     * @param offset offset in meters from the object origin to the capsule center
+     */
+    void setCenterOffset(const fm_vec3_t& offset);
 
     /**
      * Instantly moves the character to a new owner position.
@@ -97,7 +138,7 @@ namespace P64::Coll
      * grounded state so the body starts clean, use this for respawning.
      * When false, only the position changes (e.g. portal / seamless teleport).
      *
-     * @param ownerPos New position in graphics space (same space as Object::pos).
+     * @param ownerPos New position in world space (same space as Object::pos).
      * @param resetForces If true, zero velocity and clear grounded state.
      */
     void teleport(const fm_vec3_t& ownerPos, bool resetForces = true);
@@ -118,14 +159,27 @@ namespace P64::Coll
     void debugDraw() const;
 
   private:
+    void refreshCache();
+
+    Settings settings{};
     fm_vec3_t velocity{};
     fm_vec3_t contactNormal{};
     Object* owner; // Note: we can't use a reference since it prevents a copy-constructor
 
+    // Cached derived values (refreshed by configure/setUp/setCenterOffset)
+    fm_vec3_t normUp{0, 1, 0};              // normalized settings.up
+    fm_vec3_t cachedCenterOffset{};          // settings.centerOffset rotated from +Y-up to normUp
+    float halfHeight{1.0f};                  // max(height/2, radius)
+    float innerHalfHeight{0.5f};             // halfHeight - radius
+    float walkCos{0.707f};                   // cos(floorMaxAngle), used every frame
+
     uint8_t onFloor{};
     uint8_t onSteepSurface{};
-    uint8_t snappedFloor{};
     uint8_t probeFoundFloor{}; // set when floor probe confirms solid ground; gates gravity suppression
+    uint16_t floorObjId{};     // id of the object currently grounded on (0 = airborne)
+    uint8_t movedByFloor{};    // set when followFloor carried the body this frame
+
+    Attach floorAttach{}; // tracks the contact point on the mesh stood on for followFloor
 
     /// Capsule center in physics-space, derived from owner's current position + offset.
     fm_vec3_t capsuleCenter() const;

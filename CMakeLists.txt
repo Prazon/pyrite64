@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(pyrite64 VERSION 0.7.0)
+project(pyrite64 VERSION 0.9.0)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -146,12 +146,18 @@ add_executable(pyrite64 src/main.cpp
         src/editor/recentProjects.cpp
         src/editor/actions.h
         src/editor/actions.cpp
+        src/editor/audioPreview.h
+        src/editor/audioPreview.cpp
         src/editor/undoRedo.h
         src/editor/undoRedo.cpp
         src/editor/selectionUtils.h
         src/editor/selectionUtils.cpp
         src/project/selection.h
         src/project/selection.cpp
+        src/editor/transformUtils.h
+        src/editor/transformUtils.cpp
+        src/editor/thumbnailCache.h
+        src/editor/thumbnailCache.cpp
         src/editor/window.h
         src/editor/window.cpp
         src/editor/keymap.h
@@ -186,6 +192,8 @@ add_executable(pyrite64 src/main.cpp
         src/editor/pages/parts/sceneInspector.cpp
         src/build/projectBuilder.h
         src/build/projectBuilder.cpp
+        src/build/romMetaBuilder.h
+        src/build/romMetaBuilder.cpp
         src/utils/fs.h
         src/utils/string.h
         src/utils/proc.h
@@ -283,6 +291,7 @@ add_executable(pyrite64 src/main.cpp
         src/build/prefabBuilder.cpp
         src/project/component/types/compConstraint.cpp
         src/project/component/types/compCulling.cpp
+        src/project/component/types/compSurface.cpp
         src/editor/pages/parts/nodeEditor.cpp
         src/project/component/shared/materialInstance.cpp
         src/project/component/shared/meshFilter.cpp
@@ -417,6 +426,13 @@ add_executable(pyrite64 src/main.cpp
         src/renderer/animation.cpp
 )
 
+# libdragon's C headers (e.g. surface_make in surface.h) use narrowing
+# conversions in braced initializers. GCC only warns, but Clang/AppleClang
+# treat this as a hard error, so relax it there to keep the macOS build working.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(pyrite64 PRIVATE -Wno-narrowing)
+endif()
+
 target_include_directories(pyrite64 PRIVATE
     vendored
     vendored/imgui
@@ -443,10 +459,15 @@ set(PYRITE_APP_NAME "pyrite64")
 set(PYRITE_GH_USER "HailToDodongo")
 set(PYRITE_GH_REPO "pyrite64")
 
+# Base URL of the published docs (GitHub Pages host is the lowercased user name).
+string(TOLOWER "${PYRITE_GH_USER}" PYRITE_GH_USER_LC)
+set(PYRITE_DOCS_URL "https://${PYRITE_GH_USER_LC}.github.io/${PYRITE_GH_REPO}/docs")
+
 target_compile_definitions(pyrite64 PRIVATE "PYRITE_ORG_NAME=\"${PYRITE_ORG_NAME}\"")
 target_compile_definitions(pyrite64 PRIVATE "PYRITE_APP_NAME=\"${PYRITE_APP_NAME}\"")
 target_compile_definitions(pyrite64 PRIVATE "PYRITE_GH_USER=\"${PYRITE_GH_USER}\"")
 target_compile_definitions(pyrite64 PRIVATE "PYRITE_GH_REPO=\"${PYRITE_GH_REPO}\"")
+target_compile_definitions(pyrite64 PRIVATE "PYRITE_DOCS_URL=\"${PYRITE_DOCS_URL}\"")
 target_compile_definitions(pyrite64 PRIVATE "PYRITE_VERSION=\"${PROJECT_VERSION}\"")
 
 target_compile_definitions(pyrite64 PRIVATE IMGUI_DEFINE_MATH_OPERATORS GLM_FORCE_QUAT_DATA_XYZW)

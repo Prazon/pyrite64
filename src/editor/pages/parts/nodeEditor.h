@@ -22,6 +22,15 @@ namespace Editor
       std::string trackedDirtyState{};
       bool dirty{false};
       bool isInit{false};
+      bool showVarsPanel{true};
+      std::string nodeMenuSearch{};
+      int nodeMenuFocusFrames{0};
+
+      void drawVariablesPanel();
+      void syncVariablePins();
+      void drawCreateMenu(ImFlow::Pin* pin);
+      void resetView();
+      void addGroup();
 
       // Reveal-from-Compile-Errors state. Same scheme as
       // PrefabEventGraphEditor — see the header there for rationale.

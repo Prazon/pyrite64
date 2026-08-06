@@ -12,6 +12,7 @@
 #include "../../imgui/helper.h"
 #include "../../keymap.h"
 #include "../../preferences.h"
+#include "glm/gtc/type_ptr.hpp"
 
 #include <algorithm>
 
@@ -37,6 +38,8 @@ namespace
       "Mouse-look sensitivity. Negative inverts the Y axis.");
     ImTable::addPref("Invert Wheel Y", p.invertWheelY, PREF_DEF.invertWheelY,
       "Invert mouse-wheel zoom direction.");
+    ImTable::addPref("Lock Viewport Navigation", p.viewportLockMode, PREF_DEF.viewportLockMode,
+      "Touchpad/laptop mode: viewport navigation only while a lock key is held.");
     ImTable::end();
   }
 
@@ -81,6 +84,14 @@ namespace
       ImTable::addPref("FPS Limit", p.fpsLimit, PREF_DEF.fpsLimit,
         "Editor frame-rate cap when VSync is off (minimum 20).");
       p.fpsLimit = std::max(20, p.fpsLimit);
+    }
+    if (ImTable::prefRow("Collider Color",
+          "Colour used to draw collider outlines in the viewport.", false)) {
+      ImGui::ColorEdit3(
+        "##ColliderColor",
+        glm::value_ptr(p.colliderColor),
+        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel
+      );
     }
     ImTable::end();
   }

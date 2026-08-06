@@ -39,8 +39,11 @@ namespace Project::Graph::Node
           auto scene = ctx.project->getScenes().getLoadedScene();
           if(scene)
           {
+            // Runtime ids are assigned during the project build (assignRuntimeIds),
+            // so this list is only meaningful after a build. Storing UUIDs and
+            // resolving them at graph codegen is the planned follow-up.
             for(const auto &[_, obj] : scene->objectsMap) {
-              entries.push_back({obj->id, "ID " + std::to_string(obj->id) + " - " + obj->name});
+              entries.push_back({obj->runtimeId, "ID " + std::to_string(obj->runtimeId) + " - " + obj->name});
             }
           }
 

@@ -18,8 +18,8 @@ namespace {
     uint16_t flags;
     uint16_t id;
     uint16_t group;
-    uint8_t  layerIdx2D; // only used when RENDER_LAYER_2D is set
-    uint8_t  _padding;
+    uint8_t visMask;
+    uint8_t layerIdx2D; // fork: only used when RENDER_LAYER_2D is set (was _padding)
     fm_vec3_t pos;
     fm_vec3_t scale;
     uint32_t packedRot;
@@ -121,8 +121,6 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
 
   allocSize += compDataSize + varDataSize;
 
-  //debugf("Allocating object %d | comps: %d | size: %lu bytes\n", objEntry->id, compCount, allocSize);
-
   void* objMem = memalign(DATA_ALIGN, allocSize); // @TODO: custom allocator
   memObjects += malloc_usable_size(objMem);
 
@@ -140,6 +138,8 @@ P64::Object* P64::Scene::loadObject(uint8_t* &objFile, std::function<void(Object
   obj->group = objEntry->group;
   obj->flags = objEntry->flags;
   obj->layerIdx2D = objEntry->layerIdx2D;
+  obj->visMask = objEntry->visMask;
+  assertf(compCount <= 0xFF, "Object %d has too many components (%d)", objEntry->id, (int)compCount);
   obj->compCount = compCount;
   obj->varCount = varCount;
   obj->prefabUUID = prefabUUIDFromFile;

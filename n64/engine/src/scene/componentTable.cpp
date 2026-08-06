@@ -39,6 +39,7 @@
 #include "scene/components/particleEmitter.h"
 #include "scene/components/pathFollow.h"
 #include "scene/components/charBody.h"
+#include "scene/components/surface.h"
 
 // some template magic to auto-detect if a function exists in a component
 #define HAS_FUNC_TPL(NAME_HAS, NAME_GET, FUNC) \
@@ -109,5 +110,6 @@ namespace P64
     SET_COMP(ParticleEmitter),
     SET_COMP(PathFollow),
     SET_COMP(CharBody),
+    SET_COMP(Surface),
   };
 }

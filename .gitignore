@@ -7,6 +7,7 @@ p64editor
 pyrite64
 .vscode
 *.pak
+*.ram
 pyrite64.exe
 *.dll
 preferences.json
@@ -15,3 +16,4 @@ preferences.json
 .cache/
 # Python bytecode cache from the CLI smoketest (tests/cli/run.py)
 __pycache__/
+*.AppImage

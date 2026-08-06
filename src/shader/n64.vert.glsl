@@ -78,6 +78,8 @@ void main()
 
   vec4 posWorld = matM * vec4(vec3(inPosition), 1.0);
   gl_Position = matMVP * vec4(vec3(inPosition), 1.0);
+  // material depth-offset
+  gl_Position.z += material.depthOffset * gl_Position.w;
   posScreen = gl_Position.xy / gl_Position.w;
 
   cc_shade = inColor;
@@ -122,15 +124,23 @@ void main()
   cc_shade_flat = cc_shade;
 
   vec2 texSize = material.high.xy - material.low.xy + 1;
-  texSize *= 0.5;
+
+  float screenAspect = screenSize.y / screenSize.x;
+  screenAspect = 1.0 / screenAspect;
+  vec2 uvNudge = (posScreen.xy * vec2(screenAspect, 1)) * 8.0;
+
+  const vec2 nudgeLimit = vec2(8.0) * vec2(screenAspect, 1);
+  uvNudge = clamp(uvNudge, vec2(-nudgeLimit), vec2(nudgeLimit));
+  uvNudge /= texSize.xy;
+
+  normScreen.xy += uvNudge;
   normScreen.y = -normScreen.y;
+  normScreen = (normScreen * 0.5) + 0.5;
 
-  vec2 uvGen = normScreen.xy * texSize + (texSize*0.75);
+  vec2 uvGen = normScreen.xy * texSize;
+
   uvGen = vertexFxSelect(T3D_VERTEX_FX_SPHERICAL_UV, uvPixel, uvGen);
-
-  // we simulate UVs in pixel-space, since there is only one UV set, we scale by the first texture size
-  uv = uvGen.xyxy;// * texSize.xyxy;
-  // apply material.shift from top left of texture:
+  uv = uvGen.xyxy;
 
   uv *= material.shift;
 

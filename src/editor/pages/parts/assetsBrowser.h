@@ -85,6 +85,9 @@ namespace Editor
       int pendingSceneMoveId{0};
       std::string pendingSceneMoveTarget{};
       char renameBuffer[256]{};
+      // Prefab UUID to navigate to and select on the next draw(). Set via
+      // focusPrefab() from outside the browser (e.g. the scene graph).
+      static uint64_t pendingPrefabFocusUUID;
       // Per-frame hover flag, written at the top of draw() and read by
       // main.cpp to gate the global Ctrl+wheel UI zoom: when the cursor is
       // over the content browser, Ctrl+wheel scales the browser cards
@@ -99,8 +102,14 @@ namespace Editor
 
     public:
       AssetsBrowser() { chips.fill(true); }
+
+      /**
+       * Requests that the browser navigates to and selects a prefab.
+       * @param prefabUUID UUID of the prefab to focus.
+       */
+      static void focusPrefab(uint64_t prefabUUID);
       void draw();
-      void showContextMenu(const std::string& path);
+      void showContextMenu(const std::string& path, bool showOpenItem = true);
 
       bool wasHovered() const { return hoveredLastFrame; }
       float getThumbScale() const { return thumbScale; }

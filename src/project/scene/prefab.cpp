@@ -72,7 +72,7 @@ namespace
       : std::make_shared<Project::Object>();
     out->name              = src.name;
     out->uuid              = src.uuid;
-    out->id                = src.id;
+    out->runtimeId         = src.runtimeId;
     out->uuidPrefab.value  = src.uuidPrefab.value;
     out->pos.value         = src.pos.value;
     out->rot.value         = src.rot.value;
@@ -80,7 +80,6 @@ namespace
     out->proportionalScale = src.proportionalScale;
     out->enabled           = src.enabled;
     out->selectable        = src.selectable;
-    out->isPrefabEdit      = src.isPrefabEdit;
     out->isCanvas2D        = src.isCanvas2D;
     out->anchor2D          = src.anchor2D;
     out->layerIndex2D      = src.layerIndex2D;
@@ -110,7 +109,7 @@ namespace
   {
     dst.name              = src.name;
     dst.uuid              = src.uuid;
-    dst.id                = src.id;
+    dst.runtimeId         = src.runtimeId;
     dst.uuidPrefab.value  = src.uuidPrefab.value;
     dst.pos.value         = src.pos.value;
     dst.rot.value         = src.rot.value;
@@ -118,7 +117,6 @@ namespace
     dst.proportionalScale = src.proportionalScale;
     dst.enabled           = src.enabled;
     dst.selectable        = src.selectable;
-    dst.isPrefabEdit      = src.isPrefabEdit;
     dst.isCanvas2D        = src.isCanvas2D;
     dst.anchor2D          = src.anchor2D;
     dst.layerIndex2D      = src.layerIndex2D;
@@ -740,11 +738,7 @@ void Project::Prefab::ensureStableUuids()
   walk(obj);
 }
 
-void Project::Prefab::save()
+void Project::Prefab::save(const std::string &path)
 {
-  auto prefabJson = serialize();
-  Utils::FS::saveTextFile(
-    ctx.project->getPath() + "/assets/" + obj.name + ".prefab",
-    prefabJson
-  );
+  Utils::FS::saveTextFile(path, serialize());
 }

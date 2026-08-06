@@ -214,6 +214,12 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
 
   ImGui::BeginChild("##matUI", ImVec2(0, bottomH), ImGuiChildFlags_None);
 
+  if(placeholderOverflow) {
+    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
+      ICON_MDI_ALERT " At most %d texture placeholders per model. Extra ones were disabled.",
+      Project::Assets::MaterialTex::MAX_PLACEHOLDERS);
+  }
+
   ImVec2 labelWidth = {89_px, -1.0f};
   bool needsReload = false;
 
@@ -257,7 +263,14 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
     headerLabel += "###Slot_" + entry.first;
 
     ImGui::PushID(("MaterialSlot_" + entry.first).c_str());
-    if (ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+    ImGui::SetNextItemAllowOverlap();
+    const bool matOpen = ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+    {
+      const float helpSize = 19_px;
+      ImGui::SameLine(ImGui::GetContentRegionMax().x - helpSize - 4_px);
+      ImGui::HelpIcon("/manual/editor/materials", "Open Docs", helpSize);
+    }
+    if (matOpen)
     {
       // Per-slot material-asset binding. When set, the asset's compiled
       // Material wins over the inline override at model-load time (see
@@ -567,6 +580,11 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
             [&]{ ImGui::InputInt("##1", &mat.zdelta.value); }
           );
         });
+
+        toggleProp("Z-Offset", mat.depthOffsetSet.value, [&] {
+          ImGui::InputInt("##ZO", &mat.depthOffset.value);
+        });
+        mat.depthOffset.value = glm::clamp(mat.depthOffset.value, -0x8000, 0x7FFF);
       });
 
       ImGui::Dummy({0, 2_px});
@@ -619,22 +637,24 @@ bool Editor::ModelEditor::draw(ImGuiID defDockId)
 
   ImGui::End();
 
-  // update placeholder indices
+  // Assign placeholder slot indices, capped at the runtime slot limit.
   uint32_t slot = 0;
+  placeholderOverflow = false;
+  auto assignSlot = [&](Project::Assets::MaterialTex &tex) {
+    if(!tex.dynType.value)return;
+    if(slot >= (uint32_t)Project::Assets::MaterialTex::MAX_PLACEHOLDERS) {
+      tex.dynType.value = Project::Assets::MaterialTex::DYN_TYPE_NONE;
+      placeholderOverflow = true;
+      return;
+    }
+    tex.dynPlaceholder.value = slot++;
+  };
   for(auto &entry : model->model.materials)
   {
     auto &mat = entry.second;
-    if(mat.isCustom.value)
-    {
-      if(mat.tex0.dynType.value) {
-        mat.tex0.dynPlaceholder.value = slot++;
-        if(slot >= 8)break;
-      }
-      if(mat.tex1.dynType.value) {
-        mat.tex1.dynPlaceholder.value = slot++;
-        if(slot >= 8)break;
-      }
-    }
+    if(!mat.isCustom.value)continue;
+    assignSlot(mat.tex0);
+    assignSlot(mat.tex1);
   }
 
   if(!matToRemove.empty())

@@ -100,8 +100,15 @@ namespace Project
 
       std::shared_ptr<Object> addObject(std::string &objJson, uint64_t parentUUID = 0);
       std::shared_ptr<Object> addObject(Object &parent);
-      std::shared_ptr<Object> addObject(Object &parent, std::shared_ptr<Object> obj, bool generateIDs = false);
+      std::shared_ptr<Object> addObject(Object &parent, std::shared_ptr<Object> obj, bool generateUUID = false);
 
+
+      /**
+       * Creates an object with a static or animated Model component for a 3D model asset.
+       * @param modelUUID UUID of the 3D model asset.
+       * @return Created scene object, or null when the asset is not a 3D model.
+       */
+      std::shared_ptr<Object> addModelObject(uint64_t modelUUID);
 
       void removeObject(Object &obj);
       void removeAllObjects();
@@ -126,7 +133,10 @@ namespace Project
       // hierarchy node behave like Unity / Godot.
       std::shared_ptr<Object> addPrefabInstance(uint64_t prefabUUID, Object *parent = nullptr);
 
-      uint32_t createPrefabFromObject(uint32_t uuid);
+      uint64_t createPrefabFromObject(uint32_t uuid, const std::string &subDir = {});
+
+      // Unpacks a prefab instance (shallow) into real, editable scene objects
+      void unpackPrefabInstance(uint32_t uuid);
 
       // Re-materializes the fromPrefab subtree under every instance of the
       // given prefab uuid. User-added (fromPrefab=false) children of an
@@ -142,6 +152,9 @@ namespace Project
 
       void deserialize(const std::string &data);
 
-      uint16_t getFreeObjectId();
+      // Assigns the runtime object ids (uint16_t) for the whole tree.
+      // Build-time only: must be called before serializing objects to the runtime format.
+      // Returns the first free id (base for build-time expanded prefab-instance children).
+      uint32_t assignRuntimeIds();
   };
 }
