@@ -5,6 +5,8 @@
 #include "graph.h"
 
 #include <unordered_set>
+#include <unordered_map>
+#include <array>
 
 #include "json.hpp"
 #include "../../utils/string.h"
@@ -243,6 +245,112 @@ namespace Project::Graph
     TABLE_ENTRY(SaveSetString),   // 78
   });
 
+  // Stable string aliases for NODE_TABLE indices. Saved graphs carry both the
+  // numeric "type" (legacy, index into NODE_TABLE) and this "typeId" string;
+  // the loader prefers the string. Never rename an entry once shipped; the
+  // array MUST stay in lockstep with NODE_TABLE above.
+  constexpr std::array NODE_TYPE_IDS = {
+    "p64.start",          // 0
+    "p64.wait",           // 1
+    "p64.objDel",         // 2
+    "p64.objEvent",       // 3
+    "p64.compare",        // 4
+    "p64.value",          // 5
+    "p64.repeat",         // 6
+    "p64.func",           // 7
+    "p64.compBool",       // 8
+    "p64.sceneLoad",      // 9
+    "p64.arg",            // 10
+    "p64.switchCase",     // 11
+    "p64.note",           // 12
+    "p64.prefabEvent",    // 13
+    "p64.prefabFunc",     // 14
+    "p64.prefabVarGet",   // 15
+    "p64.reroute",        // 16
+    "p64.deltaTime",      // 17
+    "p64.mathAdd",        // 18
+    "p64.mathSub",        // 19
+    "p64.mathMul",        // 20
+    "p64.mathDiv",        // 21
+    "p64.mathMod",        // 22
+    "p64.mathMin",        // 23
+    "p64.mathMax",        // 24
+    "p64.mathClamp",      // 25
+    "p64.mathAbs",        // 26
+    "p64.mathFloor",      // 27
+    "p64.mathCeil",       // 28
+    "p64.mathRound",      // 29
+    "p64.mathSign",       // 30
+    "p64.mathSqrt",       // 31
+    "p64.mathPow",        // 32
+    "p64.boolAnd",        // 33
+    "p64.boolOr",         // 34
+    "p64.boolNot",        // 35
+    "p64.boolXor",        // 36
+    "p64.cmpEq",          // 37
+    "p64.cmpNe",          // 38
+    "p64.cmpLt",          // 39
+    "p64.cmpLe",          // 40
+    "p64.cmpGt",          // 41
+    "p64.cmpGe",          // 42
+    "p64.randomFloat",    // 43
+    "p64.randomInt",      // 44
+    "p64.stringConst",    // 45
+    "p64.stringConcat",   // 46
+    "p64.toString",       // 47
+    "p64.stringLength",   // 48
+    "p64.substring",      // 49
+    "p64.stringFormat",   // 50
+    "p64.arrayMake",      // 51
+    "p64.arrayLength",    // 52
+    "p64.arrayGet",       // 53
+    "p64.arraySet",       // 54
+    "p64.arrayPush",      // 55
+    "p64.arrayPop",       // 56
+    "p64.arrayInsert",    // 57
+    "p64.arrayRemoveAt",  // 58
+    "p64.arrayClear",     // 59
+    "p64.arrayFind",      // 60
+    "p64.arrayContains",  // 61
+    "p64.forRange",       // 62
+    "p64.while",          // 63
+    "p64.forEach",        // 64
+    "p64.break",          // 65
+    "p64.continue",       // 66
+    "p64.prefabSuper",    // 67
+    "p64.saveCommit",     // 68
+    "p64.saveReload",     // 69
+    "p64.saveClearAll",   // 70
+    "p64.saveGetInt",     // 71
+    "p64.saveGetFloat",   // 72
+    "p64.saveGetBool",    // 73
+    "p64.saveGetString",  // 74
+    "p64.saveSetInt",     // 75
+    "p64.saveSetFloat",   // 76
+    "p64.saveSetBool",    // 77
+    "p64.saveSetString",  // 78
+  };
+  static_assert(NODE_TYPE_IDS.size() == NODE_TABLE.size(),
+    "NODE_TYPE_IDS out of sync with NODE_TABLE");
+
+  const char* Graph::typeIdOf(uint32_t type)
+  {
+    return type < NODE_TYPE_IDS.size() ? NODE_TYPE_IDS[type] : "";
+  }
+
+  bool Graph::typeFromTypeId(const std::string &typeId, uint32_t &outType)
+  {
+    static const std::unordered_map<std::string, uint32_t> lookup = []{
+      std::unordered_map<std::string, uint32_t> m;
+      for(uint32_t i = 0; i < NODE_TYPE_IDS.size(); ++i) m[NODE_TYPE_IDS[i]] = i;
+      return m;
+    }();
+    auto it = lookup.find(typeId);
+    if(it == lookup.end()) return false;
+    outType = it->second;
+    return true;
+  }
+
   const std::vector<std::string> & Graph::getNodeNames()
   {
     static std::vector<std::string> names = {};
@@ -372,7 +480,15 @@ namespace Project::Graph
 
     std::unordered_map<uint64_t, std::shared_ptr<Node::Base>> newNodes{};
     for(auto &savedNode : nodeData["nodes"]) {
-      uint32_t type = savedNode["type"];
+      uint32_t type = savedNode.value("type", 0u);
+      // Prefer the stable string id when present; the numeric index is the
+      // legacy fallback for graphs saved before typeId existed.
+      if(savedNode.contains("typeId")) {
+        uint32_t byId{};
+        if(typeFromTypeId(savedNode["typeId"].get<std::string>(), byId)) {
+          type = byId;
+        }
+      }
       if(type >= NODE_TABLE.size()) {
         // Future / corrupted graph file. Drop the node and keep loading so
         // the user sees the rest of the graph instead of an empty editor.
@@ -420,6 +536,7 @@ namespace Project::Graph
       nlohmann::json jNode{};
       jNode["uuid"] = p64Node->uuid;
       jNode["type"] = p64Node->type;
+      jNode["typeId"] = typeIdOf(p64Node->type);
       jNode["pos"] = {p64Node->getPos().x, p64Node->getPos().y};
       p64Node->serialize(jNode);
       data["nodes"].push_back(jNode);

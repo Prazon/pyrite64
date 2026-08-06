@@ -38,6 +38,14 @@ namespace Project::Graph
       static std::span<const ::Editor::NodePalette::Entry> getPaletteEntries();
       std::shared_ptr<Node::Base> addNode(uint32_t type, const ImVec2& pos);
 
+      // Stable string alias for a NODE_TABLE index ("" when out of range).
+      // Saved graphs carry it as "typeId" beside the legacy numeric "type";
+      // the loader prefers the string, so table indices stop being the only
+      // durable identity of a node type.
+      static const char* typeIdOf(uint32_t type);
+      // Reverse lookup; returns false for unknown ids.
+      static bool typeFromTypeId(const std::string &typeId, uint32_t &outType);
+
       bool deserialize(const std::string &jsonData);
       std::string serialize();
 
