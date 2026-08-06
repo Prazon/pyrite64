@@ -15,6 +15,7 @@
 
 #include "cli.h"
 #include "build/projectBuilder.h"
+#include "project/graph/valueTypes.h"
 #include "editor/actions.h"
 #include "editor/window.h"
 #include "editor/imgui/theme.h"
@@ -155,6 +156,10 @@ int main(int argc, char** argv)
 {
   Project::Component::init();
   fs::current_path(Utils::Proc::getAppResourcePath());
+  // Value-pin type registry must exist before any graph is loaded or built,
+  // in both GUI and CLI mode. The JS node host re-registers on top of this
+  // fallback set when it (re)loads specs.
+  Project::Graph::Node::registerBuiltinValueTypes();
   ctx.toolchain.scan();
 
   auto cliRes = CLI::run(argc, argv);
