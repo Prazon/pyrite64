@@ -22,6 +22,8 @@ namespace P64::NodeGraph
     GraphFunc func;
     uint32_t _padding;
     uint16_t stackSize;
+    uint16_t _pad2;
+    uint32_t varBytes; // size of the per-instance variable blob
   };
 
   void* load(const char* path)
@@ -55,6 +57,7 @@ bool P64::NodeGraph::Instance::update(float deltaTime) {
   if(!corot)return false;
 
   lastDeltaTime = deltaTime;
+  time += deltaTime;
   //auto t = get_ticks();
   //disable_interrupts();
   coro_resume(corot);

@@ -34,19 +34,41 @@ namespace Project::Graph
   inline constexpr uint32_t SPEC_ENTRY_FLAG     = 0x40000000;
 
   // A graph-level variable declaration (name + value-type id, see
-  // valueTypes.h). Editor UI and the runtime per-instance storage blob land
-  // with the engine-runtime convergence phase; the type exists now so the
-  // spec registry's Set/Get Var machinery compiles.
+  // valueTypes.h). Stored per graph asset; the runtime keeps the values in a
+  // per-instance blob (inst->vars) laid out by layoutVariables below.
   struct GraphVar
   {
     std::string name{};
     std::string type{"i32"};
   };
 
+  // A single object reference ("Object" node) declared by a graph.
+  // 'slot' indexes into the runtime objRefs array, 'name' is the editor label.
+  struct ObjRefParam
+  {
+    uint16_t slot{};
+    std::string name{};
+  };
+
+  // A variable placed in the per-instance blob: its byte offset and storage size.
+  struct VarLayoutEntry
+  {
+    std::string name{};
+    std::string type{};
+    uint32_t offset{};
+    uint32_t size{};
+  };
+
+  // Assigns each variable a 4-byte-aligned offset in declaration order.
+  std::vector<VarLayoutEntry> layoutVariables(const std::vector<GraphVar> &vars);
+  // Total blob size (bytes) for the given variables (end of the last entry).
+  uint32_t varBlobBytes(const std::vector<GraphVar> &vars);
+
   class Graph
   {
     public:
       ImFlow::ImNodeFlow graph{};
+      std::vector<GraphVar> variables{}; // graph-level variable declarations
 
       static const std::vector<std::string>& getNodeNames();
       // Categorised entries for the Add-Node palette. Indices line up
@@ -69,6 +91,10 @@ namespace Project::Graph
 
       bool deserialize(const std::string &jsonData);
       std::string serialize();
+
+      // Read object refs / variables from a serialized graph without building it.
+      static std::vector<ObjRefParam> getObjectRefs(const std::string &jsonData);
+      static std::vector<GraphVar> getVariables(const std::string &jsonData);
 
       // Run structural validation rules over the graph and push diagnostics
       // into `errs` (also mirrored to Logger). Safe to call standalone — both

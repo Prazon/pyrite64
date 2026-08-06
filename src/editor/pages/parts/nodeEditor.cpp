@@ -16,6 +16,8 @@
 #include "ImNodeFlow.h"
 #include "json.hpp"
 #include "../../../project/graph/nodes/baseNode.h"
+#include "../../../project/graph/nodes/scriptNode.h"
+#include "../../../project/graph/nodeRegistry.h"
 #include "../../../project/graph/nodeStyles.h"
 #include "../../../project/compile/compileErrors.h"
 #include "../../../utils/fs.h"
@@ -201,6 +203,11 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
       ImGui::PopStyleColor();
     }
     ImGui::SameLine();
+    if(ImGui::Button(showVarsPanel ? ICON_MDI_DOCK_LEFT " Variables"
+                                   : ICON_MDI_DOCK_WINDOW " Variables")) {
+      showVarsPanel = !showVarsPanel;
+    }
+    ImGui::SameLine();
     ImGui::TextDisabled("(%s)", currentAsset->path.c_str());
     ImGui::Separator();
   }
@@ -245,6 +252,19 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
     }
     ImGui::EndPopup();
   }
+
+  // Keep the variable nodes' pin types in sync with this graph's declarations
+  // while it draws (Set/Get Var dropdowns read the active list).
+  Project::Graph::Node::setActiveGraphVars(&graph.variables);
+  syncVariablePins();
+
+  if(showVarsPanel) {
+    ImGui::BeginChild("graphVarsPanel", ImVec2(210.0f, 0), true);
+    drawVariablesPanel();
+    ImGui::EndChild();
+    ImGui::SameLine();
+  }
+  ImGui::BeginChild("graphCanvas", ImVec2(0, 0), false);
 
   ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
   ImVec2 canvasSize = ImGui::GetContentRegionAvail();
@@ -365,6 +385,9 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
     }
   }
 
+  ImGui::EndChild();
+  Project::Graph::Node::setActiveGraphVars(nullptr);
+
   ImGui::End();
 
   auto currentState = graph.serialize();
@@ -383,6 +406,59 @@ bool Editor::NodeEditor::draw(ImGuiID defDockId)
   dirty = isDirtyNow;
 
   return isOpen;
+}
+
+void Editor::NodeEditor::drawVariablesPanel()
+{
+  ImGui::TextUnformatted("Variables");
+  ImGui::Separator();
+
+  static const std::array<const char*, 8> kTypes =
+    {"i32", "u32", "f32", "bool", "str", "vec3", "quat", "objref"};
+
+  const float spacing = ImGui::GetStyle().ItemSpacing.x;
+  const float rowH = ImGui::GetFrameHeight();
+  const float comboW = 64.0f;
+
+  int removeIdx = -1;
+  for(size_t i = 0; i < graph.variables.size(); ++i) {
+    auto &v = graph.variables[i];
+    ImGui::PushID((int)i);
+    float nameW = ImGui::GetContentRegionAvail().x - comboW - rowH - 2.0f * spacing;
+    ImGui::SetNextItemWidth(nameW);
+    ImGui::InputText("##name", &v.name);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(comboW);
+    if(ImGui::BeginCombo("##type", v.type.c_str())) {
+      for(auto *tn : kTypes) {
+        if(ImGui::Selectable(tn, v.type == tn)) v.type = tn;
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if(ImGui::Button(ICON_MDI_CLOSE, ImVec2(rowH, rowH))) removeIdx = (int)i;
+    ImGui::PopID();
+  }
+  if(removeIdx >= 0) graph.variables.erase(graph.variables.begin() + removeIdx);
+
+  if(ImGui::Button(ICON_MDI_PLUS " Add Variable", ImVec2(-FLT_MIN, 0))) {
+    graph.variables.push_back({"var" + std::to_string(graph.variables.size()), "i32"});
+  }
+}
+
+void Editor::NodeEditor::syncVariablePins()
+{
+  auto typeOf = [&](const std::string &varName) -> std::string {
+    for(auto &v : graph.variables) if(v.name == varName) return v.type;
+    return "i32";
+  };
+  for(auto &[uid, node] : graph.graph.getNodes()) {
+    auto *base = static_cast<Project::Graph::Node::Base*>(node.get());
+    // Only spec-driven nodes participate; typeId() is empty for table nodes.
+    if(!base || base->typeId().empty())continue;
+    auto *sn = static_cast<Project::Graph::Node::ScriptNode*>(base);
+    Project::Graph::Node::applyVarPinTypes(*sn, typeOf(sn->getStr("var")));
+  }
 }
 
 void Editor::NodeEditor::save()

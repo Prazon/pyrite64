@@ -16,6 +16,11 @@ namespace P64::NodeGraph
 {
   typedef void (*GraphFunc)(void* arg);
 
+  // Max number of object references a single graph can declare (see the "Object" node).
+  // Object references are resolved to runtime object ids at build time and provided
+  // per-instance by the NodeGraph component.
+  constexpr int MAX_OBJ_REFS = 8;
+
   struct GraphDef;
   struct NodeDef;
 
@@ -28,6 +33,14 @@ namespace P64::NodeGraph
     public:
       Object *object{};
       uint32_t args[2]{};
+      // Runtime object ids bound by the NodeGraph component (Object node slots).
+      uint16_t objRefs[MAX_OBJ_REFS]{};
+      // Per-instance graph-variable blob, allocated and seeded by the
+      // NodeGraph component; generated code addresses it at baked offsets.
+      void* vars{};
+      // Seconds the graph has spent running. Advances per active frame, so
+      // time-driven nodes stay continuous across waits.
+      float time{};
       uint16_t asset{};
       uint8_t repeatable{};
       // Per-frame deltaTime, refreshed before each coro_resume so the

@@ -218,13 +218,18 @@ namespace Project::Graph::Node
       std::vector<NodeSpec> s{};
       addNativeSpecs(s);
       if(Js::init()) Js::loadSpecs(s, userDir);
-      // Interim policy: the "core.*" specs shadow this fork's table-based C++
-      // nodes and partly target runtime features (graph vars / objref slots)
-      // that land with the engine convergence phase. Keep them loadable for
-      // compatibility but out of the create menu; project-defined nodes (any
-      // other prefix) are fully available.
+      // Palette policy: most "core.*" specs shadow this fork's table-based
+      // C++ nodes, so they stay loadable (for graphs authored against the
+      // spec set) but out of the create menu. The variable and object-ref
+      // specs have no table-based counterpart and are runtime-supported now,
+      // so they surface. Project-defined nodes (any other prefix) always do.
+      static const std::unordered_set<std::string> UNHIDDEN_CORE = {
+        "core.varGet", "core.varSet", "core.objRef",
+      };
       for(auto &spec : s) {
-        if(spec.id.rfind("core.", 0) == 0) spec.hidden = true;
+        if(spec.id.rfind("core.", 0) == 0) {
+          spec.hidden = !UNHIDDEN_CORE.count(spec.id);
+        }
       }
       return s;
     }

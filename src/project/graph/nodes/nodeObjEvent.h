@@ -27,6 +27,12 @@ namespace Project::Graph::Node
         setStyle(makeNodeStyle(NodeCategory::FunctionCall));
 
         addIN<TypeLogic>("", ImFlow::ConnectionFilter::SameType(), PIN_STYLE_LOGIC);
+        // Optional typed target: wire an Object node (objref) here to address
+        // the event by bound reference instead of the legacy numeric id.
+        addIN<TypeValue>("Target", ImFlow::ConnectionFilter::SameType(),
+                         pinStyleForValueType("objref"));
+        valInputTypes = {0, 1};
+        inTypes = {LOGIC_TYPE, "objref"};
         addOUT<TypeLogic>("", PIN_STYLE_LOGIC);
       }
 
@@ -76,8 +82,15 @@ namespace Project::Graph::Node
           eventValue = '"' + eventValue + "\"_hash";
         }
 
-        ctx.localConst("uint16_t", "t_objId", objectId)
-          .localConst("uint16_t", "t_eventType", eventType)
+        // A wired Target pin (objref) wins over the legacy numeric id; ids
+        // are assigned at build time now, so the bound reference is the
+        // reliable way to address another object.
+        if(ctx.hasValueInput(0)) {
+          ctx.localVar("uint16_t", "t_objId", ctx.inputExpr(0));
+        } else {
+          ctx.localConst("uint16_t", "t_objId", objectId);
+        }
+        ctx.localConst("uint16_t", "t_eventType", eventType)
           .localConst("uint32_t", "t_eventVal", eventValue)
 
           .line("inst->object->getScene().sendEvent(")

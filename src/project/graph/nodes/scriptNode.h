@@ -67,10 +67,20 @@ namespace Project::Graph::Node
       std::string typeId() const override { return spec ? spec->id : std::string{}; }
       bool isEntry() const override { return spec && spec->entry; }
 
-      // Fork pure-eval bridge: a pure value spec (value set, no build) opts
-      // into the function-top pure pass; its value output is materialized as
-      // the res_<uuid> globalVar that table-based consumer nodes read.
-      bool canBePure() const override { return spec && spec->value && !spec->build; }
+      // Fork pure-eval bridge: pure value specs (value set, no build) and
+      // exec-less provider specs (build only, no logic pins, e.g. the Object
+      // node) opt into the function-top pure pass; their value output is the
+      // res_<uuid> globalVar that consumer nodes read.
+      bool canBePure() const override {
+        if(!spec || spec->missing) return false;
+        if(spec->value && !spec->build) return true;
+        if(spec->build) {
+          for(const auto &t : inTypes)  if(t == LOGIC_TYPE) return false;
+          for(const auto &t : outTypes) if(t == LOGIC_TYPE) return false;
+          return true;
+        }
+        return false;
+      }
       void buildAsPure(BuildCtx &ctx) override;
   };
 }

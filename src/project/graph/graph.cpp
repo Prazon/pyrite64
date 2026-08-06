@@ -161,6 +161,54 @@ namespace Project::Graph::Node
 
 namespace Project::Graph
 {
+  std::vector<VarLayoutEntry> layoutVariables(const std::vector<GraphVar> &vars)
+  {
+    std::vector<VarLayoutEntry> out{};
+    uint32_t offset = 0;
+    for(const auto &v : vars) {
+      uint32_t size = (uint32_t)Node::byteSizeOf(v.type);
+      out.push_back({v.name, v.type, offset, size});
+      offset += size; // type sizes are 4-byte multiples, so offsets stay aligned
+    }
+    return out;
+  }
+
+  uint32_t varBlobBytes(const std::vector<GraphVar> &vars)
+  {
+    auto layout = layoutVariables(vars);
+    return layout.empty() ? 0 : (layout.back().offset + layout.back().size);
+  }
+
+  std::vector<GraphVar> Graph::getVariables(const std::string &jsonData)
+  {
+    std::vector<GraphVar> out{};
+    auto data = nlohmann::json::parse(jsonData, nullptr, false);
+    if(!data.is_object() || !data.contains("variables"))return out;
+    for(auto &v : data["variables"]) {
+      out.push_back({
+        v.value("name", std::string{}),
+        v.value("type", std::string{"i32"}),
+      });
+    }
+    return out;
+  }
+
+  std::vector<ObjRefParam> Graph::getObjectRefs(const std::string &jsonData)
+  {
+    std::vector<ObjRefParam> out{};
+    auto data = nlohmann::json::parse(jsonData, nullptr, false);
+    if(!data.is_object() || !data.contains("nodes"))return out;
+
+    for(auto &node : data["nodes"]) {
+      if(!node.contains("objRefSlot"))continue;
+      out.push_back({
+        .slot = node.value<uint16_t>("objRefSlot", 0),
+        .name = node.value("objRefName", std::string{"Object"}),
+      });
+    }
+    return out;
+  }
+
   auto NODE_TABLE = std::to_array<TableEntry>({
     TABLE_ENTRY(Start),
     TABLE_ENTRY(Wait),
@@ -578,6 +626,16 @@ namespace Project::Graph
       newNodes[newNode->uuid] = newNode;
     }
 
+    variables.clear();
+    if(nodeData.contains("variables")) {
+      for(auto &v : nodeData["variables"]) {
+        variables.push_back({
+          v.value("name", std::string{}),
+          v.value("type", std::string{"i32"}),
+        });
+      }
+    }
+
     for(auto &savedLink : nodeData["links"]) {
       auto nodeAIt = newNodes.find(savedLink["src"]);
       auto nodeBIt = newNodes.find(savedLink["dst"]);
@@ -646,6 +704,11 @@ namespace Project::Graph
           }
         }
       }
+    }
+
+    data["variables"] = nlohmann::json::array();
+    for(const auto &v : variables) {
+      data["variables"].push_back({{"name", v.name}, {"type", v.type}});
     }
 
     return data.dump(2);
@@ -758,6 +821,8 @@ namespace Project::Graph
     uint16_t stackSize = 4096;
     f.write<uint64_t>(uuid);
     f.write<uint16_t>(stackSize);
+    f.write<uint16_t>(0); // padding to 4-byte-align the variable-blob size
+    f.write<uint32_t>(varBlobBytes(variables)); // bytes the runtime allocates for inst->vars
 
 
     // maps a node's UUID to its own position in the file
@@ -831,6 +896,24 @@ namespace Project::Graph
       auto it = nodeMap.find(u);
       return it != nodeMap.end() ? it->second->firstValueOutType() : std::string{};
     };
+
+    // Each graph variable resolves to a typed lvalue into inst->vars at a
+    // baked offset (layout mirrors what the NodeGraph component allocates).
+    auto varsByName = std::make_shared<std::unordered_map<std::string, VarLayoutEntry>>();
+    for(auto &e : layoutVariables(variables)) (*varsByName)[e.name] = e;
+    nodeCtx.varLValue = [varsByName](const std::string &name) -> std::string {
+      auto it = varsByName->find(name);
+      if(it == varsByName->end())return "0";
+      return "(*(" + Node::cTypeOf(it->second.type) + "*)((uint8_t*)inst->vars + "
+             + std::to_string(it->second.offset) + "))";
+    };
+    nodeCtx.varTypeOf = [varsByName](const std::string &name) -> std::string {
+      auto it = varsByName->find(name);
+      return it == varsByName->end() ? std::string{} : it->second.type;
+    };
+
+    // Let nodes resolve dynamic pin types (e.g. Set/Get Var) before emission.
+    for(auto *n : nodeVec) n->prepareBuild(nodeCtx);
 
 
     for(auto &[nodeUUID, ingoingVals] : nodeIngoingValMap)
