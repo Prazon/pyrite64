@@ -13,6 +13,7 @@
 #include "../../context.h"
 #include "../../project/cacheDir.h"
 #include "../../project/project.h"
+#include "../../project/graph/nodeRegistry.h"
 
 #define IMVIEWGUIZMO_IMPLEMENTATION 1
 #include "ImGuizmo.h"
@@ -439,6 +440,10 @@ void Editor::Scene::draw()
   // Replay any persisted-open editors now that a project is loaded. Cheap
   // no-op once the lists are drained; cheap no-op while ctx.project is null.
   processPendingRestores();
+
+  // Hot-reload project node scripts (<project>/nodes/*.js) when their
+  // mtimes change; open graphs pick the new specs up on the next frame.
+  Project::Graph::Node::pollUserNodeReload();
 
   float HEIGHT_TOP_BAR = 28_px;
   float HEIGHT_TOOLBAR = 40_px;

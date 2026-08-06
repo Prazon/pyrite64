@@ -167,14 +167,20 @@ namespace Editor::GraphHotkeys
         if (n) n->selected(false);
       }
       for (const auto &jn : data["nodes"]) {
-        if (!jn.contains("type")) continue;
-        uint32_t typeIdx = jn["type"].get<uint32_t>();
+        if (!jn.contains("type") && !jn.contains("typeId")) continue;
         ImVec2 pos{0,0};
         if (jn.contains("pos") && jn["pos"].is_array() && jn["pos"].size() == 2) {
           pos = {jn["pos"][0].get<float>() + offset.x,
                  jn["pos"][1].get<float>() + offset.y};
         }
-        auto newNode = g.addNode(typeIdx, pos);
+        // Spec-driven nodes carry only the string id; graphs whose type
+        // supports the string overload (script graphs) spawn through it.
+        decltype(g.addNode(0u, pos)) newNode{};
+        if (jn.contains("type")) {
+          newNode = g.addNode(jn["type"].get<uint32_t>(), pos);
+        } else if constexpr (requires { g.addNode(std::string{}, pos); }) {
+          newNode = g.addNode(jn["typeId"].get<std::string>(), pos);
+        }
         if (!newNode) continue;
         newNode->setPos(pos);
         // Apply per-node fields. Skip uuid in the json so the random

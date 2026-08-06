@@ -12,6 +12,8 @@
 #include "../../utils/string.h"
 #include "../../utils/logger.h"
 #include "../compile/compileErrors.h"
+#include "nodeRegistry.h"
+#include "nodes/scriptNode.h"
 
 #include "nodes/nodeWait.h"
 #include "nodes/nodeObjDel.h"
@@ -462,16 +464,70 @@ namespace Project::Graph
     };
     static_assert(sizeof(table) / sizeof(table[0]) == NODE_TABLE.size(),
       "Palette entries out of sync with NODE_TABLE");
-    return table;
+
+    // Append spec-driven nodes (native + JS-defined, e.g. per-project
+    // <project>/nodes/*.js). Their typeIndex carries SPEC_ENTRY_FLAG plus the
+    // index into getNodeSpecs(); addNode(uint32_t) decodes it. The cache
+    // rebuilds when the registry reloads (hot-reload of user scripts).
+    static std::vector<Entry> combined{};
+    static std::vector<std::string> nameStore{}; // keeps c_str()s alive
+    static uint32_t cachedGen = ~0u;
+    uint32_t gen = Node::getSpecsGeneration();
+    if(gen != cachedGen) {
+      cachedGen = gen;
+      combined.assign(std::begin(table), std::end(table));
+      const auto &specs = Node::getNodeSpecs();
+      nameStore.clear();
+      nameStore.reserve(specs.size() * 2);
+      for(size_t i = 0; i < specs.size(); ++i) {
+        const auto *spec = specs[i];
+        nameStore.push_back(spec->name);
+        nameStore.push_back(spec->category.empty() ? "Custom" : spec->category);
+        TypeMask in = 0, out = 0;
+        for(const auto &p : spec->inputs)  in  |= p.value ? FLOAT : EXEC;
+        for(const auto &p : spec->outputs) out |= p.value ? FLOAT : EXEC;
+        combined.push_back(Entry{
+          SPEC_ENTRY_FLAG | (uint32_t)i,
+          nameStore[nameStore.size() - 2].c_str(),
+          nameStore[nameStore.size() - 1].c_str(),
+          in, out,
+        });
+      }
+    }
+    return combined;
   }
 
   std::shared_ptr<Node::Base> Graph::addNode(uint32_t type, const ImVec2 &pos)
   {
+    if(type & SPEC_ENTRY_FLAG) {
+      const auto &specs = Node::getNodeSpecs();
+      uint32_t idx = type & ~SPEC_ENTRY_FLAG;
+      if(idx >= specs.size()) return nullptr;
+      auto newNode = graph.addNode<Node::ScriptNode>(pos, specs[idx]);
+      newNode->type = TYPE_SCRIPT_NODE;
+      return newNode;
+    }
     assert(type < NODE_TABLE.size() && "Unknown node type in graph addNode");
     auto newNode = NODE_TABLE[type].create(graph, pos);
     newNode->type = type;
     newNode->uuid = Utils::Hash::randomU64();
     return newNode;
+  }
+
+  std::shared_ptr<Node::Base> Graph::addNode(const std::string &typeId, const ImVec2 &pos)
+  {
+    // Table-based C++ nodes first (their aliases live in NODE_TYPE_IDS),
+    // then the spec registry (native + JS-defined nodes).
+    uint32_t tableType{};
+    if(typeFromTypeId(typeId, tableType)) {
+      return addNode(tableType, pos);
+    }
+    if(const auto *spec = Node::findSpec(typeId)) {
+      auto newNode = graph.addNode<Node::ScriptNode>(pos, spec);
+      newNode->type = TYPE_SCRIPT_NODE;
+      return newNode;
+    }
+    return nullptr;
   }
 
   bool Graph::deserialize(const std::string &jsonData)
@@ -481,12 +537,27 @@ namespace Project::Graph
     std::unordered_map<uint64_t, std::shared_ptr<Node::Base>> newNodes{};
     for(auto &savedNode : nodeData["nodes"]) {
       uint32_t type = savedNode.value("type", 0u);
+      bool resolved = !savedNode.contains("typeId");
       // Prefer the stable string id when present; the numeric index is the
       // legacy fallback for graphs saved before typeId existed.
-      if(savedNode.contains("typeId")) {
+      if(!resolved) {
+        const std::string tid = savedNode["typeId"].get<std::string>();
         uint32_t byId{};
-        if(typeFromTypeId(savedNode["typeId"].get<std::string>(), byId)) {
+        if(typeFromTypeId(tid, byId)) {
           type = byId;
+          resolved = true;
+        } else {
+          // Spec-driven node (native or JS-defined). Unknown ids become
+          // placeholder specs so the node's data survives a missing script.
+          const auto *spec = Node::findSpec(tid);
+          if(!spec) spec = Node::findOrCreatePlaceholder(tid);
+          auto newNode = graph.addNode<Node::ScriptNode>(ImVec2{}, spec);
+          newNode->deserialize(savedNode);
+          newNode->setPos({savedNode["pos"][0], savedNode["pos"][1]});
+          newNode->type = TYPE_SCRIPT_NODE;
+          newNode->uuid = savedNode["uuid"];
+          newNodes[newNode->uuid] = newNode;
+          continue;
         }
       }
       if(type >= NODE_TABLE.size()) {
@@ -535,8 +606,13 @@ namespace Project::Graph
 
       nlohmann::json jNode{};
       jNode["uuid"] = p64Node->uuid;
-      jNode["type"] = p64Node->type;
-      jNode["typeId"] = typeIdOf(p64Node->type);
+      if(auto specId = p64Node->typeId(); !specId.empty()) {
+        // Spec-driven node: the string id is the identity; no numeric type.
+        jNode["typeId"] = specId;
+      } else {
+        jNode["type"] = p64Node->type;
+        jNode["typeId"] = typeIdOf(p64Node->type);
+      }
       jNode["pos"] = {p64Node->getPos().x, p64Node->getPos().y};
       p64Node->serialize(jNode);
       data["nodes"].push_back(jNode);
@@ -729,20 +805,32 @@ namespace Project::Graph
     BuildCtx nodeCtx{};
     nodeCtx.source = "";
 
-    // convert nodes to vector, and make sure the start node (type=0) is first
+    // convert nodes to vector, and make sure the entry node is first
     std::vector<Node::Base*> nodeVec{};
     std::unordered_map<uint64_t, Node::Base*> nodeMap{};
     nodeVec.reserve(nodes.size());
     for(const auto &node : nodes | std::views::values)
     {
       auto p64Node = (Node::Base*)node.get();
-      if(p64Node->type == 0) {
+      if(p64Node->isEntry()) {
         nodeVec.insert(nodeVec.begin(), (Node::Base*)node.get());
       } else {
         nodeVec.push_back((Node::Base*)node.get());
       }
       nodeMap[p64Node->uuid] = p64Node;
     }
+
+    // Pull-based value resolution for spec-driven nodes: a producer's value
+    // output is materialized as the res_<uuid> globalVar, typed by the
+    // producer's first value-out type ("" for table nodes = identity
+    // conversion). Table-based consumers keep reading res_ names directly.
+    nodeCtx.valueResolver = [](uint64_t u) {
+      return "res_" + Utils::toHex64(u);
+    };
+    nodeCtx.valueTypeResolver = [&nodeMap](uint64_t u) -> std::string {
+      auto it = nodeMap.find(u);
+      return it != nodeMap.end() ? it->second->firstValueOutType() : std::string{};
+    };
 
 
     for(auto &[nodeUUID, ingoingVals] : nodeIngoingValMap)
@@ -769,6 +857,7 @@ namespace Project::Graph
     source += R"(#include <cstdio>)" "\n";   // StringFormat uses snprintf
     source += R"(#include <vector>)" "\n";   // Group D arrays
     source += R"(#include <type_traits>)" "\n"; // decltype(arr)::value_type element-kind inference
+    source += "//[[EXTRA_INCLUDES]]\n"; // patched below with BuildCtx::includes
     source += "\n";
 
     source += "namespace P64::NodeGraph::G" + Utils::toHex64(uuid) + " {\n";
@@ -983,5 +1072,11 @@ namespace Project::Graph
     source += "}\n";
     source += "}\n";
 
+    // Splice in any node-requested includes (BuildCtx::include) at the marker.
+    if(auto pos = source.find("//[[EXTRA_INCLUDES]]"); pos != std::string::npos) {
+      std::string extra{};
+      for(const auto &inc : nodeCtx.includes) extra += "#include " + inc + "\n";
+      source.replace(pos, std::string("//[[EXTRA_INCLUDES]]").size(), extra);
+    }
   }
 }

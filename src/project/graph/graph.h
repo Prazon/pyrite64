@@ -25,6 +25,23 @@ namespace Project::Graph
   // canvas) don't have to brittly string-match against NAME constants.
   inline constexpr uint32_t TYPE_PREFAB_FUNC    = 14;
   inline constexpr uint32_t TYPE_PREFAB_VAR_GET = 15;
+  // Sentinel numeric type for spec-driven ScriptNodes; their real identity is
+  // the spec's string id (Base::typeId()). Never persisted as "type".
+  inline constexpr uint32_t TYPE_SCRIPT_NODE    = 0xFFFFFFFF;
+  // Palette-entry encoding: this bit plus an index into getNodeSpecs() spawns
+  // a spec-driven node through addNode(uint32_t). Table indices never come
+  // near this range.
+  inline constexpr uint32_t SPEC_ENTRY_FLAG     = 0x40000000;
+
+  // A graph-level variable declaration (name + value-type id, see
+  // valueTypes.h). Editor UI and the runtime per-instance storage blob land
+  // with the engine-runtime convergence phase; the type exists now so the
+  // spec registry's Set/Get Var machinery compiles.
+  struct GraphVar
+  {
+    std::string name{};
+    std::string type{"i32"};
+  };
 
   class Graph
   {
@@ -37,6 +54,10 @@ namespace Project::Graph
       // hand-curated in graph.cpp alongside the table itself.
       static std::span<const ::Editor::NodePalette::Entry> getPaletteEntries();
       std::shared_ptr<Node::Base> addNode(uint32_t type, const ImVec2& pos);
+      // Creates a node by stable id: NODE_TYPE_IDS alias of a table-based
+      // C++ node, or a spec id from the registry (native/JS-defined).
+      // Returns nullptr for unknown ids.
+      std::shared_ptr<Node::Base> addNode(const std::string &typeId, const ImVec2& pos);
 
       // Stable string alias for a NODE_TABLE index ("" when out of range).
       // Saved graphs carry it as "typeId" beside the legacy numeric "type";

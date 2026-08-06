@@ -28,3 +28,6 @@
 [submodule "vendored/SDL_shadercross"]
 	path = vendored/SDL_shadercross
 	url = https://github.com/libsdl-org/SDL_shadercross.git
+[submodule "vendored/quickjs-ng"]
+	path = vendored/quickjs-ng
+	url = https://github.com/quickjs-ng/quickjs.git

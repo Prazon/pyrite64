@@ -18,6 +18,7 @@
 #include "../utils/logger.h"
 #include "../utils/string.h"
 #include "../context.h"
+#include "graph/nodeRegistry.h"
 
 namespace
 {
@@ -306,6 +307,10 @@ Project::Project::Project(const std::string &p64projPath)
     printf("Warning: project saved with newer editor version (%s > %s)\n",
       conf.editorVersion.c_str(), PYRITE_VERSION);
   }
+
+  // Load the graph node definitions for this project (builtins + <project>/nodes/*.js).
+  // Done here so every entry point (editor and CLI build) gets the same set.
+  ::Project::Graph::Node::reloadSpecs(path + "/nodes");
 
   //auto t = SDL_GetTicksNS();
   if(copyChangedEngineFiles("n64/engine", f / "engine") > 0)

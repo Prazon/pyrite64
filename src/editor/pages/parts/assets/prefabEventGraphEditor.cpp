@@ -100,8 +100,10 @@ Editor::PrefabEventGraphEditor::PrefabEventGraphEditor(uint64_t prefabAssetUUID)
         };
         nlohmann::json jNode;
         nodeP64->serialize(jNode);
-        auto newNode = graph.addNode(nodeP64->type, newPos);
-        newNode->deserialize(jNode);
+        auto newNode = nodeP64->typeId().empty()
+          ? graph.addNode(nodeP64->type, newPos)
+          : graph.addNode(nodeP64->typeId(), newPos);
+        if (newNode) newNode->deserialize(jNode);
         ImGui::CloseCurrentPopup();
       }
       if (ImGui::Selectable(ICON_MDI_TRASH_CAN_OUTLINE " Remove")) {
