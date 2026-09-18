@@ -6,6 +6,7 @@
 #include "argparse/argparse.hpp"
 #include "build/projectBuilder.h"
 #include "cli/cliCommands.h"
+#include "project/scene/migration.h"
 #include "context.h"
 #include "project/project.h"
 #include "utils/logger.h"
@@ -136,6 +137,23 @@ CLI::Result CLI::run(int argc, char** argv)
 
     if (argProgPath.empty()) { fputs("error: project path required\n", stderr); return Result::ERROR; }
     Project::Project project{argProgPath};
+
+    // Every scene/prefab save stamps the current file version, so touching an
+    // outdated project with any other command would mark it converted without
+    // converting it. Mirror the editor: nothing runs until the files are
+    // brought up to date, and the migration commands are the way to do that.
+    if (!CLI::Commands::isMigrationCmd(cmd)) {
+      auto pending = Project::Migration::scanProject(project);
+      if (!pending.empty()) {
+        fprintf(stderr,
+          "error: project contains %s in an older format.\n"
+          "Run `--cli --cmd migrate-check` to list them and `--cli --cmd migrate` to convert "
+          "them in place (back up the project first), then retry.\n",
+          Project::Migration::describe(pending).c_str());
+        return Result::ERROR;
+      }
+    }
+
     // Components and Prefab::save() reach into ctx.project. The build/clean
     // paths happen to not need it, but the asset-tooling commands often do.
     ctx.project = &project;

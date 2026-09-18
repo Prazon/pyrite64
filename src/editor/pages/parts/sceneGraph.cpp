@@ -31,6 +31,20 @@ namespace
   // triggers on mouse activation, not the SetKeyboardFocusHere path.
   bool renameSelectAll{false};
 
+  // Range selection is based on the rows actually drawn in the scene graph, so collapsed
+  // branches and objects hidden by the search filter do not become selected unexpectedly.
+  uint32_t rangeSelectionAnchorUUID{0};
+  Project::Scene* rangeSelectionScene{nullptr};
+  std::vector<uint32_t> visibleObjectUUIDs{};
+
+  struct PendingObjectClick {
+    uint32_t uuid{0};
+    bool ctrl{false};
+    bool shift{false};
+  };
+
+  PendingObjectClick pendingObjectClick{};
+
   int renameInputCallback(ImGuiInputTextCallbackData *data)
   {
     if (renameSelectAll) {
@@ -67,14 +81,30 @@ namespace
     uint32_t sourceUUID{0};
     uint32_t targetUUID{0};
     bool isInsert{false};
+    bool insertBefore{false};
   };
 
   DragDropTask dragDropTask{};
+
+  /**
+   * A possible sibling insertion point represented by a shared drop margin.
+   */
+  struct DropCandidate {
+    // Object after which the dragged roots would be inserted
+    uint32_t targetUUID{0};
+    // Horizontal position where a row inserted at this level would begin
+    float indentX{0.0f};
+    // Whether insertion occurs before instead of after the target object
+    bool insertBefore{false};
+    // Boundary below the previous sibling row
+    float previousSiblingRowBottomY{0.0f};
+  };
 
   struct AssetDropTask {
     uint64_t assetUUID{0};
     uint32_t targetUUID{0};
     bool asChild{false};
+    bool insertBefore{false};
   };
 
   AssetDropTask assetDropTask{};
@@ -86,8 +116,9 @@ namespace
    * Accepts a prefab or 3D model asset and records where its scene object should be created.
    * @param targetUUID Destination object UUID, or zero to add at the scene root.
    * @param asChild Whether the new instance should become a child of the target.
+   * @param insertBefore Whether sibling insertion should occur before the target (this is the only way to insert as first child when there are already child elements).
    */
-  void acceptSceneAssetDrop(uint32_t targetUUID, bool asChild)
+  void acceptSceneAssetDrop(uint32_t targetUUID, bool asChild, bool insertBefore = false)
   {
     const ImGuiPayload* payload = ImGui::GetDragDropPayload();
     if (!payload || !payload->IsDataType("ASSET")) return;
@@ -101,6 +132,7 @@ namespace
       assetDropTask.assetUUID = assetUUID;
       assetDropTask.targetUUID = targetUUID;
       assetDropTask.asChild = asChild;
+      assetDropTask.insertBefore = insertBefore;
     }
   }
 
@@ -206,6 +238,17 @@ namespace
   }
 
   /**
+   * Checks whether directional navigation has just moved to the last submitted ImGui item.
+   * @return True when the last item has newly received directional navigation focus.
+   */
+  bool wasLastItemFocusedByDirectionalNavigation()
+  {
+    const ImGuiContext* imguiContext = ImGui::GetCurrentContext();
+    return imguiContext->NavJustMovedToId == ImGui::GetItemID()
+      && !imguiContext->NavJustMovedToIsTabbing;
+  }
+
+  /**
    * Starts inline renaming for an object.
    *
    * @param scene Scene the object lives in.
@@ -224,35 +267,123 @@ namespace
     }
   }
 
-  bool DrawDropTarget(uint32_t& dragDropTarget, uint32_t uuid, float thickness = 2.0f, float hitHeight = 8.0f)
+  /**
+   * Draws an insertion margin that can represent several hierarchy levels.
+   *
+   * The indentation selects an explicit level. To the right of the deepest indentation,
+   * the upper half selects the deepest destination and the lower half the outermost one.
+   *
+   * @param candidates Destinations ordered from the deepest to the outermost level.
+   * @param thickness Thickness of the insertion preview line.
+   * @param hitHeight Height of the interactive insertion margin.
+   */
+  void DrawDropTarget(const std::vector<DropCandidate> &candidates, float thickness = 2.0f, float hitHeight = 8.0f)
   {
-    // Only show when drag-drop is active
-    if (!ImGui::IsDragDropActive())
-      return false;
+    // Avoid creating an invisible item when there is no active payload or destination
+    if (!ImGui::IsDragDropActive() || candidates.empty())
+      return;
 
-    bool res = false;
+    // Keep the current layout cursor because the hit zone is drawn as an overlay
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     ImVec2 cursorScreen = ImGui::GetCursorScreenPos();
-    float fullWidth = ImGui::GetContentRegionAvail().x;
 
-    // Compute overlay position
+    // Extend the shared hit zone to the usable right edge of the scene graph
+    const float rightX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+
+    // Match the right edge used by the row controls instead of the complete window width
+    const ImGuiStyle &style = ImGui::GetStyle();
+    const float rowControlsWidth = 16_px * 2 + style.ItemInnerSpacing.x;
+    const float controlsEndX = rightX - calcRightControlAreaWidth() + rowControlsWidth;
+
+    // Reuse original margin position and advance it by one hierarchy level
+    const float iconStartOffset = style.IndentSpacing - 4_px;
+
+    // The last candidate is always the least-indented and outermost destination
+    const float outerX = candidates.back().indentX;
+
+    // Shared margins begin at their outermost visual line while a terminal node keeps
+    // the wider target that reaches into the indentation gutter
+    const float overlayLeftX = candidates.size() == 1
+      ? outerX - 4_px
+      : outerX + iconStartOffset;
+
+    // Keep the terminal-node exception without offsetting multi-level hit zones
     ImVec2 overlayStart{
-      cursorScreen.x - 4_px,
+      overlayLeftX,
       cursorScreen.y - (hitHeight / 2) + 3_px
     };
-    ImVec2 overlayEnd = ImVec2(cursorScreen.x + fullWidth, cursorScreen.y + hitHeight);
-    lastInsertLineStart = {overlayStart.x, overlayStart.y};
-    lastInsertLineEnd = {overlayEnd.x, overlayStart.y};
+
+    // Cover the complete insertion margin without consuming layout space
+    ImVec2 overlayEnd{rightX, overlayStart.y + hitHeight};
+
+    // Default to the deepest destination for a margin without ambiguity
+    const ImVec2 mousePos = ImGui::GetMousePos();
+    size_t candidateIndex = 0;
+
+    // A chain with several candidates needs vertical or horizontal disambiguation
+    if (candidates.size() > 1) {
+      // Use the same horizontal position as the deepest visible insertion line
+      const float deepestLineStartX = candidates.front().indentX + iconStartOffset;
+
+      // To the right of the deepest line all candidates occupy the same space
+      if (mousePos.x > deepestLineStartX) {
+        // The upper half stays inside the deepest parent while the lower half escapes it
+        candidateIndex = mousePos.y < (overlayStart.y + overlayEnd.y) * 0.5f
+          ? 0
+          : candidates.size() - 1;
+      } else {
+        // Start with the outermost level for the left edge of the shared margin
+        candidateIndex = candidates.size() - 1;
+
+        // Each level owns the interval from its visible line to the next deeper line
+        for (size_t i = 0; i < candidates.size(); ++i) {
+          // Calculate the exact left edge shown by this candidate's indicator
+          const float candidateLineStartX = candidates[i].indentX + iconStartOffset;
+
+          // The first line to the left of the cursor is the deepest valid level
+          if (mousePos.x >= candidateLineStartX) {
+            candidateIndex = i;
+            break;
+          }
+        }
+      }
+    }
+
+    // Resolve the destination before drawing and accepting the payload
+    const DropCandidate &candidate = candidates[candidateIndex];
+
+    // Start where row icons would begin after the space reserved for the tree arrow
+    ImVec2 lineStart{
+      candidate.indentX + iconStartOffset,
+      overlayStart.y
+    };
+
+    // Stop where row button group ends so the indicator reads as an insertion line
+    ImVec2 lineEnd{controlsEndX, overlayStart.y};
+
+    // Keep the outermost line for asset drops in the empty area below the tree
+    lastInsertLineStart = {
+      outerX + iconStartOffset,
+      overlayStart.y
+    };
+    lastInsertLineEnd = {controlsEndX, overlayStart.y};
     hasInsertLine = true;
 
-    // Push a dummy cursor to draw hit zone *without affecting layout*
+    // Move the cursor temporarily to create an overlapping hit zone
     ImGui::SetCursorScreenPos(overlayStart);
-    ImGui::PushID(("drop_overlay_" + std::to_string(uuid)).c_str());
-    ImGui::InvisibleButton("##dropzone", ImVec2(fullWidth, hitHeight));
+
+    // The outer target UUID uniquely identifies this boundary in the current tree
+    ImGui::PushID(("drop_overlay_" + std::to_string(candidates.back().targetUUID)).c_str());
+
+    // Register the complete shared margin as one ImGui item
+    ImGui::InvisibleButton("##dropzone", overlayEnd - overlayStart);
     bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 
+    // Object payloads are always valid for the hierarchy move validation performed later
     const ImGuiPayload* activePayload = ImGui::GetDragDropPayload();
     bool acceptsPayload = activePayload && activePayload->IsDataType("OBJECT");
+
+    // Asset payloads only participate when they can create scene objects
     if (activePayload && activePayload->IsDataType("ASSET")) {
       uint64_t assetUUID = *static_cast<const uint64_t*>(activePayload->Data);
       auto asset = ctx.project->getAssets().getEntryByUUID(assetUUID);
@@ -260,34 +391,82 @@ namespace
         || asset->type == Project::FileType::MODEL_3D);
     }
 
+    // Draw only the line belonging to the destination currently selected by the cursor
     if (hovered && acceptsPayload) {
-      drawList->AddLine(
-          ImVec2(overlayStart.x, overlayStart.y),
-          ImVec2(overlayEnd.x, overlayStart.y),
-          ImGui::GetColorU32(ImGuiCol_DragDropTarget),
+      const ImU32 indicatorColor = ImGui::GetColorU32(ImGuiCol_DragDropTarget);
+
+      // Is an outer destination --> Show guide to identify its target previous sibling
+      if (candidateIndex > 0 && !candidate.insertBefore
+          && candidate.previousSiblingRowBottomY > 0.0f) {
+        // Place the vertical guide in the middel future sibling icon start
+        const float connectorX = lineStart.x + 10_px;
+
+        // Split the vertical guide into short strokes so it does not dominate the insertion line
+        const float dashLength = 4_px;
+        const float dashGap = 3_px;
+        const float guideStartY = std::min(candidate.previousSiblingRowBottomY, lineStart.y);
+        const float guideEndY = std::max(candidate.previousSiblingRowBottomY, lineStart.y);
+
+        // Draw every visible stroke and trim the final one to the available height
+        for (float dashStartY = guideStartY; dashStartY < guideEndY;
+             dashStartY += dashLength + dashGap) {
+          const float dashEndY = std::min(dashStartY + dashLength, guideEndY);
+          drawList->AddLine(
+            {connectorX, dashStartY},
+            {connectorX, dashEndY},
+            indicatorColor,
+            thickness
+          );
+        }
+
+        // Mark the row from which the connector originates
+        drawList->AddCircleFilled(
+          {connectorX, candidate.previousSiblingRowBottomY},
+          2.5_px,
+          indicatorColor
+        );
+
+        // End the horizontal connector in the middle of the first icon of the target sibling
+        drawList->AddLine(
+          {connectorX, lineStart.y},
+          lineStart,
+          indicatorColor,
           thickness
+        );
+      }
+
+      drawList->AddLine(
+        lineStart,
+        lineEnd,
+        indicatorColor,
+        thickness
       );
     }
 
+    // Suppress ImGui's full rectangular target highlight in favour of the insertion line
     ImGui::PushStyleColor(ImGuiCol_DragDropTarget, ImVec4(0,0,0,0));
-    // Accept drag payload
     if (ImGui::BeginDragDropTarget())
     {
+      // Record an object move as a sibling insertion after the chosen target
       if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("OBJECT"))
       {
-        dragDropTarget = *((uint32_t*)payload->Data);
-        res = true;
+        dragDropTask.sourceUUID = *static_cast<const uint32_t*>(payload->Data);
+        dragDropTask.targetUUID = candidate.targetUUID;
+        dragDropTask.isInsert = false;
+        dragDropTask.insertBefore = candidate.insertBefore;
       }
+
+      // Route prefab and model assets through the same chosen hierarchy level
       if (!prefabEditObj)
-        acceptSceneAssetDrop(uuid, false);
+        acceptSceneAssetDrop(candidate.targetUUID, false, candidate.insertBefore);
       ImGui::EndDragDropTarget();
     }
     ImGui::PopStyleColor();
 
     ImGui::PopID();
 
+    // Restore the cursor so the following tree row keeps its original position
     ImGui::SetCursorScreenPos(cursorScreen);
-    return res;
   }
 
   /**
@@ -392,8 +571,20 @@ namespace
     if(dim)ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
 
-    if(selectable && ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
+    // Directional navigation must update the editor target instead of only moving ImGui's highlight
+    const bool focusedByNavigation = wasLastItemFocusedByDirectionalNavigation();
+
+    const bool nodeIsClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left)
+      && !ImGui::IsItemToggledOpen();
+
+    // Modified clicks bypass the regular TreeNode button focus handling
+    if (nodeIsClicked && (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift))
+      ImGui::SetFocusID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
+
+    if(selectable && (focusedByNavigation || nodeIsClicked)) {
       ctx.setNestedSelection(rootUuid, path);
+      // Nested prefab targets cannot participate in the flat scene-object selection list
+      rangeSelectionAnchorUUID = 0;
     }
 
     if(isOpen) {
@@ -423,7 +614,187 @@ namespace
     return false;
   }
 
-  void drawObjectNode(
+  /**
+   * Collects the movable roots represented by a drag operation.
+   *
+   * Dragging a selected object moves the whole flat selection, except for selected nodes
+   * whose ancestor is also selected. Dragging an unselected object only moves that object.
+   *
+   * @param scene Scene containing the dragged objects.
+   * @param selection Selection the drag operates on.
+   * @param draggedUUID UUID of the object where the drag operation started.
+   * @return UUIDs of the independent roots that should be moved, in scene-tree order.
+   */
+  std::vector<uint32_t> collectDragRoots(
+    Project::Scene &scene, const Project::Selection &selection, uint32_t draggedUUID
+  )
+  {
+    if (!selection.isSelected(draggedUUID))
+      return {draggedUUID};
+
+    std::vector<uint32_t> roots{};
+    auto visit = [&](Project::Object &obj, bool hasSelectedAncestor, auto &visitRef) -> void {
+      const bool selected = selection.isSelected(obj.uuid);
+      if (selected && !hasSelectedAncestor)
+        roots.push_back(obj.uuid);
+
+      for (auto &child : obj.children)
+        visitRef(*child, hasSelectedAncestor || selected, visitRef);
+    };
+
+    for (auto &child : scene.getRootObject().children)
+      visit(*child, false, visit);
+
+    return roots;
+  }
+
+  /**
+   * Checks the complete multi-object move before changing the scene.
+   *
+   * @param scene Scene containing the objects and destination.
+   * @param roots UUIDs of the independent roots to move.
+   * @param targetUUID UUID of the destination object or scene root.
+   * @return True when every root can be moved to the destination.
+   */
+  bool canMoveDragRoots(
+    Project::Scene &scene, const std::vector<uint32_t> &roots, uint32_t targetUUID
+  )
+  {
+    if (roots.empty()) return false;
+
+    Project::Object &sceneRoot = scene.getRootObject();
+    auto targetRef = scene.getObjectByUUID(targetUUID);
+    Project::Object* target = targetUUID == sceneRoot.uuid ? &sceneRoot : targetRef.get();
+    if (!target) return false;
+
+    for (uint32_t uuid : roots) {
+      auto obj = scene.getObjectByUUID(uuid);
+      if (!obj || !obj->parent) return false;
+
+      // Reject drops onto a moved root or anywhere inside its subtree
+      for (Project::Object* ancestor = target; ancestor; ancestor = ancestor->parent) {
+        if (ancestor->uuid == uuid)
+          return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Moves all independent roots represented by a drag operation.
+   *
+   * @param scene Scene containing the dragged objects.
+   * @param selection Selection the drag operates on.
+   * @param task Drag-and-drop source, destination and placement mode.
+   * @return True when at least one object was moved.
+   */
+  bool moveDraggedSelection(
+    Project::Scene &scene, const Project::Selection &selection, const DragDropTask &task
+  )
+  {
+    std::vector<uint32_t> roots = collectDragRoots(scene, selection, task.sourceUUID);
+    if (!canMoveDragRoots(scene, roots, task.targetUUID))
+      return false;
+
+    bool moved = false;
+    if (task.isInsert) {
+      for (uint32_t uuid : roots)
+        moved |= scene.moveObject(uuid, task.targetUUID, true);
+    } else if (task.insertBefore) {
+      // Repeated insertion before one target naturally preserves forward tree order
+      for (uint32_t uuid : roots)
+        moved |= scene.moveObject(uuid, task.targetUUID, false, true);
+    } else {
+      // Every sibling is inserted after the same target, so process them backwards
+      // to preserve their scene-tree order
+      for (auto it = roots.rbegin(); it != roots.rend(); ++it)
+        moved |= scene.moveObject(*it, task.targetUUID, false);
+    }
+
+    return moved;
+  }
+
+  /**
+   * Applies a scene-tree click after all visible rows have been collected for the frame.
+   * Shift replaces the selection with the anchored range. Ctrl+Shift adds that range, or
+   * removes it when the clicked endpoint was already selected.
+   */
+  void applyObjectClickSelection(Project::Selection &selection, const PendingObjectClick &click)
+  {
+    if (!click.uuid) return;
+
+    // A plain row click always leaves nested-prefab selection mode
+    ctx.selSubPath.clear();
+
+    auto selectSingleOrToggle = [&]() {
+      if (click.ctrl)
+        selection.toggle(click.uuid);
+      else
+        selection.set(click.uuid);
+      rangeSelectionAnchorUUID = click.uuid;
+    };
+
+    if (!click.shift || !rangeSelectionAnchorUUID) {
+      selectSingleOrToggle();
+      return;
+    }
+
+    auto anchorIt = std::find(
+      visibleObjectUUIDs.begin(), visibleObjectUUIDs.end(), rangeSelectionAnchorUUID
+    );
+    auto clickedIt = std::find(
+      visibleObjectUUIDs.begin(), visibleObjectUUIDs.end(), click.uuid
+    );
+
+    // A stale or currently hidden anchor cannot define a visible range, so treat this as
+    // a fresh click and give the next Shift+Click a useful anchor
+    if (anchorIt == visibleObjectUUIDs.end() || clickedIt == visibleObjectUUIDs.end()) {
+      selectSingleOrToggle();
+      return;
+    }
+
+    auto first = std::min(anchorIt, clickedIt);
+    auto last = std::max(anchorIt, clickedIt) + 1;
+    std::vector<uint32_t> range(first, last);
+
+    if (!click.ctrl) {
+      selection.setList(range, click.uuid);
+      return;
+    }
+
+    std::vector<uint32_t> selected = selection.all();
+    const bool removeRange = selection.isSelected(click.uuid);
+    if (removeRange) {
+      selected.erase(
+        std::remove_if(selected.begin(), selected.end(), [&range](uint32_t uuid) {
+          return std::find(range.begin(), range.end(), uuid) != range.end();
+        }),
+        selected.end()
+      );
+    } else {
+      for (uint32_t uuid : range) {
+        if (std::find(selected.begin(), selected.end(), uuid) == selected.end())
+          selected.push_back(uuid);
+      }
+    }
+
+    // When adding, the clicked row becomes primary; when removing, retain the current
+    // primary if possible while Selection falls back to the final remaining item otherwise
+    selection.setList(selected, removeRange ? selection.primary() : click.uuid);
+  }
+
+  /**
+   * Draws a scene object and returns the destinations available after its visible subtree.
+   *
+   * @param scene Scene containing the object.
+   * @param selection Selection the tree edits.
+   * @param obj Object to draw.
+   * @param keyDelete Whether the delete shortcut was pressed this frame.
+   * @param parentEnabled Whether every ancestor of the object is enabled.
+   * @return Drop destinations ordered from the deepest visible node to the object itself.
+   */
+  std::vector<DropCandidate> drawObjectNode(
     Project::Scene &scene, Project::Selection &selection,
     Project::Object &obj, bool keyDelete,
     bool parentEnabled = true
@@ -432,7 +803,7 @@ namespace
     bool hasSearchFilter = !searchFilter.empty();
     // Searching and this branch has no match anywhere --> Hide it entirely
     if (hasSearchFilter && !subtreeMatchesFilter(obj))
-      return;
+      return {};
 
     bool selfMatchesFilter = !hasSearchFilter || ImTable::labelMatchesFilter(obj.name.c_str(), searchFilter);
 
@@ -476,6 +847,8 @@ namespace
     // While editing a prefab, only that instance may be selected here. Its own definition
     // is handled by drawPrefabDefNode. All other scene objects are dimmed and inert.
     bool canSelect = !prefabEditObj || (&obj == prefabEditObj);
+    if (canSelect)
+      visibleObjectUUIDs.push_back(obj.uuid);
 
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 3_px));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
@@ -535,6 +908,7 @@ namespace
       : ellipsizeLabel(nameID, obj.name, labelBudget);
     bool labelTruncated = !isRenamingThis && (visibleLabel != nameID + obj.name);
     nameID = visibleLabel + "##" + std::to_string(obj.uuid);
+    const float nodeIndentX = ImGui::GetCursorScreenPos().x;
 
     // Set style disabled when editing a prefab or the element or an ancestor is disabled
     const bool dimNode = !canSelect || !parentEnabled || !obj.enabled;
@@ -547,6 +921,9 @@ namespace
     ImVec2 nodeRectMin = ImGui::GetItemRectMin();
     ImVec2 nodeRectMax = ImGui::GetItemRectMax();
 
+    // Capture navigation focus before later row controls replace ImGui's last item
+    const bool focusedByNavigation = wasLastItemFocusedByDirectionalNavigation();
+
     // Mark object being edited in prefab-edit mode
     if(ctx.isPrefabEditing(obj.uuid)) {
       ImVec2 bgMax = ImGui::GetItemRectMax();
@@ -557,10 +934,15 @@ namespace
 
     bool nodeIsClicked = ImGui::IsItemHovered()
       && ImGui::IsMouseReleased(ImGuiMouseButton_Left)
-      && !ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+      && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left);
     bool nodeIsDoubleClicked = ImGui::IsItemHovered()
       && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
       && !ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+
+    // Make a modified click the starting point for subsequent arrow-key navigation
+    if (nodeIsClicked && (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift))
+      ImGui::SetFocusID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
+
     if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
       ImGui::OpenPopup("NodePopup");
     }
@@ -576,7 +958,11 @@ namespace
     if (obj.parent && ImGui::BeginDragDropSource())
     {
       ImGui::SetDragDropPayload("OBJECT", &obj.uuid, sizeof(obj.uuid));
-      ImGui::TextUnformatted(obj.name.c_str());
+      std::vector<uint32_t> dragRoots = collectDragRoots(scene, selection, obj.uuid);
+      if (dragRoots.size() > 1)
+        ImGui::Text("%zu Objects", dragRoots.size());
+      else
+        ImGui::TextUnformatted(obj.name.c_str());
       ImGui::EndDragDropSource();
     }
 
@@ -665,17 +1051,21 @@ namespace
       ImGui::SetCursorPosY(oldCursorPos.y);
     }
 
-    if (nodeIsClicked && canSelect) {
-      bool isCtrlDown = ImGui::GetIO().KeyCtrl;
-      // A plain row click always leaves nested-prefab selection mode
-      ctx.selSubPath.clear();
-      if (isCtrlDown) {
-        selection.toggle(obj.uuid);
-      } else {
-        selection.set(obj.uuid);
-      }
+    if ((nodeIsClicked || focusedByNavigation) && canSelect) {
+      pendingObjectClick = {
+        .uuid = obj.uuid,
+        .ctrl = nodeIsClicked && ImGui::GetIO().KeyCtrl,
+        .shift = nodeIsClicked && ImGui::GetIO().KeyShift,
+      };
     }
 
+    // A leaf or collapsed object only exposes insertion after the object itself
+    std::vector<DropCandidate> tailCandidates{{
+      obj.uuid,
+      nodeIndentX,
+      false,
+      nodeRectMax.y
+    }};
     if(isOpen)
     {
       if (ImGui::BeginPopupContextItem("NodePopup"))
@@ -770,24 +1160,41 @@ namespace
         }
       }
 
-      // The scene root provides the insertion point before its first object
-      if (obj.parent == nullptr && !obj.children.empty() && ImGui::IsDragDropActive()) {
-        if (DrawDropTarget(dragDropTask.sourceUUID, obj.uuid)) {
-          dragDropTask.targetUUID = obj.uuid;
-        }
+      // Build the exact child sequence displayed by the active search filter
+      std::vector<Project::Object*> visibleChildren{};
+      visibleChildren.reserve(obj.children.size());
+      for (auto &child : obj.children) {
+        // Hidden branches must not create invisible drop destinations
+        if (!hasSearchFilter || subtreeMatchesFilter(*child))
+          visibleChildren.push_back(child.get());
       }
 
-      for(size_t i = 0; i < obj.children.size(); ++i) {
-        auto &child = obj.children[i];
-        drawObjectNode(scene, selection, *child, keyDelete, parentEnabled && obj.enabled);
+      // The margin before the first visible child inserts at the beginning of this parent
+      if (!visibleChildren.empty()) {
+        DrawDropTarget({{
+          visibleChildren.front()->uuid,
+          ImGui::GetCursorScreenPos().x,
+          true
+        }});
+      }
 
-        // Nested lists leave their final boundary to the parent's sibling line
-        bool needsInsertLine = (i + 1 < obj.children.size()) || obj.parent == nullptr;
-        if (needsInsertLine && ImGui::IsDragDropActive()) {
-          if (DrawDropTarget(dragDropTask.sourceUUID, child->uuid)) {
-            dragDropTask.targetUUID = child->uuid;
-          }
-        }
+      // The final visible child carries the complete tail chain back to its ancestors
+      std::vector<DropCandidate> lastChildTail{};
+      for (size_t i = 0; i < visibleChildren.size(); ++i) {
+        // Recursively collect every valid level after this child's visible subtree
+        std::vector<DropCandidate> childTail = drawObjectNode(
+          scene, selection, *visibleChildren[i], keyDelete, parentEnabled && obj.enabled
+        );
+
+        // Remember the most recent non-empty chain for the margin after this object
+        if (!childTail.empty())
+          lastChildTail = childTail;
+
+        // Non-final children own their following margin directly
+        // Root children also own it because no ancestor will draw a margin for the root
+        bool needsInsertLine = (i + 1 < visibleChildren.size()) || obj.parent == nullptr;
+        if (needsInsertLine)
+          DrawDropTarget(childTail);
       }
 
       // Prefab definition tree showing nested prefab content under the instance. Nodes are
@@ -799,8 +1206,25 @@ namespace
         }
       }
 
+      // An expanded object ending in a visible child inherits that child's deeper levels
+      if (!lastChildTail.empty()) {
+        tailCandidates = std::move(lastChildTail);
+
+        // Add insertion after this object as the next outer level in the shared margin
+        // The scene root is excluded because objects cannot become its siblings
+        if (obj.parent)
+          tailCandidates.push_back({
+            obj.uuid,
+            nodeIndentX,
+            false,
+            nodeRectMax.y
+          });
+      }
+
       ImGui::TreePop();
     }
+
+    return tailCandidates;
   }
 }
 
@@ -819,6 +1243,12 @@ void Editor::SceneGraph::draw(Project::Scene &scene, Project::Selection &selecti
   g_pendingComponentObjUUID = 0;
   g_pendingComponentUUID    = 0;
   prefabEditObj = Editor::SelectionUtils::getPrefabEditObject(scene);
+  visibleObjectUUIDs.clear();
+  pendingObjectClick = {};
+  if (rangeSelectionScene != &scene) {
+    rangeSelectionScene = &scene;
+    rangeSelectionAnchorUUID = 0;
+  }
   bool isFocus = ImGui::IsWindowFocused();
   // While rename is active, shortcuts stay disabled, so the text field can own the keyboard input
   bool isRenaming = renameObjectUUID != 0;
@@ -867,6 +1297,8 @@ void Editor::SceneGraph::draw(Project::Scene &scene, Project::Selection &selecti
   } else {
     drawObjectNode(scene, selection, root, keyDelete);
   }
+
+  applyObjectClickSelection(selection, pendingObjectClick);
 
   // Surface the in-frame outputs to the SceneGraph instance so the host
   // (PrefabEditor) can poll them after draw() returns.
@@ -923,14 +1355,11 @@ void Editor::SceneGraph::draw(Project::Scene &scene, Project::Selection &selecti
       && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
       && !ImGui::IsAnyItemHovered()) {
     selection.clear();
+    rangeSelectionAnchorUUID = 0;
   }
 
   if(dragDropTask.sourceUUID && dragDropTask.targetUUID) {
-    bool moved = scene.moveObject(
-      dragDropTask.sourceUUID,
-      dragDropTask.targetUUID,
-      dragDropTask.isInsert
-    );
+    bool moved = moveDraggedSelection(scene, selection, dragDropTask);
 
     if (moved)
       UndoRedo::getHistory().markChanged("Move Object");
@@ -966,7 +1395,7 @@ void Editor::SceneGraph::draw(Project::Scene &scene, Project::Selection &selecti
           // It is being set as a child of another object --> Set same global position
           if (target && target->parent)
             position = target->parent->pos.resolve(target->parent->propOverrides);
-          scene.moveObject(added->uuid, assetDropTask.targetUUID, false);
+          scene.moveObject(added->uuid, assetDropTask.targetUUID, false, assetDropTask.insertBefore);
         }
         // Apply the position after moving the object to its final place in the tree
         added->pos.resolve(added->propOverrides) = position;

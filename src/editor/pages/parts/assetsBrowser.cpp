@@ -36,8 +36,8 @@ namespace
   using ChipKind = Editor::AssetsBrowser::ChipKind;
 
   // Two physical roots are mirrored as a single virtual "Content" tree. Code
-  // routes into src/user, everything else into assets/. Per CLAUDE.md this
-  // split is enforced by libdragon's source-vs-data build pipeline, so the
+  // routes into src/user, everything else into assets/. This split is
+  // enforced by libdragon's source-vs-data build pipeline, so the
   // mirror is the closest we can get to a unified root without forking
   // n64.mk.
   struct ChipDef {
@@ -1614,25 +1614,29 @@ void Editor::AssetsBrowser::draw() {
     const auto &def = CHIP_DEFS[chipIdx];
     if (def.type == FileType::UNKNOWN) continue; // Scenes handled separately
 
-    fs::path rootAbs = physicalRoot(def.underSrcUser);
+    // Project-relative prefix of this half of the virtual tree. Matching on the
+    // precomputed AssetManagerEntry::projectPath instead of resolving every
+    // asset path through fs::absolute() each frame keeps sprite-heavy projects
+    // responsive (the filesystem round-trip costs ~1us per asset per frame).
+    const std::string_view baseRelPrefix = def.underSrcUser ? "src/user/" : "assets/";
     for (const auto &asset : assetMgr.getTypeEntries(def.type)) {
-      std::error_code ec;
-      auto absPath = fs::absolute(fs::path(asset.path), ec);
-      if (ec) absPath = fs::path(asset.path);
-      auto rel = absPath.lexically_relative(rootAbs).generic_string();
-      if (rel == ".") continue;
-      if (rel.starts_with("..")) continue;
+      std::string_view rel{asset.projectPath};
+      if (!rel.starts_with(baseRelPrefix)) continue;
+      rel.remove_prefix(baseRelPrefix.size());
+      if (rel.empty()) continue;
 
       if (!currentDir.empty()) {
-        auto prefix = currentDir + "/";
-        if (!rel.starts_with(prefix)) continue;
-        rel = rel.substr(prefix.size());
+        if (rel.size() <= currentDir.size()
+            || !rel.starts_with(currentDir) || rel[currentDir.size()] != '/') {
+          continue;
+        }
+        rel.remove_prefix(currentDir.size() + 1);
       }
 
       auto slashPos = rel.find('/');
-      if (slashPos != std::string::npos) {
+      if (slashPos != std::string_view::npos) {
         // The asset is inside a subfolder; mark that folder as filled.
-        folderHasContent[rel.substr(0, slashPos)] = true;
+        folderHasContent[std::string{rel.substr(0, slashPos)}] = true;
       } else {
         assetItems.push_back(&asset);
       }
@@ -1911,7 +1915,11 @@ void Editor::AssetsBrowser::draw() {
       default: break;
     }
     if (asset.texture) {
-      icon = ImTextureRef(asset.texture->getGPUTex());
+      // Off-screen cards never sample their texture, so hand them the shared
+      // fallback instead of touching (and keeping resident) every GPU image.
+      icon = ImGui::IsRectVisible({imageSize, imageSize})
+        ? ImTextureRef(asset.texture->getGPUTex())
+        : ImTextureRef(ctx.project->getAssets().getFallbackTexture()->getGPUTex());
     }
 
     // Materials get a 3D thumbnail (cube + the compiled material) cached

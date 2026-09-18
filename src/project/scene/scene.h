@@ -46,7 +46,8 @@ namespace Project
     PROP_S32(audioFreq);
     PROP_S32(physicsTickRate);
     PROP_VEC3(gravity);
-    PROP_FLOAT(visualUnitsPerMeter);
+    // RSP fixed-point world units per meter. Affects render precision only, gameplay is in meters.
+    PROP_FLOAT(renderScale);
     PROP_S32(velocitySolverIterations);
     PROP_S32(positionSolverIterations);
     PROP_BOOL(interpolatePhysicsTransforms);
@@ -113,7 +114,16 @@ namespace Project
       void removeObject(Object &obj);
       void removeAllObjects();
 
-      bool moveObject(uint32_t uuidObject, uint32_t uuidTarget, bool asChild);
+      /**
+       * Moves an object relative to another scene object or the scene root.
+       *
+       * @param uuidObject UUID of the object to move.
+       * @param uuidTarget UUID of the destination object or scene root.
+       * @param asChild Whether to append the object as a child of the destination.
+       * @param insertBefore Whether sibling insertion should occur before the destination (this is the only way to insert as first child when there are already child elements).
+       * @return True when the object was moved.
+       */
+      bool moveObject(uint32_t uuidObject, uint32_t uuidTarget, bool asChild, bool insertBefore = false);
 
       // Promote `uuidNewRoot` to be the prefab's root (root.children[0]).
       // The previous root becomes a child of the new root, preserving its

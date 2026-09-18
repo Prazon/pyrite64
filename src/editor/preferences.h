@@ -28,9 +28,10 @@ namespace Editor
     Input::Keymap keymap{};
     std::string themeName{"dark"};
     std::vector<RecentProject> recentProjects{};
-    float zoomSpeed = 1.0f;
-    float moveSpeed = 120.0f;
-    float panSpeed = 30.0f;
+    // meters, the viewport works in real-world units
+    float zoomSpeed = 0.01f;
+    float moveSpeed = 1.2f;
+    float panSpeed = 30.0f; // unitless, scaled by the view distance
     float lookSpeed = -10.0f;
     bool invertWheelY = false;
     float renderFactorAA = 1.0f;

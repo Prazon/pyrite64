@@ -48,7 +48,7 @@ namespace Project::Component::PathFollow
 
   std::shared_ptr<void> init(Object &) {
     auto data = std::make_shared<Data>();
-    data->speed.value = 200.0f;
+    data->speed.value = 2.0f; // meters per second
     data->mode.value = (int32_t)MODE_ONCE;
     data->orient.value = true;
     data->autoPlay.value = true;

@@ -37,6 +37,8 @@ namespace CLI::Commands
 
   // Returns true iff `cmd` is one we handle here (not build/clean/empty).
   bool isExtendedCmd(const std::string &cmd);
+  // migrate / migrate-check: the only commands allowed on an outdated project.
+  bool isMigrationCmd(const std::string &cmd);
 
   void registerFlags(argparse::ArgumentParser &prog);
   void readArgs(argparse::ArgumentParser &prog, Args &args);

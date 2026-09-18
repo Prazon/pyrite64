@@ -336,7 +336,7 @@ void Build::buildScene(Project::Project &project, const Project::SceneEntry &sce
   ctx.fileScene.write<float>(gravity.x);
   ctx.fileScene.write<float>(gravity.y);
   ctx.fileScene.write<float>(gravity.z);
-  ctx.fileScene.write<float>(std::max(sc->conf.visualUnitsPerMeter.value, 0.001f));
+  ctx.fileScene.write<float>(std::max(sc->conf.renderScale.value, 0.001f));
 
   ctx.fileScene.write<uint8_t>(std::clamp(sc->conf.velocitySolverIterations.value, 1, 32));
   ctx.fileScene.write<uint8_t>(std::clamp(sc->conf.positionSolverIterations.value, 1, 32));

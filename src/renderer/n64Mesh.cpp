@@ -33,6 +33,7 @@ void Renderer::N64Mesh::fromT3DM(const Project::Assets::Model3D &model3d, Projec
   uvDiag = {};
 
   auto &t3dmData = model3d.t3dm;
+  mesh.vertexScale = model3d.autoBaseScale > 0.0f ? 1.0f / model3d.autoBaseScale : 1.0f;
   parts.resize(t3dmData.models.size());
   auto part = parts.begin();
 
@@ -125,9 +126,14 @@ void Renderer::N64Mesh::draw(
   // viewport bypass scene lighting (added by SPBF64 fork).
   uint32_t flagsGlobal = uniforms.mat.flags & (LIGHT_MODE_ADD | T3D_FLAG_NO_LIGHT);
 
+  int boundPipeline = -1;
+
   auto drawPart = [&](MeshPart &part)
   {
     uint32_t blender = uniforms.mat.blender.x;
+
+    bool depthRead = ref.layerDepthRead;
+    bool depthWrite = ref.layerDepthWrite;
 
     uint32_t slotIdx = 0;
     auto matEntry = ref.model->materials.find(part.materialName);
@@ -163,6 +169,22 @@ void Renderer::N64Mesh::draw(
       resolveTex(mat.tex0, 0);
       resolveTex(mat.tex1, 1);
       N64Material::convert(part, mat);
+
+      if(mat.zmodeSet.value) {
+        depthRead  = mat.zmode.value & 0b01;
+        depthWrite = mat.zmode.value & 0b10;
+      }
+    }
+
+    if(ref.matInstance && ref.matInstance->setDepth.resolve(ref.obj)) {
+      auto zmode = ref.matInstance->depth.resolve(ref.obj);
+      depthRead  = zmode & 0b01;
+      depthWrite = zmode & 0b10;
+    }
+
+    if(int idx = Scene::n64PipelineIdx(depthRead, depthWrite); idx != boundPipeline) {
+      scene->getN64Pipeline(depthRead, depthWrite).bind(pass);
+      boundPipeline = idx;
     }
 
 

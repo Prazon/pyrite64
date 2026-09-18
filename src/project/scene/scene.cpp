@@ -5,6 +5,7 @@
 #include "scene.h"
 #include "object.h"
 #include "../assetManager.h"
+#include "migration.h"
 #include <filesystem>
 #include <functional>
 #include "../../utils/json.h"
@@ -79,7 +80,7 @@ nlohmann::json Project::SceneConf::serialize() const {
     .set(audioFreq)
     .set(physicsTickRate)
     .set(gravity)
-    .set(visualUnitsPerMeter)
+    .set(renderScale)
     .set(velocitySolverIterations)
     .set(positionSolverIterations)
     .set(interpolatePhysicsTransforms)
@@ -254,7 +255,7 @@ void Project::Scene::removeAllObjects() {
   root.children.clear();
 }
 
-bool Project::Scene::moveObject(uint32_t uuidObject, uint32_t uuidTarget, bool asChild)
+bool Project::Scene::moveObject(uint32_t uuidObject, uint32_t uuidTarget, bool asChild, bool insertBefore)
 {
   if(uuidObject == uuidTarget) {
     return false;
@@ -300,7 +301,7 @@ bool Project::Scene::moveObject(uint32_t uuidObject, uint32_t uuidTarget, bool a
       // Add as sibling to target
       auto parent = target->parent;
       if (parent) {
-        // insert after target
+        // Insert before or after the target
         auto &siblings = parent->children;
         auto it = std::find_if(
           siblings.begin(), siblings.end(),
@@ -308,7 +309,7 @@ bool Project::Scene::moveObject(uint32_t uuidObject, uint32_t uuidTarget, bool a
         );
         if (it != siblings.end())
         {
-          siblings.insert(it + 1, obj);
+          siblings.insert(insertBefore ? it : it + 1, obj);
           obj->parent = parent;
         }
       }
@@ -514,6 +515,7 @@ void Project::Scene::unpackPrefabInstance(uint32_t uuid)
 
 std::string Project::Scene::serialize(bool minify) {
   nlohmann::json doc{};
+  doc["version"] = Migration::FILE_VERSION;
   doc["conf"] = conf.serialize();
   doc["graph"] = root.serialize();
   if (!relPath.empty()) doc["relPath"] = relPath;
@@ -577,7 +579,10 @@ void Project::Scene::deserialize(const std::string &data)
     Utils::JSON::readProp(docConf, conf.audioFreq, 32000);
     Utils::JSON::readProp(docConf, conf.physicsTickRate, 50);
     Utils::JSON::readProp(docConf, conf.gravity, glm::vec3{0.0f, -9.81f, 0.0f});
-    Utils::JSON::readProp(docConf, conf.visualUnitsPerMeter, 100.0f);
+    // "visualUnitsPerMeter" is what this setting was called before scenes were stored in meters,
+    // read as a fallback so an outdated scene still loads with its real value.
+    Utils::JSON::readProp(docConf, conf.renderScale,
+      docConf.value("visualUnitsPerMeter", 100.0f));
     Utils::JSON::readProp(docConf, conf.velocitySolverIterations, 7);
     Utils::JSON::readProp(docConf, conf.positionSolverIterations, 6);
     Utils::JSON::readProp(docConf, conf.interpolatePhysicsTransforms, true);

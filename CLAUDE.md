@@ -45,7 +45,13 @@ Beyond build/clean, `--cli` exposes a JSON-output asset-tooling surface aimed at
 ./pyrite64.exe --cli --cmd prefab-set-transform --asset Foo --field pos --value '[10,0,0]' PROJ
 ./pyrite64.exe --cli --cmd prefab-add-object --asset Foo --parent Foo --name Hand PROJ
 ./pyrite64.exe --cli --cmd prefab-describe --asset Foo       PROJ
+
+# file-format migration (scenes/prefabs carry a version; v2 = meters)
+./pyrite64.exe --cli --cmd migrate-check                     PROJ   # read-only
+./pyrite64.exe --cli --cmd migrate                           PROJ   # rewrites in place
 ```
+
+Every other CLI command (including `build`) refuses a project whose scenes or prefabs are behind the current file version, mirroring the editor's open-project prompt. Run `migrate` once after upgrading the editor.
 
 `--asset` and `--parent` accept either an asset name (with or without extension) or a uuid. `--path` is a slash-separated Object name path within a prefab tree (empty = root). `--value` is JSON-parsed first, falling back to a raw string. Graph/material/event-graph node-level editing is intentionally out of scope — those remain GUI-authored.
 
@@ -116,6 +122,8 @@ Rendering caveats carried from libdragon work that still apply when authoring en
 ## 2D / pixel-art game path
 
 The fork's central goal is first-class **2D** support alongside the upstream 3D pipeline. Authored on the `pyrite-2d` branch (separate worktree at `B:\forks\pyrite64-2d` to keep `main` clean for parallel Claude sessions).
+
+**Units.** Since the v0.9.0 merge, 3D positions and component lengths are meters (`Scene::conf.renderScale`, default 100, only controls RSP fixed-point precision). 2D canvas subtrees (`Object::isCanvas2D`) and Mode2D scenes stay in framebuffer pixels: the v2 migration skips them, and 2D components never see the render scale.
 
 **Scene-level switch.** `Scene::renderMode` (editor `PROP_S32`, engine `uint8_t`) takes `Mode3D=0` (default) or `Mode2D=1`. The byte was previously SceneConf padding so old scenes load as Mode3D unchanged. The editor's central viewport picks 3D-Viewport (Mode3D) vs 2D-Viewport (Mode2D) automatically — no more sibling tab pair.
 

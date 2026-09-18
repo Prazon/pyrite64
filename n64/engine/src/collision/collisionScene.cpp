@@ -6,7 +6,6 @@
 #include "collision/collisionScene.h"
 #include "collision/collide.h"
 #include "collision/contactUtils.h"
-#include "collision/gfxScale.h"
 #include "collision/gjk.h"
 #include "scene/scene.h"
 
@@ -163,6 +162,8 @@ namespace P64::Coll {
     colliders_.clear();
     ownerColliders_.clear();
     meshColliders_.clear();
+    meshReadMaskUnion_ = 0;
+    meshWriteMaskUnion_ = 0;
     cachedConstraintCount_ = 0;
     cachedConstraints_.clear();
     cachedConstraintLookup_.clear();
@@ -188,8 +189,8 @@ namespace P64::Coll {
     ticksFinalize = 0;
     ticksTotal = 0;
 
-    colliderAABBTree.init(32); // Initial capacity (will grow as needed)
-    meshColliderAABBTree.init(32);
+    colliderAABBTree.init(32, AABBTREE_MIN_MARGIN); // Initial capacity (will grow as needed)
+    meshColliderAABBTree.init(32, AABBTREE_MIN_MARGIN);
   }
 
   RigidBody *CollisionScene::findRigidBodyByOwner(const Object *owner) const {
@@ -210,15 +211,15 @@ namespace P64::Coll {
 
     const fm_vec3_t fallbackInertia = rigidBody->getDefaultLocalInertiaTensor();
 
-    const std::vector<Collider *> *ownerColliders = findCollidersForOwner(rigidBody->owner_);
-    if(!ownerColliders || ownerColliders->empty()) {
+    const std::vector<Collider *> &ownerColliders = rigidBody->attachedColliders_;
+    if(ownerColliders.empty()) {
       rigidBody->applyCompoundProperties(rigidBody->localCenterOfMassOffset_, fallbackInertia, rigidBody->owner_->scale);
       return;
     }
 
     int count = 0;
     fm_vec3_t worldCenterSum = VEC3_ZERO;
-    for(Collider *collider : *ownerColliders) {
+    for (Collider *collider : ownerColliders) {
       if(!collider) continue;
       worldCenterSum = worldCenterSum + collider->worldCenter_;
       ++count;
@@ -243,7 +244,7 @@ namespace P64::Coll {
     const float massPerCollider = rigidBody->getMass() * invCount;
     fm_vec3_t compoundInertia = VEC3_ZERO;
 
-    for(Collider *collider : *ownerColliders) {
+    for (Collider *collider : ownerColliders) {
       if(!collider) continue;
 
       fm_vec3_t colliderInertia = collider->inertiaTensor(massPerCollider);
@@ -416,8 +417,8 @@ namespace P64::Coll {
     if(!mesh) return;
 
     mesh->computeLocalRootAabb();
-    mesh->recalculateWorldAabb();
     mesh->syncOwnerTransform();
+    mesh->recalculateWorldAabb();
 
     meshColliders_.push_back(mesh);
 
@@ -449,9 +450,8 @@ namespace P64::Coll {
     }
   }
 
-  void CollisionScene::configureSimulation(float fixedDt, const fm_vec3_t &gravity, uint8_t velocityIterations, uint8_t positionIterations, float gfxScale) {
+  void CollisionScene::configureSimulation(float fixedDt, const fm_vec3_t &gravity, uint8_t velocityIterations, uint8_t positionIterations) {
     fixedDt_ = fixedDt > 0.0f ? fixedDt : DEFAULT_FIXED_DT;
-    setGfxScale(gfxScale);
     gravity_ = gravity;
     velocitySolverIterations_ = std::max<uint8_t>(1, velocityIterations);
     positionSolverIterations_ = std::max<uint8_t>(1, positionIterations);
@@ -709,17 +709,45 @@ namespace P64::Coll {
   // Wake everything a moved body can affect. Kinematic bodies are not part of
   // sleep islands, so wake whatever rests on them instead.
   void CollisionScene::wakeMovedBody(RigidBody *body) {
+
+    // If the body is a dynamic non-kinematic body, wake its island. Otherwise, wake any bodies that are in contact with it.
     if(shouldTrackSleepState(body)) {
       wakeIsland(body);
       return;
     }
 
+    // Wake any bodies that are in contact with the moved non-dynamic body.
     for(int i = 0; i < cachedConstraintCount_; ++i) {
       const ContactConstraint &cc = cachedConstraints_[i];
       if(!cc.isActive || cc.isTrigger) continue;
       RigidBody *other = nullptr;
       if(cc.rigidBodyA == body)      other = cc.rigidBodyB;
       else if(cc.rigidBodyB == body) other = cc.rigidBodyA;
+      if(other) wakeIsland(other);
+    }
+  }
+
+  // Same idea as wakeMovedBody(), but triggered by a collider whose size or offset changed
+  // instead of a moved body: it could now overlap or no longer support its neighbours, so they
+  // have to re-evaluate.
+  // The collider may not have a rigid body at all, in which case we wake any bodies that are in contact with it.
+  void CollisionScene::wakeChangedCollider(Collider *collider) {
+    if(!collider) return;
+
+    // If the collider has a dynamic non-kinematic rigid body, wake its island. Otherwise, wake any bodies that are in contact with it.
+    RigidBody *body = collider->rigidBody_;
+    if(shouldTrackSleepState(body)) {
+      wakeIsland(body);
+      return;
+    }
+
+    // Wake any bodies that are in contact with the changed collider.
+    for(int i = 0; i < cachedConstraintCount_; ++i) {
+      const ContactConstraint &cc = cachedConstraints_[i];
+      if(!cc.isActive || cc.isTrigger) continue;
+      if(cc.colliderA != collider && cc.colliderB != collider) continue;
+
+      RigidBody *other = cc.colliderA == collider ? cc.rigidBodyB : cc.rigidBodyA;
       if(other) wakeIsland(other);
     }
   }
@@ -737,7 +765,7 @@ namespace P64::Coll {
 
       bool applied = false;
       if(owner->pos != body->syncedOwnerPos_) {
-        const fm_vec3_t delta = (owner->pos - body->syncedOwnerPos_) * getInvGfxScale();
+        const fm_vec3_t delta = (owner->pos - body->syncedOwnerPos_);
         body->position_ += delta;
         body->previousStepPosition_ += delta;
         body->syncedOwnerPos_ = owner->pos;
@@ -1115,6 +1143,11 @@ namespace P64::Coll {
       RigidBody *rigidBodyA = collider->rigidBody_;
 
       if (!collider->isTrigger_ && rigidBodyA && rigidBodyA->isSleeping_) continue;
+
+      // If this fails for the union off all mesh masks then we can skip the mesh query entirely
+      // since there can be no interaction with any mesh collider.
+      if ((collider->readMask_ & meshWriteMaskUnion_) == 0 &&
+          (meshReadMaskUnion_ & collider->writeMask_) == 0) continue;
 
       const int candidateCount = meshColliderAABBTree.queryBounds(
           collider->worldAabb_,
@@ -1640,26 +1673,35 @@ namespace P64::Coll {
 
   /// @brief Recalculate the world-space AABBs of all Mesh Colliders in the Collision Scene.
   void CollisionScene::updateMeshColliderWorldStates() {
+    // Rebuilt from scratch each step so runtime changes to a mesh's masks are picked up without the
+    // scene having to observe every setCollisionMask() call. detectAllContacts() uses these to skip
+    // mesh-tree queries for colliders that cannot match any mesh.
+    meshReadMaskUnion_ = 0;
+    meshWriteMaskUnion_ = 0;
+
     for(std::size_t i = 0; i < meshColliders_.size(); ++i) {
       MeshCollider *mesh = meshColliders_[i];
       if(!mesh) continue;
 
+      meshReadMaskUnion_ |= mesh->readMask_;
+      meshWriteMaskUnion_ |= mesh->writeMask_;
+
       mesh->transformChanged_ = mesh->hasOwnerTransformChanged();
       if(!mesh->transformChanged_ && mesh->hasCachedOwnerTransform_) continue;
 
-      fm_vec3_t prevOwnerPhysicsPos = mesh->owner_ ? mesh->owner_->pos * getInvGfxScale() : VEC3_ZERO;
+      // Movement since the last update, used to extend the tree box along the direction of travel so
+      // a moving mesh does not fall out of it again next step.
+      fm_vec3_t ownerDisplacement = VEC3_ZERO;
+      if (mesh->owner_ && mesh->hasCachedOwnerTransform_) {
+        ownerDisplacement = mesh->owner_->pos - mesh->lastOwnerPosition_;
+      }
 
-      mesh->recalculateWorldAabb();
+      // Snapshot first: recalculateWorldAabb() branches on the cached has*() properties
       mesh->syncOwnerTransform();
+      mesh->recalculateWorldAabb();
 
       if (mesh->aabbTreeNodeId_ != NULL_NODE) {
-        if (mesh->owner_) {
-          fm_vec3_t ownerPhysicsPos = mesh->owner_->pos * getInvGfxScale();
-          const fm_vec3_t disp = ownerPhysicsPos - prevOwnerPhysicsPos;
-          meshColliderAABBTree.moveNode(mesh->aabbTreeNodeId_, mesh->worldAabb_, disp);
-        } else {
-          meshColliderAABBTree.moveNode(mesh->aabbTreeNodeId_, mesh->worldAabb_, VEC3_ZERO);
-        }
+        meshColliderAABBTree.moveNode(mesh->aabbTreeNodeId_, mesh->worldAabb_, ownerDisplacement);
       }
     }
   }
@@ -1683,6 +1725,8 @@ namespace P64::Coll {
       for(int m = 0; m < meshCount; ++m) {
         const MeshCollider* mesh = static_cast<const MeshCollider*>(meshColliderAABBTree.getNodeData(meshCandidates[m]));
         if(!mesh || mesh->triangleCount_ == 0) continue;
+        // ray only hits what it reads.
+        if((mesh->writeMask_ & ray.readMask) == 0) continue;
         Raycast localRay = ray;
         if(mesh->hasScale()) {
           const fm_vec3_t &scale = mesh->owner_->scale;
@@ -1699,13 +1743,10 @@ namespace P64::Coll {
         }};
 
 
-        NodeProxy triCandidates[RAYCAST_MAX_TRIANGLE_TESTS];
-        int triCount = mesh->aabbTree_.queryRay(localRay, triCandidates, RAYCAST_MAX_TRIANGLE_TESTS);
+        uint16_t triCandidates[RAYCAST_MAX_TRIANGLE_TESTS];
+        int triCount = mesh->queryTriangles(localRay, triCandidates, RAYCAST_MAX_TRIANGLE_TESTS);
         for(int i = 0; i < triCount; ++i) {
-          void *data = mesh->aabbTree_.getNodeData(triCandidates[i]);
-          if(!data) continue;
-          int triIdx = static_cast<int>(reinterpret_cast<intptr_t>(data)) - 1; // stored as index+1
-          if(triIdx < 0 || triIdx >= mesh->triangleCount_) continue;
+          const int triIdx = triCandidates[i];
 
           const MeshTriangleIndices &tri = mesh->triangles_[triIdx];
 
@@ -1724,7 +1765,6 @@ namespace P64::Coll {
           currentHit.distance = fm_vec3_len(&hitDelta);
           currentHit.hitObjectId = mesh->owner_ ? mesh->owner_->id : 0;
 
-          hit.didHit = true;
           if(currentHit.didHit && currentHit.distance < hit.distance && currentHit.distance <= ray.maxDistance) {
             hit = currentHit;
           }
@@ -1835,7 +1875,7 @@ namespace P64::Coll {
     // ── Mesh colliders ──────────────────────────────────────────────────────
     if (doMesh) {
       constexpr int MAX_TRI = 64;
-      NodeProxy triCandidates[MAX_TRI];
+      uint16_t triCandidates[MAX_TRI];
       constexpr int MAX_MESH_CANDIDATES = 32;
       NodeProxy meshCandidates[MAX_MESH_CANDIDATES];
 
@@ -1846,13 +1886,13 @@ namespace P64::Coll {
         // Ownerless mesh colliders are valid static level geometry in this
         // fork; the sweep must still test them, so no ownerObject() skip.
         if (!mesh || mesh->triangleCount() == 0) continue;
+        if ((mesh->writeMask() & readMask) == 0) continue;
 
         AABB localSweptBox = mesh->worldAabbToLocal(sweptBox);
-        int triCount = mesh->queryTriangleNodes(localSweptBox, triCandidates, MAX_TRI);
+        int triCount = mesh->queryTriangles(localSweptBox, triCandidates, MAX_TRI);
 
         for (int i = 0; i < triCount; ++i) {
-          int triIdx = mesh->triangleIndexForNode(triCandidates[i]);
-          if (triIdx < 0 || triIdx >= static_cast<int>(mesh->triangleCount())) continue;
+          const int triIdx = triCandidates[i];
 
           const MeshTriangleIndices& tri = mesh->triangleIndices(triIdx);
 
@@ -2004,7 +2044,7 @@ namespace P64::Coll {
     // ── Mesh colliders ──────────────────────────────────────────────────────
     if (doMesh) {
       constexpr int MAX_TRI = 64;
-      NodeProxy triCandidates[MAX_TRI];
+      uint16_t triCandidates[MAX_TRI];
       constexpr int MAX_MESH_CANDIDATES = 32;
       NodeProxy meshCandidates[MAX_MESH_CANDIDATES];
 
@@ -2015,13 +2055,13 @@ namespace P64::Coll {
         // Ownerless mesh colliders are valid static level geometry in this
         // fork; the sweep must still test them, so no ownerObject() skip.
         if (!mesh || mesh->triangleCount() == 0) continue;
+        if ((mesh->writeMask() & readMask) == 0) continue;
 
         AABB localSweptBox = mesh->worldAabbToLocal(sweptBox);
-        int triCount = mesh->queryTriangleNodes(localSweptBox, triCandidates, MAX_TRI);
+        int triCount = mesh->queryTriangles(localSweptBox, triCandidates, MAX_TRI);
 
         for (int i = 0; i < triCount; ++i) {
-          int triIdx = mesh->triangleIndexForNode(triCandidates[i]);
-          if (triIdx < 0 || triIdx >= static_cast<int>(mesh->triangleCount())) continue;
+          const int triIdx = triCandidates[i];
 
           const MeshTriangleIndices& tri = mesh->triangleIndices(triIdx);
 
@@ -2031,8 +2071,7 @@ namespace P64::Coll {
           fm_vec3_t wn  = mesh->hasTransform() ? mesh->localNormalToWorld(mesh->triangleNormal(triIdx)) : mesh->triangleNormal(triIdx);
 
           candidate = SphereSweepHit{};
-          if (!sphereSweepTriangle(center, radius,
-                                    displacement, wv0, wv1, wv2, wn, candidate))
+          if (!sphereSweepTriangle(center, radius, displacement, wv0, wv1, wv2, wn, candidate))
             continue;
 
           if (!hit.didHit || candidate.t < hit.t ||
@@ -2161,7 +2200,8 @@ namespace P64::Coll {
     ticksWakePrep = get_ticks() - stageStart;
 
     stageStart = get_ticks();
-    // Refresh collider world state
+
+    // Refresh collider world state and move AABB tree nodes if needed. Wake any rigidbodies who are affected by changes
     for(Collider *collider : colliders_) {
       if(!collider) continue;
 
@@ -2170,6 +2210,8 @@ namespace P64::Coll {
       RigidBody *rb = collider->rigidBody_;
       const bool changed = rb ? collider->syncFromRigidBody(rb->position_, rb->rotation_)
                               : collider->syncWorldState();
+
+      if(collider->consumeGeometryChanged()) wakeChangedCollider(collider);
 
       if(!changed || collider->aabbTreeNodeId_ == NULL_NODE) continue;
 
@@ -2267,7 +2309,7 @@ namespace P64::Coll {
       }
 
       // Sync visual object with physics position and save snapshot, so external changes to the owner can be detected next step
-      body->owner_->pos = body->position_ * getGfxScale();
+      body->owner_->pos = body->position_;
       body->owner_->rot = body->rotation_;
       body->syncedOwnerPos_ = body->owner_->pos;
       body->syncedOwnerRot_ = body->owner_->rot;
@@ -2317,9 +2359,9 @@ namespace P64::Coll {
           int idxB = meshCollider->triangles_[t].indices[1];
           int idxC = meshCollider->triangles_[t].indices[2];
 
-          fm_vec3_t v0 = meshCollider->toWorldSpace(meshCollider->vertices_[idxA]) * getGfxScale();
-          fm_vec3_t v1 = meshCollider->toWorldSpace(meshCollider->vertices_[idxB]) * getGfxScale();
-          fm_vec3_t v2 = meshCollider->toWorldSpace(meshCollider->vertices_[idxC]) * getGfxScale();
+          fm_vec3_t v0 = meshCollider->toWorldSpace(meshCollider->vertices_[idxA]);
+          fm_vec3_t v1 = meshCollider->toWorldSpace(meshCollider->vertices_[idxB]);
+          fm_vec3_t v2 = meshCollider->toWorldSpace(meshCollider->vertices_[idxC]);
 
           Debug::drawLine(v0, v1, color);
           Debug::drawLine(v1, v2, color);
@@ -2348,46 +2390,46 @@ namespace P64::Coll {
           {
           case ShapeType::Sphere:
             if (!isSleepingBody) col = color_t{0xFF, 0x00, 0x00, 0xFF};
-            Debug::drawSphere(collider->worldCenter_ * getGfxScale(), collider->sphere_.radius * getGfxScale(), col);
+            Debug::drawSphere(collider->worldCenter_, collider->sphere_.radius, col);
             break;
           case ShapeType::Box:
             if (!isSleepingBody) col = color_t{0x00, 0xFF, 0xFF, 0xFF};
-            Debug::drawOBB(collider->worldCenter_ * getGfxScale(), collider->box_.halfSize * getGfxScale(), collider->owner_->rot, col);
+            Debug::drawOBB(collider->worldCenter_, collider->box_.halfSize, collider->owner_->rot, col);
             break;
           case ShapeType::Capsule:
             if (!isSleepingBody) col = color_t{0x00, 0x80, 0xFF, 0xFF};
             Debug::drawCapsule(
-                collider->worldCenter_ * getGfxScale(),
-                collider->capsule_.radius * getGfxScale(),
-                collider->capsule_.innerHalfHeight * getGfxScale(),
+                collider->worldCenter_,
+                collider->capsule_.radius,
+                collider->capsule_.innerHalfHeight,
                 collider->owner_->rot,
                 col);
             break;
           case ShapeType::Cylinder:
             if (!isSleepingBody) col = color_t{0xFF, 0x80, 0x00, 0xFF};
             Debug::drawCylinder(
-                collider->worldCenter_ * getGfxScale(),
-                collider->cylinder_.radius * getGfxScale(),
-                collider->cylinder_.halfHeight * getGfxScale(),
+                collider->worldCenter_,
+                collider->cylinder_.radius,
+                collider->cylinder_.halfHeight,
                 collider->owner_->rot,
                 col);
             break;
           case ShapeType::Cone:
             if (!isSleepingBody) col = color_t{0xFF, 0x40, 0xA0, 0xFF};
             Debug::drawCone(
-                collider->worldCenter_ * getGfxScale(),
-                collider->cone_.radius * getGfxScale(),
-                collider->cone_.halfHeight * getGfxScale(),
+                collider->worldCenter_,
+                collider->cone_.radius,
+                collider->cone_.halfHeight,
                 collider->owner_->rot,
                 col);
             break;
           case ShapeType::Pyramid:
             if (!isSleepingBody) col = color_t{0xB0, 0xFF, 0x40, 0xFF};
             Debug::drawPyramid(
-                collider->worldCenter_ * getGfxScale(),
-                collider->pyramid_.baseHalfWidthX * getGfxScale(),
-                collider->pyramid_.baseHalfWidthZ * getGfxScale(),
-                collider->pyramid_.halfHeight * getGfxScale(),
+                collider->worldCenter_,
+                collider->pyramid_.baseHalfWidthX,
+                collider->pyramid_.baseHalfWidthZ,
+                collider->pyramid_.halfHeight,
                 collider->owner_->rot,
                 col);
             break;

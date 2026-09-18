@@ -35,6 +35,7 @@
 #include "../project/materialGraph/graph.h"
 #include "../project/assets/materialAsset.h"
 #include "../project/compile/compileErrors.h"
+#include "../project/scene/migration.h"
 #include "../utils/fs.h"
 #include "../utils/hash.h"
 #include "../utils/json.h"
@@ -3175,11 +3176,19 @@ namespace
     if (a.field.empty() || a.value.empty()) {
       emitErr("--field, --value are required"); return 1;
     }
+    // Only keys the editor actually reads are accepted, so a stale or misspelled
+    // key (e.g. the pre-0.9.0 "moveSpeed") fails loudly instead of leaving a
+    // silently ignored entry behind. prefs-describe lists the current set.
+    Editor::Preferences def{};
+    auto defaults = nlohmann::json::parse(def.toJson(), nullptr, false);
+    if (!defaults.is_object() || !defaults.contains(a.field)) {
+      emitErr("unknown pref field: " + a.field); return 1;
+    }
+
     auto path = prefsJsonPath();
     auto j = Utils::JSON::loadFile(path);
     if (!j.is_object()) {
       // Seed from defaults so a first-time set produces a complete file.
-      Editor::Preferences def{};
       def.load();
       j = nlohmann::json::parse(def.toJson(), nullptr, false);
     }
@@ -5285,6 +5294,49 @@ namespace
     emitJSON(out);
     return 0;
   }
+
+  // ---- project file-format migration -------------------------------------
+  // Scenes and prefabs carry a format version (Project::Migration). The GUI
+  // asks once on open and converts in place; headless callers get the same
+  // two steps split apart so scripts can inspect before they rewrite files.
+
+  nlohmann::json describePending(const Project::Migration::ScanResult &scan)
+  {
+    nlohmann::json out;
+    out["fileVersion"] = Project::Migration::FILE_VERSION;
+    out["pending"] = (int)scan.docs.size();
+    out["summary"] = Project::Migration::describe(scan);
+    out["steps"] = nlohmann::json::array();
+    for (const auto *step : scan.summaries) out["steps"].push_back(step);
+    out["docs"] = nlohmann::json::array();
+    for (const auto &doc : scan.docs) {
+      out["docs"].push_back({
+        {"type", doc.type == Project::Migration::DocType::PREFAB ? "prefab" : "scene"},
+        {"name", doc.name},
+        {"path", doc.path},
+        {"version", doc.version},
+      });
+    }
+    return out;
+  }
+
+  int cmdMigrateCheck(const CLI::Commands::Args &/*a*/, Project::Project &project)
+  {
+    emitJSON(describePending(Project::Migration::scanProject(project)));
+    return 0;
+  }
+
+  int cmdMigrate(const CLI::Commands::Args &/*a*/, Project::Project &project)
+  {
+    auto scan = Project::Migration::scanProject(project);
+    auto out = describePending(scan);
+    if (!scan.empty()) {
+      Project::Migration::apply(project, scan);
+    }
+    out["migrated"] = (int)scan.docs.size();
+    emitJSON(out);
+    return 0;
+  }
 }
 
 namespace CLI::Commands
@@ -5492,7 +5544,14 @@ namespace CLI::Commands
     {"prefab-duplicate-variable",  cmdPrefabDuplicateVariable},
     {"widget-duplicate-variable",  cmdPrefabDuplicateVariable},
     {"project-set-collision-layer", cmdProjectSetCollisionLayer},
+    {"migrate-check",              cmdMigrateCheck},
+    {"migrate",                    cmdMigrate},
   };
+
+  bool isMigrationCmd(const std::string &cmd)
+  {
+    return cmd == "migrate" || cmd == "migrate-check";
+  }
 
   bool isExtendedCmd(const std::string &cmd)
   {
@@ -5584,8 +5643,11 @@ namespace CLI::Commands
       "\nFlags accepted by the above (only relevant ones are read per command):\n"
       "  --asset --type --name --dir --file --dest --field --value\n"
       "  --path --parent --comp --func --from --to --restype\n"
-      "\nValues are parsed as JSON, falling back to raw strings. Use --help on\n"
-      "individual command examples in the CLAUDE.md or commit message.\n",
+      "\nValues are parsed as JSON, falling back to raw strings. See the\n"
+      "repository docs for per-command examples.\n"
+      "\nProjects saved by an older editor must be converted first: run\n"
+      "  --cmd migrate-check   to list outdated scenes/prefabs (read-only)\n"
+      "  --cmd migrate         to rewrite them in place (back up first)\n",
       stdout
     );
   }

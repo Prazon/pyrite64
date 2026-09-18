@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "SHA256.h"
+#include "../build/autoScale.h"
 #include "../utils/codeParser.h"
 #include "../utils/fs.h"
 #include "../utils/hash.h"
@@ -72,6 +73,15 @@ namespace
     return pathAbs;
   }
 
+  std::string getProjectRelPath(const std::string &path, const std::string &basePath)
+  {
+    auto pathAbs = Utils::FS::toUnixPath(fs::absolute(path));
+    if (pathAbs.length() <= basePath.length()) return pathAbs;
+    pathAbs = pathAbs.substr(basePath.length());
+    if (!pathAbs.empty() && pathAbs.front() == '/') pathAbs.erase(pathAbs.begin());
+    return pathAbs;
+  }
+
   std::string changeExt(const std::string &path, const std::string &newExt)
   {
     auto p = fs::path(path);
@@ -87,6 +97,7 @@ namespace
       conf.uuid = doc.value<uint64_t>("uuid", 0);
       conf.format = doc["format"];
       conf.baseScale = doc["baseScale"];
+      conf.baseScaleOverride = doc.value<int>("baseScaleOverride", 0);
       conf.compression = (Project::ComprTypes)doc.value<int>("compression", 0);
       conf.gltfBVH = doc["gltfBVH"];
       Utils::JSON::readProp(doc, conf.wavForceMono);
@@ -174,6 +185,7 @@ namespace
     entry = Project::AssetManagerEntry{
       .name = path.filename().string(),
       .path = path.string(),
+      .projectPath = getProjectRelPath(path.string(), projectBase),
       .outPath = outPath,
       .romPath = romPath,
       .type = type,
@@ -214,7 +226,7 @@ namespace
     return true;
   }
 
-  bool buildCodeEntry(const fs::path &path, Project::AssetManagerEntry &entry)
+  bool buildCodeEntry(Project::Project *project, const fs::path &path, Project::AssetManagerEntry &entry)
   {
     auto code = Utils::FS::loadTextFile(path);
 
@@ -262,6 +274,7 @@ namespace
     entry = Project::AssetManagerEntry{
       .name = path.filename().string(),
       .path = path.string(),
+      .projectPath = getProjectRelPath(path.string(), fs::absolute(project->getPath()).string()),
       .type = type,
       .params = Utils::CPP::parseDataStruct(code, "Data")
     };
@@ -276,6 +289,7 @@ std::string Project::AssetConf::serialize() const {
     .set("uuid", uuid)
     .set("format", format)
     .set("baseScale", baseScale)
+    .set("baseScaleOverride", baseScaleOverride)
     .set("compression", static_cast<int>(compression))
     .set("gltfBVH", gltfBVH)
     .set(wavForceMono)
@@ -404,9 +418,13 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
         }
         auto &savedMats = entry.conf.data["materials"];
 
+        float baseScale = entry.conf.baseScaleOverride > 0
+          ? (float)entry.conf.baseScaleOverride
+          : Build::computeAutoBaseScale(path);
+
         entry.model = {
           .t3dm = T3DM::parseGLTF(path.c_str(), {
-            .globalScale = (float)entry.conf.baseScale,
+            .globalScale = baseScale,
             .animSampleRate = 60,
             .createBVH = entry.conf.gltfBVH,
             .verbose = false,
@@ -424,6 +442,7 @@ void Project::AssetManager::reloadEntry(AssetManagerEntry &entry, const std::str
             },
           }), .materials = {},
         };
+        entry.model.autoBaseScale = baseScale;
 
         for(const auto &t3dMat : entry.model.t3dm.materials) {
           auto &mat = entry.model.materials[t3dMat.first];
@@ -605,7 +624,7 @@ void Project::AssetManager::reload() {
 
       watchFiles[path.string()] = Utils::FS::getFileAge(path);
       AssetManagerEntry codeEntry{};
-      if (!buildCodeEntry(path, codeEntry)) {
+      if (!buildCodeEntry(project, path, codeEntry)) {
         continue;
       }
 
@@ -880,7 +899,7 @@ bool Project::AssetManager::pollWatch()
   // Rebuild a single script entry
   auto addOrUpdateCode = [&](const std::string &pathStr) {
     AssetManagerEntry newEntry{};
-    if (!buildCodeEntry(fs::path{pathStr}, newEntry)) {
+    if (!buildCodeEntry(project, fs::path{pathStr}, newEntry)) {
       return;
     }
 

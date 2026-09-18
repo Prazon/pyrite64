@@ -51,10 +51,14 @@ Renderer::Scene::Scene()
     .fragTexCount = 0,
   });
 
-  pipelineN64 = std::make_unique<Pipeline>(Pipeline::Info{
+  for(int i = 0; i < (int)pipelineN64.size(); ++i)
+  {
+  pipelineN64[i] = std::make_unique<Pipeline>(Pipeline::Info{
     .shader = *shaderN64,
     .prim = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-    .useDepth = true,
+    .depthTest = (i & 0b11) != 0,
+    .depthWrite = (i & 0b10) != 0,
+    .depthCompare = (i & 0b01) ? SDL_GPU_COMPAREOP_LESS : SDL_GPU_COMPAREOP_ALWAYS,
     .drawsObjID = true,
     .translucent = true,
     .vertPitch = sizeof(Vertex),
@@ -65,11 +69,11 @@ Renderer::Scene::Scene()
       {SDL_GPU_VERTEXELEMENTFORMAT_SHORT2    ,  offsetof(Renderer::Vertex, boneIdx)},
     }
   });
+  }
 
   pipelineLines = std::make_unique<Pipeline>(Pipeline::Info{
     .shader = *shaderLines,
     .prim = SDL_GPU_PRIMITIVETYPE_LINELIST,
-    .useDepth = true,
     .drawsObjID = false,
     .vertPitch = sizeof(LineVertex),
     .vertLayout = {
@@ -82,7 +86,6 @@ Renderer::Scene::Scene()
   pipelineSprites = std::make_unique<Pipeline>(Pipeline::Info{
   .shader = *shaderSprites,
   .prim = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-  .useDepth = true,
   .drawsObjID = true,
   .vertPitch = sizeof(LineVertex),
   .vertLayout = {
@@ -99,7 +102,6 @@ Renderer::Scene::Scene()
   pipelineBillboard = std::make_unique<Pipeline>(Pipeline::Info{
     .shader = *shaderBillboard,
     .prim = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-    .useDepth = true,
     .drawsObjID = true,
     .translucent = true,
     .vertPitch = sizeof(LineVertex),
@@ -110,13 +112,12 @@ Renderer::Scene::Scene()
     }
   });
 
-  // SPBF64 fork: solid-shaded primitives (Comp::Primitive). Lighting is
+  // Solid-shaded primitives (Comp::Primitive). Lighting is
   // baked per-vertex on the CPU side so the shader is just a pass-through.
   // Triangle topology, depth-tested, picks via objectId.
   pipelinePrimitive = std::make_unique<Pipeline>(Pipeline::Info{
     .shader = *shaderPrimitive,
     .prim = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-    .useDepth = true,
     .drawsObjID = true,
     .vertPitch = sizeof(LineVertex),
     .vertLayout = {

@@ -365,6 +365,24 @@ Delivered as CLI commands (all smoketested in `tests/cli/run.py`):
 
 - **PathFollow (id 31).** New component that drives its owning object along a Path spline (resolves a Path on self → parent → explicit object). No bespoke CLI verbs needed: the generic `component-describe --comp PathFollow` reflects its schema and `prefab-set-prop`/`scene-set-prop` set every field (`objectUUID`, `speed`, `startDistance`, `mode`, `orient`, `autoPlay`, `previewDistance`). Smoketested via `component-describe-pathfollow` + `prefab-add-pathfollow-comp` + `prefab-set-pathfollow-{speed,mode}`. The Camera-PiP scrub preview is editor-GUI-only (no headless surface, by design — the editor cannot run engine motion).
 
+## Project file-format migration
+
+Scenes and prefabs carry a `version` field (`Project::Migration::FILE_VERSION`, currently 2: visual units to meters). The GUI scans on project open, asks once, and converts in place. Headless parity:
+
+| GUI action | CLI command | Status | Severity |
+|-|-|-|-|
+| Migration overlay: list outdated files + step summaries | `migrate-check` (read-only JSON: `pending`, `docs[]`, `steps[]`) | OK | - |
+| Migration overlay: Convert | `migrate` (rewrites files in place, echoes `migrated`) | OK | - |
+| Declining leaves the project untouched / build refuses | every other command (incl. `build`, `build-tables`) exits non-zero on an outdated project | OK | - |
+
+The gate exists because every scene/prefab save stamps the current version: running any mutating command on a v1 project would silently mark it converted. Smoketested via `migrate-check-current`, `migrate-noop`, `legacy-blocked-*`, `legacy-migrate*` (the `legacy_v1` fixture is the baseline scene in the pre-meter format).
+
+Fork-specific migration rules (see `src/project/scene/migration.cpp`):
+
+- 2D canvas subtrees (`isCanvas2D` on an object or ancestor) and scenes in 2D render mode are pixel-space and left untouched.
+- `Primitive.halfExtend`, `PathFollow.speed/startDistance/previewDistance` and `Path.points[].pos` are converted alongside upstream's camera/light/collider/culling lengths.
+- Particle-system assets keep render-unit radii/velocities; only the emitter origin is meters at runtime.
+
 ## Diagnostics parity (non-command)
 
 - **N64 S10.5 UV-range warning.** The editor renders large-texture/large-object UVs faithfully (the rainbow wrap artifact is real hardware behaviour) but now flags it: a `WARN` toast + Log line on model load, mirrored headless as `uvRange{outOfRange,worstPixel,limitPixel,material}` in `asset-describe` (detailed) and a compact `uvOutOfRange:true` in `asset-list` (so `asset-list --type model3d` is a headless scanner). Build-time emission rides the shared asset-load `Logger::log(WARN)` → stdout in `--cli --cmd build`. Smoketested via `asset-list-model3d` (in-range fixtures must stay flag-free).

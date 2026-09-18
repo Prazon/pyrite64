@@ -35,8 +35,9 @@ void Editor::Preferences::load()
         recentProjects.push_back({e.value("path", ""), e.value("name", ""), e.value("cardImage", "")});
       }
     }
-    zoomSpeed = doc.value("zoomSpeed", DEF.zoomSpeed);
-    moveSpeed = doc.value("moveSpeed", DEF.moveSpeed);
+    // keys renamed with the switch to meters, so pre-meter values are dropped
+    zoomSpeed = doc.value("zoomSpeedMeters", DEF.zoomSpeed);
+    moveSpeed = doc.value("moveSpeedMeters", DEF.moveSpeed);
     panSpeed = doc.value("panSpeed", DEF.panSpeed);
     lookSpeed = doc.value("lookSpeed", DEF.lookSpeed);
     invertWheelY = doc.value("invertWheelY", DEF.invertWheelY);
@@ -78,8 +79,8 @@ std::string Editor::Preferences::toJson() const
     .set("keymap", keymap.serialize(keymapPreset))
     .set("themeName", themeName)
     .set("recentProjects", recents)
-    .set("zoomSpeed", zoomSpeed)
-    .set("moveSpeed", moveSpeed)
+    .set("zoomSpeedMeters", zoomSpeed)
+    .set("moveSpeedMeters", moveSpeed)
     .set("panSpeed", panSpeed)
     .set("lookSpeed", lookSpeed)
     .set("invertWheelY", invertWheelY)

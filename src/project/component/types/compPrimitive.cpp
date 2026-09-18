@@ -357,7 +357,7 @@ namespace Project::Component::Primitive
   std::shared_ptr<void> init(Object &) {
     auto data = std::make_shared<Data>();
     data->type.value = TYPE_BOX;
-    data->halfExtend.value = {16.0f, 16.0f, 16.0f};
+    data->halfExtend.value = {0.5f, 0.5f, 0.5f}; // 1m cube
     data->color.value = {0.7f, 0.7f, 0.7f, 1.0f};
     data->layerIdx.value = 0;
     return data;
@@ -376,7 +376,7 @@ namespace Project::Component::Primitive
   std::shared_ptr<void> deserialize(nlohmann::json &doc) {
     auto data = std::make_shared<Data>();
     Utils::JSON::readProp(doc, data->type, TYPE_BOX);
-    Utils::JSON::readProp(doc, data->halfExtend, glm::vec3{16.0f, 16.0f, 16.0f});
+    Utils::JSON::readProp(doc, data->halfExtend, glm::vec3{0.5f, 0.5f, 0.5f});
     Utils::JSON::readProp(doc, data->color, glm::vec4{0.7f, 0.7f, 0.7f, 1.0f});
     Utils::JSON::readProp(doc, data->layerIdx, 0);
     return data;

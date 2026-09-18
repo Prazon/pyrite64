@@ -9,6 +9,7 @@
 #include <t3d/tpx.h>
 
 #include "lib/logger.h"
+#include "renderer/renderScale.h"
 #include "scene/scene.h"
 
 namespace
@@ -85,7 +86,8 @@ void P64::DrawLayer::draw(uint32_t layerIdx)
   if(setup.fogMode != Conf::FogMode::NONE)
   {
     t3d_fog_set_enabled(true);
-    t3d_fog_set_range(setup.fogMin, setup.fogMax);
+    // fog distances are in meters, view space is in render units
+    t3d_fog_set_range(setup.fogMin * Renderer::getRenderScale(), setup.fogMax * Renderer::getRenderScale());
 
     if(setup.fogMode == Conf::FogMode::CLEAR_COLOR) {
       rdpq_set_fog_color(SceneManager::getCurrent().getConf().clearColor);

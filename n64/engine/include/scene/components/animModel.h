@@ -30,6 +30,7 @@ namespace P64::Comp
       int16_t animIdxBlend{-1};
 
       RingMat4FP matFP{};
+      float vertexScale{1.0f};
       uint8_t layerIdx{0};
       uint8_t flags{0};
 

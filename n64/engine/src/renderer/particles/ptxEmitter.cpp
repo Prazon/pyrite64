@@ -3,6 +3,7 @@
 * @license MIT
 */
 #include "renderer/particles/ptxEmitter.h"
+#include "renderer/renderScale.h"
 
 #include <math.h>
 #include <string.h>
@@ -120,7 +121,12 @@ namespace P64::PTX
 
     lcg = s;
 
-    fm_vec3_t spawnPos{origin.x + ox, origin.y + oy, origin.z + oz};
+    // The origin is the owning object's position in meters. Shape offsets,
+    // velocities and gravity from the asset are render units because the
+    // particle buffer integrates them directly, so only the offset is
+    // converted before Sprites::add() applies the render scale.
+    const float inv = Renderer::getInvRenderScale();
+    fm_vec3_t spawnPos{origin.x + ox * inv, origin.y + oy * inv, origin.z + oz * inv};
     color_t col{
       conf.startColorR, conf.startColorG, conf.startColorB, conf.startColorA
     };

@@ -88,7 +88,7 @@ namespace Project::Component::Path
     data->previewGroup.value = 0;
     // Seed with two points so a freshly-added Path has a visible spline to grab.
     data->points.push_back(CtrlPoint{ {0.0f, 0.0f, 0.0f}, 0.5f, 0, 0 });
-    data->points.push_back(CtrlPoint{ {0.0f, 0.0f, 100.0f}, 0.5f, 0, 0 });
+    data->points.push_back(CtrlPoint{ {0.0f, 0.0f, 1.0f}, 0.5f, 0, 0 });
     return data;
   }
 
@@ -251,7 +251,7 @@ namespace Project::Component::Path
         Editor::UndoRedo::getHistory().markChanged("Path: append point");
         glm::vec3 newPos{0.0f, 0.0f, 0.0f};
         if (!data.points.empty()) {
-          newPos = data.points.back().pos + glm::vec3{0.0f, 0.0f, 100.0f};
+          newPos = data.points.back().pos + glm::vec3{0.0f, 0.0f, 1.0f};
         }
         data.points.push_back(CtrlPoint{newPos, 0.5f, 0, 0});
         selPt = (int)data.points.size() - 1;
@@ -279,7 +279,7 @@ namespace Project::Component::Path
           Editor::UndoRedo::getHistory().markChanged("Path: insert point");
           glm::vec3 mid = p.pos;
           if (i + 1 < (int)data.points.size()) mid = (p.pos + data.points[i + 1].pos) * 0.5f;
-          else mid += glm::vec3{0.0f, 0.0f, 100.0f};
+          else mid += glm::vec3{0.0f, 0.0f, 1.0f};
           data.points.insert(data.points.begin() + i + 1, CtrlPoint{mid, 0.5f, p.branchId, 0});
           ImGui::PopID();
           selPt = i + 1;

@@ -25,6 +25,22 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
         "Run: cmake --preset <name>")
 endif()
 
+# A checkout without git-lfs leaves ~130 byte text pointers instead of the real assets
+set(P64_LFS_PROBE "${CMAKE_SOURCE_DIR}/data/GoogleSansCode.ttf")
+if(EXISTS "${P64_LFS_PROBE}")
+    file(SIZE "${P64_LFS_PROBE}" P64_LFS_PROBE_SIZE)
+else()
+    set(P64_LFS_PROBE_SIZE 0)
+endif()
+
+if(P64_LFS_PROBE_SIZE LESS 1024)
+    message(FATAL_ERROR
+        "Git LFS assets were not fetched (data/GoogleSansCode.ttf is only ${P64_LFS_PROBE_SIZE} bytes).\n\n"
+        "Install git-lfs (https://git-lfs.com), then run:\n"
+        "  git lfs install\n"
+        "  git lfs pull\n")
+endif()
+
 # add_compile_options(-fsanitize=address)
 # add_link_options(-fsanitize=address)
 
@@ -194,6 +210,10 @@ add_executable(pyrite64 src/main.cpp
         src/project/scene/sceneManager.cpp
         src/project/scene/scene.h
         src/project/scene/scene.cpp
+        src/project/scene/migration.h
+        src/project/scene/migration.cpp
+        src/editor/pages/parts/migrationOverlay.h
+        src/editor/pages/parts/migrationOverlay.cpp
         src/editor/pages/parts/sceneInspector.cpp
         src/build/projectBuilder.h
         src/build/projectBuilder.cpp
@@ -270,6 +290,8 @@ add_executable(pyrite64 src/main.cpp
         src/build/collisionBuilder.cpp
         src/build/collisionMeshStub.h
         src/build/collisionMeshStub.cpp
+        src/build/autoScale.h
+        src/build/autoScale.cpp
         src/project/component/types/compCollBody.cpp
         src/project/component/types/compRigidBody.cpp
         src/project/component/types/compCharBody.cpp

@@ -7,6 +7,7 @@
 #include "scene/scene.h"
 #include "scene/sceneManager.h"
 #include "renderer/drawLayer.h"
+#include "renderer/renderScale.h"
 #include "assets/assetManager.h"
 
 namespace
@@ -80,7 +81,7 @@ namespace P64::Comp
                     : 1.0f;
     if (data->pixelScaleQ == 0) {
       // Auto: use the camera-distance heuristic — measure projection of (worldY+1)
-      fm_vec3_t worldTop = world; worldTop.y += (float)cellH;
+      fm_vec3_t worldTop = world; worldTop.y += (float)cellH * Renderer::getInvRenderScale(); // one texel = one render unit
       fm_vec3_t scrTop = cam.getScreenPos(worldTop);
       float projHeight = scrFeet.y - scrTop.y;
       if (projHeight > 0.5f) {

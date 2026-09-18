@@ -58,6 +58,9 @@ namespace Project
     public:
       PROP_U32(uuid);
       Object obj{};
+      // Format version this prefab is at, see Project::Migration. Only advances when a migration
+      // converts the loaded copy and writes it back.
+      int fileVersion{};
 
       // Class variables — Blueprint-style typed properties with defaults.
       // Per-instance overrides live on Object::varOverrides keyed by varDef uuid.

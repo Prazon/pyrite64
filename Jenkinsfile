@@ -1,8 +1,8 @@
 // Jenkins pipeline for the Prazon/pyrite64 fork.
 //
 // Builds the editor binary (pyrite64.exe + ./data + ./n64) on a Windows agent
-// using MSYS2 UCRT64's GCC + CMake + Ninja, matching the toolchain that
-// CLAUDE.md mandates ("On Windows use MSYS2 UCRT64"). Triggered by GitHub
+// using MSYS2 UCRT64's GCC + CMake + Ninja, matching the toolchain the
+// repository build docs mandate ("On Windows use MSYS2 UCRT64"). Triggered by GitHub
 // webhook (githubPush) only — no SCM polling.
 //
 // To run MSYS2 binaries from Jenkins' bat steps we drive everything through
@@ -142,7 +142,7 @@ pipeline {
         stage('Stage Output') {
             steps {
                 script { env.FAILED_STAGE = 'Stage Output' }
-                // Assemble the runnable bundle in OUTPUT_DIR. CLAUDE.md
+                // Assemble the runnable bundle in OUTPUT_DIR. The editor
                 // requires pyrite64.exe to sit next to ./data and ./n64 at
                 // runtime, so we mirror that exact layout under build/Windows
                 // (matching the SPBF convention) for downstream consumption.

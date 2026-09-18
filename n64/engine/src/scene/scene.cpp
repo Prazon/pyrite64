@@ -16,7 +16,7 @@
 #include "scene/globalState.h"
 #include "scene/widgetFocus.h"
 #include "collision/meshCollider.h"
-#include "collision/gfxScale.h"
+#include "renderer/renderScale.h"
 #include "vi/swapChain.h"
 #include "lib/memory.h"
 #include "lib/logger.h"
@@ -129,14 +129,15 @@ P64::Scene::Scene(uint16_t sceneId, Scene** ref)
   VI::SwapChain::setFrameSkip(conf.frameSkip);
   VI::SwapChain::start();
 
+  Renderer::setRenderScale(conf.renderScale > 0.0f ? conf.renderScale : 100.0f);
+
   auto *collisionScene = Coll::collisionSceneGetInstance();
   collisionScene->reset();
   collisionScene->configureSimulation(
     conf.physicsTickRate > 0 ? (1.0f / static_cast<float>(conf.physicsTickRate)) : Coll::DEFAULT_FIXED_DT,
     conf.gravity,
     conf.velocitySolverIterations,
-    conf.positionSolverIterations,
-    conf.visualUnitsPerMeter
+    conf.positionSolverIterations
   );
   loadScene();
 
@@ -300,6 +301,8 @@ void P64::Scene::update(float deltaTime)
 
     for (uint32_t i=0; i<obj->compCount; ++i) {
       const auto &compDef = COMP_TABLE[compRefs[i].type];
+      if(!compDef.update) continue;
+
       char* dataPtr = (char*)obj + compRefs[i].offset;
       compDef.update(*obj, dataPtr, deltaTime);
     }
@@ -517,9 +520,9 @@ void P64::Scene::applyRigidBodyRenderInterpolation(float dt)
     if(obj->pos != body->syncedOwnerPos() ||
        obj->rot != body->syncedOwnerRot()) continue;
 
-    // Extrapolate forward by the remaining time (velocity is in physics units, obj->pos in gfx units)
+    // Extrapolate forward by the remaining time
     const fm_vec3_t &vel = body->linearVelocity();
-    obj->pos = obj->pos + vel * dt * Coll::getGfxScale();
+    obj->pos = obj->pos + vel * dt;
 
     const fm_vec3_t &angVel = body->angularVelocity();
     if(!Coll::vec3IsZero(angVel)) {

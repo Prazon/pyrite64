@@ -64,6 +64,9 @@ class Test:
     reset: bool = False
     # Override the project path positional (default: current temp copy).
     project: Optional[str] = None
+    # Run against a copy of a different fixture directory (tests/cli/fixtures/<name>)
+    # instead of the shared baseline copy. Copied on first use; reset=True re-copies.
+    fixture: Optional[str] = None
     # After a passing run, parse the JSON output and store named values
     # for subsequent {VARNAME} substitutions in later test args.
     # Each entry maps an exported variable name to a dotted path within
@@ -204,6 +207,20 @@ TESTS: List[Test] = [
     Test("scene-list",                 "scene-list"),
     Test("event-list",                 "event-list"),
     Test("project-describe",           "project-describe"),
+
+    # === project file-format migration =================================
+    # The baseline fixture is at the current FILE_VERSION, so both commands
+    # are no-ops there. legacy_v1 is the same scene in the pre-meter format:
+    # every other command must refuse it until it has been converted.
+    Test("migrate-check-current",      "migrate-check"),
+    Test("migrate-noop",               "migrate"),
+    Test("legacy-blocked-scene-list",  "scene-list",          fixture="legacy_v1", expect_fail=True),
+    Test("legacy-blocked-set-conf",    "scene-set-conf",      ["--asset", "1", "--field", "clearColor", "--value", "[0.1,0.2,0.3,1]"], fixture="legacy_v1", expect_fail=True),
+    Test("legacy-migrate-check",       "migrate-check",       fixture="legacy_v1"),
+    Test("legacy-migrate",             "migrate",             fixture="legacy_v1"),
+    Test("legacy-migrate-check-after", "migrate-check",       fixture="legacy_v1"),
+    Test("legacy-scene-list-after",    "scene-list",          fixture="legacy_v1"),
+    Test("legacy-describe-after",      "project-describe",    fixture="legacy_v1"),
 
     # === prefab CRUD ===================================================
     Test("prefab-create",              "prefab-create",       ["--name", "TPrefab1"]),
@@ -499,8 +516,10 @@ TESTS: List[Test] = [
     Test("project-reset-conf",         "project-reset-conf",  ["--field", "name"]),
     Test("project-reset-conf-bad",     "project-reset-conf",  ["--field", "nope"], expect_fail=True),
     Test("prefs-describe",             "prefs-describe"),
-    Test("prefs-set",                  "prefs-set",           ["--field", "moveSpeed", "--value", "200"]),
-    Test("prefs-reset",                "prefs-reset",         ["--field", "moveSpeed"]),
+    # viewport speeds are stored in meters; the pre-0.9.0 key "moveSpeed" is gone
+    Test("prefs-set",                  "prefs-set",           ["--field", "moveSpeedMeters", "--value", "2"]),
+    Test("prefs-set-bad",              "prefs-set",           ["--field", "moveSpeed", "--value", "200"], expect_fail=True),
+    Test("prefs-reset",                "prefs-reset",         ["--field", "moveSpeedMeters"]),
     Test("prefs-reset-bad",            "prefs-reset",         ["--field", "nope"], expect_fail=True),
 
     # project-create bootstraps a fresh project from the empty template.
@@ -544,12 +563,23 @@ def main() -> int:
 
     t0 = time.time()
     captures_env: dict = {}
+    alt_fixtures: dict = {}
     for t in selected:
         if t.reset:
             shutil.rmtree(fixture, ignore_errors=True)
             shutil.copytree(BASELINE, fixture)
             captures_env.clear()
-        ok, detail = run_test(t, fixture, captures_env)
+        target = fixture
+        if t.fixture:
+            src = REPO / "tests" / "cli" / "fixtures" / t.fixture
+            if not src.exists():
+                sys.exit(f"smoke: fixture missing at {src}")
+            target = workdir / t.fixture
+            if t.reset or t.fixture not in alt_fixtures:
+                shutil.rmtree(target, ignore_errors=True)
+                shutil.copytree(src, target)
+                alt_fixtures[t.fixture] = target
+        ok, detail = run_test(t, target, captures_env)
         status = "PASS" if ok else "FAIL"
         print(f"  {status:4}  {t.name:36}  {detail}")
         if ok:

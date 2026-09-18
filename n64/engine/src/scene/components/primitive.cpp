@@ -7,6 +7,7 @@
 */
 #include "scene/components/primitive.h"
 #include "renderer/drawLayer.h"
+#include "renderer/renderScale.h"
 
 #include <libdragon.h>
 #include <t3d/t3d.h>
@@ -552,9 +553,13 @@ namespace P64::Comp
                   | ((uint32_t)data->color[2] << 8)
                   |  (uint32_t)data->color[3];
 
-    float hx = data->halfExtend[0];
-    float hy = data->halfExtend[1];
-    float hz = data->halfExtend[2];
+    // Half extents are authored in meters. The packed int16 vertices hold
+    // render units, so the scale is folded in here once instead of in the
+    // per-frame matrix (which then only carries the object's unitless scale).
+    const float rs = Renderer::getRenderScale();
+    float hx = data->halfExtend[0] * rs;
+    float hy = data->halfExtend[1] * rs;
+    float hz = data->halfExtend[2] * rs;
 
     switch(data->shape) {
       case ShapeType::Box:
@@ -587,7 +592,7 @@ namespace P64::Comp
     if (!data->drawBlock) return;
 
     auto mat = data->matFP.getNext();
-    t3d_mat4fp_from_srt(mat, obj.scale, obj.rot, obj.pos);
+    t3d_mat4fp_from_srt(mat, obj.scale, obj.rot, obj.pos * Renderer::getRenderScale());
 
     if (data->layerIdx) DrawLayer::use3D(data->layerIdx);
 

@@ -19,6 +19,8 @@
 #include "glm/vec2.hpp"
 #include "glm/gtc/quaternion.hpp"
 #include "../../utils/prop.h"
+#include "glm/vec3.hpp"
+#include "glm/gtc/quaternion.hpp"
 
 namespace Editor
 {
@@ -33,6 +35,7 @@ struct SDL_GPURenderPass;
 
 namespace Project { class Object; }
 namespace Renderer { struct UniformGlobal; }
+namespace Project { class Object; class Scene; }
 
 namespace Project::Component
 {
@@ -45,6 +48,17 @@ namespace Project::Component
     std::shared_ptr<void> data{};
   };
 
+  // Everything transform evaluation is allowed to depend on. Filled once per frame by
+  // the viewport, so previews follow the camera you are actually looking through.
+  struct EvalCtx
+  {
+    glm::vec3 camPos{};
+    glm::quat camRot{glm::vec3(0.0f)};
+    glm::vec3 camViewDir{0,0,-1};
+    float deltaTime{0};
+    Scene *scene{nullptr};
+  };
+
   typedef void(*FuncCompDraw)(Object&, Entry &entry);
   typedef void(*FuncCompDraw3D)(Object&, Entry &entry, Editor::Viewport3D &vp, SDL_GPUCommandBuffer* cmdBuff, SDL_GPURenderPass* pass);
   typedef void(*FuncCompCopyPass)(Object&, Entry &entry, Editor::Viewport3D &vp, SDL_GPUCommandBuffer* cmdBuff, SDL_GPUCopyPass* pass);
@@ -53,6 +67,11 @@ namespace Project::Component
   typedef std::shared_ptr<void>(*FuncCompDeserial)(nlohmann::json &doc);
   typedef void(*FuncCompBuild)(Object&, Entry &entry, Build::SceneCtx &ctx);
   typedef Utils::AABB(*FuncCompGetAABB)(Object&, Entry &entry);
+  // Adjusts obj.display for this frame. Runs before any drawing, never touches the
+  // authored transform. See Object::display.
+  typedef void(*FuncCompEvalTransform)(Object&, Entry &entry, const EvalCtx &evalCtx);
+  // UUID of the 3D model asset a component references, 0 if it references none
+  typedef uint64_t(*FuncCompGetModelUUID)(const Entry &entry);
 
   // Called after the 3D framebuffer is composited into the viewport's ImGui
   // window. Lets components draw screen-space ImGui overlays (textured
@@ -130,6 +149,8 @@ namespace Project::Component
     FuncCompDraw2D      funcDraw2D{};
     FuncCompWidgetSize  funcWidgetSize{};
     FuncCompRemapLayer  funcRemapLayer{};
+    FuncCompEvalTransform funcEvalTransform{};
+    FuncCompGetModelUUID funcGetModelUUID{};
   };
 
   #define MAKE_COMP(name) \
@@ -152,6 +173,8 @@ namespace Project::Component
       void widgetSize(Object&, Entry &entry, int *outW, int *outH); \
       void remapLayer(Object&, Entry &entry, LayerFamily family, \
         const std::function<int(int)> &remap); \
+      void evalTransform(Object &obj, Entry &entry, const EvalCtx &evalCtx); \
+      uint64_t getModelUUID(const Entry &entry); \
     }
 
   MAKE_COMP(Code)
@@ -237,6 +260,12 @@ namespace Project::Component
   MAKE_COMP(CharBody)
   MAKE_COMP(Surface)
 
+  /**
+   * Model matrix mapping a model's quantized vertex units to world meters.
+   * @param vertexScale meters per vertex unit of the model, see Assets::Model3D
+   */
+  glm::mat4 makeModelMatrix(Object &obj, float vertexScale);
+
   namespace Camera
   {
     // Resolved view parameters of a camera component, used by the editor viewport to mirror it.
@@ -304,6 +333,7 @@ namespace Project::Component
       .funcBuild = Model::build,
       .funcGetAABB = Model::getAABB,
       .funcRemapLayer = Model::remapLayer,
+      .funcGetModelUUID = Model::getModelUUID
     },
     CompInfo{
       .id = 2,
@@ -344,7 +374,8 @@ namespace Project::Component
       .funcSerialize = CollMesh::serialize,
       .funcDeserialize = CollMesh::deserialize,
       .funcBuild = CollMesh::build,
-      .funcGetAABB = CollMesh::getAABB
+      .funcGetAABB = CollMesh::getAABB,
+      .funcGetModelUUID = CollMesh::getModelUUID
     },
     CompInfo{
       .id = 5,
@@ -384,7 +415,8 @@ namespace Project::Component
       .funcSerialize = Constraint::serialize,
       .funcDeserialize = Constraint::deserialize,
       .funcBuild = Constraint::build,
-      .funcGetAABB = nullptr
+      .funcGetAABB = nullptr,
+      .funcEvalTransform = Constraint::evalTransform
     },
     CompInfo{
       .id = 8,
@@ -427,6 +459,7 @@ namespace Project::Component
       .funcBuild = AnimModel::build,
       .funcGetAABB = AnimModel::getAABB,
       .funcRemapLayer = AnimModel::remapLayer,
+      .funcGetModelUUID = AnimModel::getModelUUID
     },
     CompInfo{
       .id = 11,

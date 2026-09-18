@@ -8,6 +8,7 @@
 #include <functional>
 #include <unordered_map>
 
+#include "migration.h"
 #include "../../utils/json.h"
 #include "../../utils/jsonBuilder.h"
 #include "../../utils/logger.h"
@@ -315,6 +316,7 @@ namespace
 std::string Project::Prefab::serialize(const Object &obj) const
 {
   Builder builder{};
+  builder.doc["version"] = Migration::FILE_VERSION;
   builder.set(uuid);
   if (!variables.empty()) {
     builder.doc["variables"] = serializeVariables(variables);
@@ -409,6 +411,7 @@ void Project::Prefab::deserialize(const std::string &str)
   auto doc = nlohmann::json::parse(str, nullptr, false);
   if(!doc.is_object())return;
   Utils::JSON::readProp(doc, uuid);
+  fileVersion = doc.value("version", 1);
   Utils::JSON::readProp(doc, uuidParentPrefab);
 
   variables.clear();

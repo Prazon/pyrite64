@@ -2,6 +2,241 @@
 
 Breaking Changes by version they were introduced in.
 
+## v0.9.0
+
+Every length in the editor and engine is now in meters.
+
+Before, scenes stored positions and sizes in "visual units", and a per-scene
+`Visual Units Per Meter` setting (default `100`) converted them into the meters the physics
+system used. On top of that, models rendered at whatever size their vertices were quantized to
+(the asset's `Base-Scale`), so the real-world size of a model depended on an import setting and
+had to be compensated with object scale.
+
+Now `Object::pos`, all component lengths, the viewport and the scene files are meters, and models
+render at the size they were modeled at. The conversion into the fixed-point units the RSP needs
+only happens at render time.
+
+### Project migration
+
+Scenes and prefabs carry a format version. Opening a project made with an older version asks once
+before converting it and lists the files it will rewrite.\
+Files are changed in place and the old format cannot be restored, so commit or back up your
+project first.
+
+Declining closes the project again. Building a project that was not updated fails with an error,
+both in the editor and via the CLI.
+
+Converted automatically:
+
+- object positions and scales in all scenes and prefabs
+- camera **Near**, **Far** and **Ortho Size**
+- light **Size**
+- collider and culling **Size** / **Offset**
+- **Fog Min / Max**
+- prefab-instance overrides of all of the above
+- the scene setting `Visual Units Per Meter`, renamed to **Render Scale** and moved to the
+  *Advanced* section. Its value is kept, so existing scenes render as before.
+- built `.t3dm` files are deleted, so every model is re-exported at the new vertex precision
+
+You have to adapt yourself:
+
+- **Script arguments.** The editor cannot know which of them are lengths, so they keep their old
+  value. Divide any argument holding a position, size, distance or speed by the scene's old
+  `Visual Units Per Meter` (`100` unless you changed it).
+- **Hardcoded lengths in C++ scripts**, same conversion. See below.
+
+### 2D content is not converted
+
+Objects inside a 2D canvas subtree (`Canvas (2D)` objects and everything below them) and every
+object of a scene whose render mode is 2D keep their values: those positions are framebuffer
+pixels and the 2D components (`Sprite2D`, `Label2D`, `Rect2D`, ...) measure in pixels, so the
+meter migration leaves them untouched.
+
+### Fork components converted with the scene
+
+- `Primitive` **Half Size** (scaled by the object like a collider)
+- `PathFollow` **Speed**, **Start Distance**, **Preview Distance**
+- `Path` control points (object-local, scaled by the object)
+
+`SpriteBillboard` and `PaperSprite` have no lengths; their auto pixel-scale still treats one
+texel as one render unit. Particle-system assets keep their radii, velocities and gravity in
+render units (the particle buffer integrates them directly); only the emitter's origin is the
+owning object's position in meters.
+
+### Object positions and lengths in C++
+
+`Object::pos` is in meters now, `Object::scale` stays a unitless multiplier of the model's
+authored size.
+
+Anything in a script that is a length has to be divided by the old visual-units-per-meter:
+
+```cpp
+// Before:
+constexpr float CAMERA_DISTANCE = 200.0f;
+obj.pos.y = data->startPos.y + fm_sinf(data->time) * 140;
+if(obj.pos.y < -750.0f) body.teleport({0, 100, 0});
+
+// Now:
+constexpr float CAMERA_DISTANCE = 2.0f;
+obj.pos.y = data->startPos.y + fm_sinf(data->time) * 1.4f;
+if(obj.pos.y < -7.5f) body.teleport({0, 1.0f, 0});
+```
+
+This includes movement speeds, camera offsets, raycast origins, particle sizes and any epsilon
+you compare positions against.
+
+The physics and collision APIs were already in meters and did not change. What changes is that
+you no longer convert into them:
+
+```cpp
+// Before:
+auto ray = Coll::Raycast::create(obj.pos * Coll::getInvGfxScale(), dir, 5.0f, ...);
+floorPos = hit.point * Coll::getGfxScale();
+
+// Now:
+auto ray = Coll::Raycast::create(obj.pos, dir, 5.0f, ...);
+floorPos = hit.point;
+```
+
+### gfxScale removed
+
+These no longer exist:
+
+```
+Coll::getGfxScale()
+Coll::getInvGfxScale()
+Coll::setGfxScale()
+```
+
+`collision/gfxScale.h` is still there, but only to fail the build with a message pointing here.
+Including it at all is an error, so remove the include together with the calls. There is no
+replacement, the values are already in meters.
+
+`CollisionScene::configureSimulation()` lost its trailing `gfxScale` parameter.
+
+### Rendering in meters
+
+These take meters now and apply the scale internally.\
+Passing an old visual-unit value makes things 100x too large:
+
+```
+Debug::drawLine, drawCapsule, and every other debug shape
+PTX::Sprites::add                (particle position)
+Lighting::addPointLight          (position and size)
+Camera::setLookAt, pos, target
+Camera::near, far, orthoSize
+Camera::getScreenPos             (input is world position in meters, the returned screen position stays pixels)
+```
+
+If you project a world position to the screen yourself, use the camera instead of tiny3d, so the
+scale is applied:
+
+```cpp
+// Before:
+fm_vec3_t screenPos{};
+t3d_viewport_calc_viewspace_pos(nullptr, &screenPos, &obj.pos);
+
+// Now:
+auto &cam = SceneManager::getCurrent().getActiveCamera();
+fm_vec3_t screenPos = cam.getScreenPos(obj.pos);
+```
+
+Raw `t3d_*` calls still work in render units. If you draw a model manually, or write into a t3d
+vertex buffer, convert yourself:
+
+```cpp
+#include "renderer/renderScale.h"
+
+// model matrix from a meter-space transform, incl. the model's vertex scale
+Renderer::fillModelMatrixFP(mat, obj.scale, obj.rot, obj.pos,
+  AssetManager::getVertexScale("myModel.t3dm"_asset));
+
+// or scale positions by hand
+auto posRender = pos * Renderer::getRenderScale();
+```
+
+### Base-Scale is gone
+
+The **Base-Scale** import setting was removed from 3D models. The factor used to quantize vertex
+positions to int16 is now computed from the model's bounds so it uses the full range, and is
+divided back out when rendering. Models therefore appear at their real size and no longer need to
+be scaled in the editor to compensate.
+
+The asset inspector shows the resulting precision. **Manual Precision** overrides it, which is
+only needed when animation moves vertices well outside the model's rest pose.
+
+For fonts the same setting still means point size and is unchanged.
+
+### Render Scale
+
+The old `Visual Units Per Meter` setting lives on as **Render Scale** under *Advanced* in the
+scene settings. It only controls how many fixed-point units the RSP gets per meter, i.e. render
+precision - gameplay, physics and all authored values stay in meters.
+
+The default of `100` gives roughly ±327m of usable world space around the origin. Lower it for
+larger scenes, raise it for very small ones.
+
+### Editor preferences
+
+The viewport fly and zoom speeds are stored in meters now. Their preference keys were renamed, so
+existing settings fall back to the new defaults. Re-adjust them under *Preferences* if you had
+them customized.
+
+### Changing colliders in C++
+
+`Coll::Collider` now owns the geometry of a collider and is the only place that changes it.
+Dimensions and the offset are in the object's local space (the same values the editor shows), the
+object-scaled result the collision runs on is derived, read-only and named `world...`.
+
+Writing to a shape used to leave the broadphase with the old size, so the non-const shape
+accessors were replaced by setters that keep the world AABB, the mass properties of an attached
+rigid body and the sleep state in sync:
+
+```cpp
+// Before:
+auto &coll = obj.getComponent<Comp::CollBody>()->collider;
+coll.cylinderShape().halfHeight = 2.0f;             // object-scaled, silently stale broadphase
+
+// Now:
+auto halfExtend = coll.halfExtend();                // local, like the editor
+halfExtend.y = 2.0f;
+coll.setHalfExtend(halfExtend);
+// or, size and type in one call:
+coll.setCylinderShape(coll.halfExtend().x, 2.0f);
+```
+
+Note that `set{SHAPE}Shape()` will also change the shape type if the collider was not of this
+shape before.
+
+Reading the object-scaled dimensions, e.g. inside a collision callback, gained a `world` prefix:
+`sphereShape()` became `worldSphereShape()`, `boxShape()` became `worldBoxShape()`, and so on.
+
+`Comp::CollBody` is a plain holder now, it creates the collider from the editor values and
+registers it with the collision scene. `orgScale` and its half extend / shape / scale helpers are
+gone, use the `collider` member for all of it. `Collider::setShapeType()` no longer resets the
+dimensions to zero, it keeps the size and folds it into the new shape.
+
+### Bugfix in Ray, Capsule & SphereCasts
+
+Previously Ray and Shapecasts would not take into consideration if the Cast-Readmask and a mesh colliders write mask would match,
+thus all mesh colliders were always matched if they were hit, regardless of what the mask said.
+This can affect existing projects if you are using Raycasts or Shapecasts or using the CharacterBody Component which uses those under the hood.
+If e.g. your Level geometry does not set the write mask bits that the CharacterBody reads your character might fall through the geometry.
+The fix here is to set the masks accordingly.<br>
+
+Note that it is strongly recommended to only use the mask bits you actually need per collider to avoid unnecessary collision tests.
+
+### Mesh Collision Assets
+
+Mesh Collision BVHs are now statically built during ROM build instead of dynamically during Scene load. This change reduces memory usage a little and marginally improves performance and scene loading speed (depending on the usage of mesh colliders).<br>
+This means that projects using mesh colliders need to be rebuilt so the assets contain the necessary information.
+
+Collision assets also store normals as three floats. Mesh colliders now share the asset's vertices, triangle indices,
+normals and BVH instead of allocating geometry copies for each instance.<br>
+Assets using packed normals must be rebuilt.
+Manually created mesh colliders still take ownership of their supplied arrays and generate their own normals and BVH;
+`destroyData()` frees owned data and only detaches borrowed asset data.
+
 ## v0.7.0
 
 This version completely reworked the material system as well as the collision/physics system.<br>

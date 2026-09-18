@@ -23,6 +23,7 @@
 #include "editor/pages/editorScene.h"
 #include "editor/thumbnailCache.h"
 #include "editor/imgui/notification.h"
+#include "editor/pages/parts/migrationOverlay.h"
 #include "renderer/scene.h"
 #include "renderer/shader.h"
 #include "SDL3_image/SDL_image.h"
@@ -466,7 +467,7 @@ int main(int argc, char** argv)
       scene.update();
 
       if (ctx.project) {
-        // SPBF64 fork: EditScope binds the main history to the active scene +
+        // EditScope binds the main history to the active scene +
         // selection for the duration of the draw. PrefabEditor windows push
         // their own scope when they draw, so their edits go to their own
         // history without polluting this one.
@@ -483,6 +484,8 @@ int main(int argc, char** argv)
         // browser double-click). Must run after EditScope has ended so the
         // outgoing Scene isn't bound to a dangling reference.
         ctx.project->getScenes().processPendingLoad();
+        // asks before scene/prefab files are upgraded, see Project::Migration
+        Editor::MigrationOverlay::draw();
       } else {
         editorMain.draw();
       }

@@ -31,6 +31,8 @@ PROJECTS=(
   "n64/examples/bigtex/project.p64proj"
   "n64/examples/material_test/project.p64proj"
   "n64/examples/jam25/project.p64proj"
+  "n64/examples/baked_light/project.p64proj"
+  "n64/examples/char_body/project.p64proj"
 )
 
 failed=0
